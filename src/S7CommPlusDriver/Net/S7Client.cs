@@ -19,7 +19,7 @@ namespace S7CommPlusDriver
 	// |  it under the terms of the Lesser GNU General Public License as published by |
 	// |  the Free Software Foundation, either version 3 of the License, or           |
 	// |  (at your option) any later version.                                         |
-	public class S7Client : OpenSSLConnector.IConnectorCallback
+	public class S7Client : IS7Client, OpenSSLConnector.IConnectorCallback
 	{
 		//TODO: better API, maybe a Callback
 		public static bool WriteSslKeyToFile;
@@ -153,7 +153,7 @@ namespace S7CommPlusDriver
 
 				m_SslActive = true;
 			} 
-			catch
+			catch (Exception ex)
 			{
 				return S7Consts.errOpenSSL;
 			}
@@ -201,8 +201,8 @@ namespace S7CommPlusDriver
 			}
 		}
 
-		public _OnDataReceived OnDataReceived;
-		public delegate void _OnDataReceived(byte[] PDU, int len);
+		public IS7Client._OnDataReceived OnDataReceived { get; set; }
+		//public delegate void _OnDataReceived(byte[] PDU, int len);
 
 		#region [Internals]
 

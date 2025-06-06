@@ -24,13 +24,14 @@ using S7CommPlusDriver.ClientApi;
 using System.Text.RegularExpressions;
 using S7CommPlusDriver.Core;
 using System.Security.Cryptography;
+using S7CommPlusDriver.Net.Harpo;
 
 namespace S7CommPlusDriver
 {
     public partial class S7CommPlusConnection
     {
         #region Private Members
-        private S7Client m_client;
+        private IS7Client m_client;
         private MemoryStream m_ReceivedPDU;
         private MemoryStream m_ReceivedTempPDU;
         private Queue<MemoryStream> m_ReceivedPDUs = new Queue<MemoryStream>();
@@ -400,7 +401,8 @@ namespace S7CommPlusDriver
             m_LastError = 0;
             int res;
             int Elapsed = Environment.TickCount;
-            m_client = new S7Client();
+            m_client = new HarpoS7Client();
+            //m_client = new S7Client();
             m_client.OnDataReceived = this.OnDataReceived;
 
             m_client.SetConnectionParams(address, 0x0600, Encoding.ASCII.GetBytes("SIMATIC-ROOT-HMI"));
@@ -408,107 +410,110 @@ namespace S7CommPlusDriver
             if (res != 0)
                 return res;
 
-            #region Step 1: Unencrypted InitSSL Request / Response
-
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
-            res = SendS7plusFunctionObject(sslReq);
-            if (res != 0)
+            if (m_client is S7Client)
             {
-                m_client.Disconnect();
-                return res;
+                #region Step 1: Unencrypted InitSSL Request / Response
+
+                InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0, 0);
+                res = SendS7plusFunctionObject(sslReq);
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+                m_LastError = 0;
+                WaitForNewS7plusReceived(m_ReadTimeout);
+                if (m_LastError != 0)
+                {
+                    m_client.Disconnect();
+                    return m_LastError;
+                }
+                InitSslResponse sslRes;
+                sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
+                if (sslRes == null)
+                {
+                    m_client.Disconnect();
+                    return S7Consts.errInitSslResponse;
+                }
+
+                #endregion
+
+                #region Step 2: Activate TLS. Everything from here onwards is TLS encrypted.
+
+                res = m_client.SslActivate();
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+
+                #endregion
+
+                #region Step 3: CreateObjectRequest / Response (with TLS)
+
+                var createObjReq = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
+                createObjReq.SetNullServerSessionData();
+                res = SendS7plusFunctionObject(createObjReq);
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+                m_LastError = 0;
+                WaitForNewS7plusReceived(m_ReadTimeout);
+                if (m_LastError != 0)
+                {
+                    m_client.Disconnect();
+                    return m_LastError;
+                }
+
+                var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
+                if (createObjRes == null)
+                {
+                    //Console.WriteLine("S7CommPlusConnection - Connect: CreateObjectResponse with Error!");
+                    m_client.Disconnect();
+                    return S7Consts.errIsoInvalidPDU6;
+                }
+                // There are (always?) at least two IDs in the response.
+                // Usually the first is used for polling data, and the 2nd for jobs which use notifications, e.g. alarming, subscriptions.
+                m_SessionId = createObjRes.ObjectIds[0];
+                m_SessionId2 = createObjRes.ObjectIds[1];
+                //Console.WriteLine("S7CommPlusConnection - Connect: Using SessionId=0x" + String.Format("{0:X04}", m_SessionId));
+
+                // Evaluate Struct 314
+                PValue sval = createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion);
+                ValueStruct serverSession = (ValueStruct)sval;
+
+                #endregion
+
+                #region Step 4: SetMultiVariablesRequest / Response
+
+                var setMultiVarReq = new SetMultiVariablesRequest(ProtocolVersion.V2);
+                setMultiVarReq.SetSessionSetupData(m_SessionId, serverSession);
+                res = SendS7plusFunctionObject(setMultiVarReq);
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+                m_LastError = 0;
+                WaitForNewS7plusReceived(m_ReadTimeout);
+                if (m_LastError != 0)
+                {
+                    m_client.Disconnect();
+                    return m_LastError;
+                }
+
+                var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
+                if (setMultiVarRes == null)
+                {
+                    //Console.WriteLine("S7CommPlusConnection - Connect: SetMultiVariablesResponse with Error!");
+                    m_client.Disconnect();
+                    return S7Consts.errIsoInvalidPDU7;
+                }
+
+                #endregion
             }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
-            InitSslResponse sslRes;
-            sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (sslRes == null)
-            {
-                m_client.Disconnect();
-                return S7Consts.errInitSslResponse;
-            }
-
-            #endregion
-
-            #region Step 2: Activate TLS. Everything from here onwards is TLS encrypted.
-
-            res = m_client.SslActivate();
-            if (res != 0)
-            {
-                m_client.Disconnect();
-                return res;
-            }
-
-            #endregion
-
-            #region Step 3: CreateObjectRequest / Response (with TLS)
-
-            var createObjReq = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
-            createObjReq.SetNullServerSessionData();
-            res = SendS7plusFunctionObject(createObjReq);
-            if (res != 0)
-            {
-                m_client.Disconnect();
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
-
-            var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (createObjRes == null)
-            {
-                //Console.WriteLine("S7CommPlusConnection - Connect: CreateObjectResponse with Error!");
-                m_client.Disconnect();
-                return S7Consts.errIsoInvalidPDU6;
-            }
-            // There are (always?) at least two IDs in the response.
-            // Usually the first is used for polling data, and the 2nd for jobs which use notifications, e.g. alarming, subscriptions.
-            m_SessionId = createObjRes.ObjectIds[0];
-            m_SessionId2 = createObjRes.ObjectIds[1];
-            //Console.WriteLine("S7CommPlusConnection - Connect: Using SessionId=0x" + String.Format("{0:X04}", m_SessionId));
-
-            // Evaluate Struct 314
-            PValue sval = createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion);
-            ValueStruct serverSession = (ValueStruct)sval;
-
-            #endregion
-
-            #region Step 4: SetMultiVariablesRequest / Response
-
-            var setMultiVarReq = new SetMultiVariablesRequest(ProtocolVersion.V2);
-            setMultiVarReq.SetSessionSetupData(m_SessionId, serverSession);
-            res = SendS7plusFunctionObject(setMultiVarReq);
-            if (res != 0)
-            {
-                m_client.Disconnect();
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
-
-            var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (setMultiVarRes == null)
-            {
-                //Console.WriteLine("S7CommPlusConnection - Connect: SetMultiVariablesResponse with Error!");
-                m_client.Disconnect();
-                return S7Consts.errIsoInvalidPDU7;
-            }
-
-            #endregion
 
             #region Step 5: Read SystemLimits
             res = m_CommRessources.ReadMax(this);
