@@ -53,6 +53,13 @@ namespace S7CommPlusDriver
 
         private List<DatablockInfo> dbInfoList;
         private List<PObject> typeInfoList = new List<PObject>();
+
+        private object lock_SendS7pulsFunctionObjectAndWait = new();
+        private object lock_SendS7plusPDUdata = new();
+        private object lock_WaitForNewS7plusReceived = new();
+
+        private readonly AutoResetEvent m_PduAvailableEvent = new(false);
+
         #endregion
 
         #region Public Members
@@ -113,40 +120,52 @@ namespace S7CommPlusDriver
             return ret;
         }
 
-        private void WaitForNewS7plusReceived(int Timeout)
+        private int SendS7pulsFunctionObjectAndWait(IS7pRequest FuncObj, int Timeout)
         {
-            //TODO: Tickcount overflows!!!!
-            bool Expired = false;
-            int Elapsed = Environment.TickCount;
-            bool done = false;
-
-            m_Mutex.WaitOne();
-            if (m_ReceivedPDUs.Count > 0)
+            lock (lock_SendS7pulsFunctionObjectAndWait)
             {
-                m_ReceivedPDU = m_ReceivedPDUs.Dequeue();
-                done = true;
+                var res = SendS7plusFunctionObject(FuncObj);
+                if (res != 0)
+                {
+                    return res;
+                }
+                m_LastError = 0;
+                WaitForNewS7plusReceived(Timeout);
+                if (m_LastError != 0)
+                {
+                    return m_LastError;
+                }
+                return res;
             }
-            m_Mutex.ReleaseMutex();
+        }
 
-            while (!done && !Expired)
+        private void WaitForNewS7plusReceived(int timeout)
+        {
+            lock (lock_WaitForNewS7plusReceived)
             {
-                Thread.Sleep(2);
-                Expired = Environment.TickCount - Elapsed > Timeout;
-                m_Mutex.WaitOne();
                 if (m_ReceivedPDUs.Count > 0)
                 {
                     m_ReceivedPDU = m_ReceivedPDUs.Dequeue();
-                    done = true;
+                    return;
                 }
-                m_Mutex.ReleaseMutex();
             }
 
-            if (Expired)
+            if (!m_PduAvailableEvent.WaitOne(timeout))
             {
                 Console.WriteLine("S7CommPlusConnection - WaitForNewS7plusReceived: ERROR: Timeout!");
                 m_LastError = S7Consts.errTCPDataReceive;
+                return;
+            }
+
+            lock (lock_WaitForNewS7plusReceived)
+            {
+                if (m_ReceivedPDUs.Count > 0)
+                {
+                    m_ReceivedPDU = m_ReceivedPDUs.Dequeue();
+                }
             }
         }
+
 
         private int SendS7plusFunctionObject(IS7pRequest funcObj)
         {
@@ -224,7 +243,10 @@ namespace S7CommPlusDriver
                     packet[sendLen] = 0;
                     sendLen++;
                 }
-                m_client.Send(packet);
+                lock (lock_SendS7plusPDUdata)
+                {
+                    m_client.Send(packet);
+                }
             }
             return m_LastError;
         }
@@ -328,13 +350,13 @@ namespace S7CommPlusDriver
                 }
             }
 
-            // If a complete (usable) PDU is received, add to the queue (threadsafe) for readout
             if (m_NewS7CommPlusReceived)
             {
-                // Push complete PDU to the queue
-                m_Mutex.WaitOne();
-                m_ReceivedPDUs.Enqueue(m_ReceivedTempPDU);
-                m_Mutex.ReleaseMutex();
+                lock (lock_WaitForNewS7plusReceived)
+                {
+                    m_ReceivedPDUs.Enqueue(m_ReceivedTempPDU);
+                }
+                m_PduAvailableEvent.Set();
                 m_NewS7CommPlusReceived = false;
             }
         }
@@ -392,7 +414,8 @@ namespace S7CommPlusDriver
         /// <returns></returns>
         public int Connect(string address, string password = "", string username = "", int timeoutMs = 5000)
         {
-            if (timeoutMs > 0) {
+            if (timeoutMs > 0)
+            {
                 m_ReadTimeout = timeoutMs;
             }
 
@@ -409,7 +432,7 @@ namespace S7CommPlusDriver
 
             #region Step 1: Unencrypted InitSSL Request / Response
 
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
+            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0, 0);
             res = SendS7plusFunctionObject(sslReq);
             if (res != 0)
             {
@@ -520,7 +543,8 @@ namespace S7CommPlusDriver
 
             #region Step 6: Password
             res = legitimate(serverSession, password, username);
-            if (res != 0) {
+            if (res != 0)
+            {
                 m_client.Disconnect();
                 return res;
             }
@@ -605,7 +629,7 @@ namespace S7CommPlusDriver
 
                 getMultiVarReq.AddressList.Clear();
                 count_perChunk = 0;
-                while (count_perChunk < m_CommRessources.TagsPerReadRequestMax  && (chunk_startIndex + count_perChunk) < addresslist.Count)
+                while (count_perChunk < m_CommRessources.TagsPerReadRequestMax && (chunk_startIndex + count_perChunk) < addresslist.Count)
                 {
                     getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + count_perChunk]);
                     count_perChunk++;
@@ -1390,9 +1414,9 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            foreach(var obj in exploreRes.Objects)
+            foreach (var obj in exploreRes.Objects)
             {
-                foreach(var att in obj.Attributes)
+                foreach (var att in obj.Attributes)
                 {
                     switch (att.Key)
                     {

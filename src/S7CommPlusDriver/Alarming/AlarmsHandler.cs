@@ -16,6 +16,8 @@
 using S7CommPlusDriver.Alarming;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 
 namespace S7CommPlusDriver
 {
@@ -56,7 +58,7 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionDelayTime, new ValueUDInt(0));
             subsobj.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
-            m_AlarmNextCreditLimit = 10;
+            m_AlarmNextCreditLimit = -1;
             subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(m_AlarmNextCreditLimit)); // -1=unlimited, 255 = max
             subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(65535)); // 65535
             // 1055 = Unknown -> is working without setting this. Maybe default attribute is zero.
@@ -122,6 +124,80 @@ namespace S7CommPlusDriver
 
             return res;
         }
+
+        public int GetInitialAlarms()
+        {
+            int res = 0;
+            Dictionary<ulong, AlarmData> Alarms = new Dictionary<ulong, AlarmData>();
+            var exploreReq = new ExploreRequest(ProtocolVersion.V2);
+            exploreReq.ExploreId = Ids.NativeObjects_thePLCProgram_Rid;
+            //exploreReq.ExploreId = 8;
+
+            exploreReq.ExploreRequestId = Ids.None;
+            exploreReq.ExploreChildsRecursive = 1;
+            exploreReq.ExploreParents = 0;
+
+            // Add the requestes attributes
+            exploreReq.AddressList.Add(Ids.ObjectVariableTypeParentObject);
+            exploreReq.AddressList.Add(Ids.MultipleSTAI_STAIs);
+
+            res = SendS7plusFunctionObject(exploreReq);
+            if (res != 0)
+            {
+                return res;
+            }
+            m_LastError = 0;
+            WaitForNewS7plusReceived(m_ReadTimeout);
+            if (m_LastError != 0)
+            {
+                return m_LastError;
+            }
+
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            if ((exploreRes == null) ||
+                (exploreRes.SequenceNumber != exploreReq.SequenceNumber) ||
+                (exploreRes.ReturnValue != 0))
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
+
+            // All objects which have Alarm AP inside, have a sub-Object with ID 7854 = MultipleSTAI.Class_Rid
+            var obj = exploreRes.Objects.First(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+
+            foreach (var ob in obj.GetObjects())
+            {
+                var staiclasses = ob.GetObjectsByClassId(Ids.MultipleSTAI_Class_Rid);
+                if (staiclasses != null && staiclasses.Count > 0)
+                {
+                    PValue stais = staiclasses[0].GetAttribute(Ids.MultipleSTAI_STAIs);
+                    if (stais != null)
+                    {
+                        if (stais.GetType() == typeof(ValueBlobSparseArray))
+                        {
+                            var dict = ((ValueBlobSparseArray)stais).GetValue();
+                            foreach (var entry in dict)
+                            {
+                                var alarm = new AlarmData(ob.RelationId);
+                                Stream buffer = new MemoryStream(entry.Value.value);
+
+                                alarm.Deserialize(buffer);
+                                Alarms.Add(alarm.GetCpuAlarmId(), alarm);
+                            }
+                        }
+                        else
+                        {
+                            Console.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("ExploreASAlarms(): stais = null");
+                    }
+                }
+            }
+            return 0; 
+        }
+
 
         //public int TestWaitForAlarmNotifications(int waitTimeout, int untilNumberOfAlarms, int alarmTextsLanguageId, out List<Notification> notifications)
         //{

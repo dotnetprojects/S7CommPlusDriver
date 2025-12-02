@@ -180,6 +180,7 @@ namespace OpenSsl
                         // TOOO: Handle all other errors which don't should occur.
                         // 5 with SSL_ASYNC_PAUSED has been seen...
                         Trace.WriteLine("OpenSSL HandleError: Error = " + error);
+                        //throw new Exception("SSL Error");
                         break;
                 }
             }

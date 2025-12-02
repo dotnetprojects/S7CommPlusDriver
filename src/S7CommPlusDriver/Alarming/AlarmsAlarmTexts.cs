@@ -20,7 +20,7 @@ namespace S7CommPlusDriver.Alarming
 {
     public class AlarmsAlarmTexts
     {
-        public int LanguageId;
+        public uint LanguageId;
         public string Infotext = String.Empty;
         public string AlarmText = String.Empty;
         public string AdditionalText1 = String.Empty;
@@ -38,7 +38,7 @@ namespace S7CommPlusDriver.Alarming
         public ushort UnknownValue1;
         public ushort UnknownValue2;
 
-        public static AlarmsAlarmTexts FromNotificationBlob(ValueBlobSparseArray blob, int languageId)
+        public static AlarmsAlarmTexts FromNotificationBlob(ValueBlobSparseArray blob, uint languageId)
         {
             var at = new AlarmsAlarmTexts();
             string s;

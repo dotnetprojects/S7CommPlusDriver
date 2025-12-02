@@ -53,7 +53,7 @@ namespace S7CommPlusDriver.Alarming
             return s;
         }
 
-        public static AlarmsDai FromNotificationObject(PObject pobj, int alarmtextsLanguageId)
+        public static AlarmsDai FromNotificationObject(PObject pobj, uint alarmtextsLanguageId)
         {
             var dai = new AlarmsDai();
             dai.ObjectVariableTypeName = ((ValueWString)pobj.GetAttribute(Ids.ObjectVariableTypeName)).GetValue();

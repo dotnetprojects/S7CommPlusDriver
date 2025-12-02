@@ -39,7 +39,7 @@ namespace S7CommPlusDriver
         /// <param name="Alarms">Dictionary <ulong, AlarmData> where the results are written to. Key is used as address.</param>
         /// <param name="languageId">Language id for retrieving the text entries, use language code e.g. 1031 for german</param>
         /// <returns></returns>
-        public int ExploreASAlarms(ref Dictionary<ulong, AlarmData> Alarms, int languageId)
+        public int ExploreASAlarms(ref Dictionary<ulong, AlarmData> Alarms, uint languageId)
         {
             int res;
 
@@ -50,17 +50,7 @@ namespace S7CommPlusDriver
             exploreReq.ExploreChildsRecursive = 1;
             exploreReq.ExploreParents = 0;
 
-            res = SendS7plusFunctionObject(exploreReq);
-            if (res != 0)
-            {
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
+            res = SendS7pulsFunctionObjectAndWait(exploreReq, m_ReadTimeout);
 
             var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
@@ -220,7 +210,7 @@ namespace S7CommPlusDriver
             return 0;
         }
 
-        private void GetTexts(byte[] tloa_1, byte[] tloa_2, byte[] tloa_3, byte[] tlsa, ref Dictionary<ulong, AlarmData> Alarms, int languageId)
+        private void GetTexts(byte[] tloa_1, byte[] tloa_2, byte[] tloa_3, byte[] tlsa, ref Dictionary<ulong, AlarmData> Alarms, uint languageId)
         {
             uint pos1, pos2, pos3;
             uint t1_count, t1_relid, t1_relid_off;
@@ -333,26 +323,11 @@ namespace S7CommPlusDriver
             }
         }
 
-        /// <summary>
-        /// Reads the active program alarms from the Plc (single poll).
-        /// 
-        /// Call example:
-        /// CultureInfo ci = new CultureInfo("de-DE");
-        /// var alarmList = new List<AlarmsDai>();
-        /// conn.GetActiveAlarms(out alarmList, ci.LCID);
-        /// foreach (var a in alarmList)
-        /// {
-        ///     Console.WriteLine(a.ToString());
-        /// }
-        /// </summary>
-        /// <param name="alarmList">Contains the alarms, empty if there is no active alarm</param>
-        /// <param name="languageId">Language id for retrieving the text entries, use language code e.g. 1031 for german</param>
-        /// <returns>0 on success</returns>
-        public int GetActiveAlarms(out List<AlarmsDai> alarmList, int languageId)
+        public int GetActiveAlarms(out List<PObject> pObjects)
         {
             int res;
 
-            alarmList = new List<AlarmsDai>();
+            pObjects = new List<PObject>();
 
             var exploreReq = new ExploreRequest(ProtocolVersion.V2);
             exploreReq.ExploreId = Ids.NativeObjects_theAlarmSubsystem_Rid;
@@ -374,17 +349,7 @@ namespace S7CommPlusDriver
             exploreReq.AddressList.Add(Ids.DAI_SequenceCounter);
             exploreReq.AddressList.Add(Ids.DAI_AlarmTexts_Rid);
 
-            res = SendS7plusFunctionObject(exploreReq);
-            if (res != 0)
-            {
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
+            res = SendS7pulsFunctionObjectAndWait(exploreReq, m_ReadTimeout);
 
             var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
@@ -392,12 +357,7 @@ namespace S7CommPlusDriver
             {
                 return res;
             }
-
-            foreach (var obj in exploreRes.Objects)
-            {
-                alarmList.Add(AlarmsDai.FromNotificationObject(obj, languageId));
-            }
-
+            pObjects = exploreRes.Objects;
             return 0;
         }
     }
@@ -413,10 +373,10 @@ namespace S7CommPlusDriver
         {
             return ((ulong)(RelationId) << 32) | ((ulong)(MultipleStai.Alid) << 16);
         }
-        
+
         public uint RelationId;
 
-        public AlarmsMultipleStai MultipleStai;  
+        public AlarmsMultipleStai MultipleStai;
         public AlarmsAlarmTexts AlText = new AlarmsAlarmTexts();
 
         public int Deserialize(Stream buffer)
@@ -432,7 +392,7 @@ namespace S7CommPlusDriver
             string s = "";
             s += "<AlarmData>" + Environment.NewLine;
             s += "<CpuAlarmId>" + GetCpuAlarmId().ToString() + "</CpuAlarmId>" + Environment.NewLine;
-            s += "<RelationId>" + RelationId.ToString() + Environment.NewLine +"</RelationId>" + Environment.NewLine;
+            s += "<RelationId>" + RelationId.ToString() + Environment.NewLine + "</RelationId>" + Environment.NewLine;
             s += "<MultipleStai>" + Environment.NewLine + MultipleStai.ToString() + "</MultipleStai>" + Environment.NewLine;
             s += "<AlText>" + Environment.NewLine;
             s += "<Infotext>" + AlText.Infotext + "</Infotext>" + Environment.NewLine;
