@@ -555,10 +555,14 @@ namespace S7CommPlusDriver
             return 0;
         }
 
-        public void Disconnect()
+        public int Disconnect()
         {
-            DeleteObject(m_SessionId);
-            m_client.Disconnect();
+            var res = 0;
+            res = DeleteObject(m_SessionId);
+            if (res != 0)
+                return res;
+            res = m_client.Disconnect();
+            return res;
         }
 
         /// <summary>

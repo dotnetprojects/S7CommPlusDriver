@@ -88,19 +88,7 @@ namespace S7CommPlusDriver
             createObjReq.SetRequestObject(subsobj);
 
             // Send it
-            res = SendS7plusFunctionObject(createObjReq);
-            if (res != 0)
-            {
-                m_client.Disconnect();
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
+            res = SendS7pulsFunctionObjectAndWait(createObjReq, m_ReadTimeout);
 
             var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (createObjRes == null)
@@ -125,147 +113,36 @@ namespace S7CommPlusDriver
             return res;
         }
 
-        public int GetInitialAlarms()
-        {
-            int res = 0;
-            Dictionary<ulong, AlarmData> Alarms = new Dictionary<ulong, AlarmData>();
-            var exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = Ids.NativeObjects_thePLCProgram_Rid;
-            //exploreReq.ExploreId = 8;
-
-            exploreReq.ExploreRequestId = Ids.None;
-            exploreReq.ExploreChildsRecursive = 1;
-            exploreReq.ExploreParents = 0;
-
-            // Add the requestes attributes
-            exploreReq.AddressList.Add(Ids.ObjectVariableTypeParentObject);
-            exploreReq.AddressList.Add(Ids.MultipleSTAI_STAIs);
-
-            res = SendS7plusFunctionObject(exploreReq);
-            if (res != 0)
-            {
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
-
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
-            if ((exploreRes == null) ||
-                (exploreRes.SequenceNumber != exploreReq.SequenceNumber) ||
-                (exploreRes.ReturnValue != 0))
-            {
-                return S7Consts.errIsoInvalidPDU;
-            }
-
-            // All objects which have Alarm AP inside, have a sub-Object with ID 7854 = MultipleSTAI.Class_Rid
-            var obj = exploreRes.Objects.First(o => o.ClassId == Ids.PLCProgram_Class_Rid);
-
-            foreach (var ob in obj.GetObjects())
-            {
-                var staiclasses = ob.GetObjectsByClassId(Ids.MultipleSTAI_Class_Rid);
-                if (staiclasses != null && staiclasses.Count > 0)
-                {
-                    PValue stais = staiclasses[0].GetAttribute(Ids.MultipleSTAI_STAIs);
-                    if (stais != null)
-                    {
-                        if (stais.GetType() == typeof(ValueBlobSparseArray))
-                        {
-                            var dict = ((ValueBlobSparseArray)stais).GetValue();
-                            foreach (var entry in dict)
-                            {
-                                var alarm = new AlarmData(ob.RelationId);
-                                Stream buffer = new MemoryStream(entry.Value.value);
-
-                                alarm.Deserialize(buffer);
-                                Alarms.Add(alarm.GetCpuAlarmId(), alarm);
-                            }
-                        }
-                        else
-                        {
-                            Console.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine("ExploreASAlarms(): stais = null");
-                    }
-                }
-            }
-            return 0; 
-        }
-
-
-        //public int TestWaitForAlarmNotifications(int waitTimeout, int untilNumberOfAlarms, int alarmTextsLanguageId, out List<Notification> notifications)
-        //{
-        //    int res = 0;
-        //    short creditLimitStep = 5;
-
-        //    for (int i = 1; i <= untilNumberOfAlarms; i++)
-        //    {
-        //        Console.WriteLine(Environment.NewLine + "WaitForAlarmNotifications(): *** Loop #" + i.ToString() + " ***");
-        //        m_LastError = 0;
-        //        WaitForNewS7plusReceived(waitTimeout);
-        //        if (m_LastError != 0)
-        //        {
-        //            return m_LastError;
-        //        }
-
-        //        var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
-        //        if (noti == null)
-        //        {
-        //            Console.WriteLine("Notification == null!");
-        //            return S7Consts.errIsoInvalidPDU;
-        //        }
-        //        else
-        //        {
-        //            Console.Write("Notification: CreditTick=" + noti.NotificationCreditTick + " SequenceNumber=" + noti.NotificationSequenceNumber);
-        //            Console.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond));
-
-        //            var dai = AlarmsDai.FromNotificationObject(noti.P2Objects[0], alarmTextsLanguageId);
-        //            Console.WriteLine(dai.ToString());
-        //            if (noti.NotificationCreditTick >= m_AlarmNextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
-        //            {
-        //                // CreditTick in Notification is only one byte
-        //                m_AlarmNextCreditLimit = (short)((m_AlarmNextCreditLimit + creditLimitStep) % 255);
-        //                Console.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_AlarmNextCreditLimit.ToString());
-        //                SubscriptionSetCreditLimit(m_AlarmNextCreditLimit);
-        //            }
-        //        }
-        //    }
-        //    return res;
-        //}
-
         public int WaitForAlarmNotifications(int waitTimeout, out List<Notification> notifications)
         {
             int res = 0;
             short creditLimitStep = 5;
             notifications = new List<Notification>();
 
-            m_LastError = 0;
-            WaitForNewS7plusReceived(waitTimeout);
-            if (m_LastError != 0)
+            for (var i = 0; i < 10; i++)
             {
-                return m_LastError;
-            }
-
-            var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
-            if (noti == null)
-            {
-                return S7Consts.errIsoInvalidPDU;
-            }
-            else
-            {
-                notifications.Add(noti);
-
-                if (noti.NotificationCreditTick >= m_AlarmNextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
+                m_LastError = 0;
+                WaitForNewS7plusReceived(waitTimeout);
+                if (m_LastError != 0)
                 {
-                    // CreditTick in Notification is only one byte
-                    m_AlarmNextCreditLimit = (short)((m_AlarmNextCreditLimit + creditLimitStep) % 255);
-                    SubscriptionSetCreditLimit(m_AlarmNextCreditLimit);
+                    return m_LastError;
+                }
+
+                var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
+                if (noti == null)
+                {
+                    return S7Consts.errIsoInvalidPDU;
+                }
+                else
+                {
+                    notifications.Add(noti);
+
+                    if (noti.NotificationCreditTick >= m_AlarmNextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
+                    {
+                        // CreditTick in Notification is only one byte
+                        m_AlarmNextCreditLimit = (short)((m_AlarmNextCreditLimit + creditLimitStep) % 255);
+                        SubscriptionSetCreditLimit(m_AlarmNextCreditLimit);
+                    }
                 }
             }
             return res;
