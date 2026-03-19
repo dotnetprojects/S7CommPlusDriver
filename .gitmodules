@@ -1,0 +1,3 @@
+[submodule "libs/HarpoS7"]
+	path = libs/HarpoS7
+	url = https://github.com/bonk-dev/HarpoS7.git

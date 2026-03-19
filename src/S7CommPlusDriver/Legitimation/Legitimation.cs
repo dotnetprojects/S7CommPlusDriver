@@ -1,4 +1,5 @@
-﻿using S7CommPlusDriver.Legitimation;
+﻿using S7CommPlusDriver.Encryption;
+using S7CommPlusDriver.Legitimation;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -160,8 +161,8 @@ namespace S7CommPlusDriver {
             byte[] challengeResponse;
             if (omsSecret == null || omsSecret.Length != 32)
             {
-                // Create oms exporter secret
-                omsSecret = m_client.getOMSExporterSecret();
+                // Get secret from encryption provider
+                omsSecret = m_encryptionProvider.GetSecretForLegitimation(m_client);
             }
             // Roll key
             byte[] key = LegitimationCrypto.sha256(omsSecret);

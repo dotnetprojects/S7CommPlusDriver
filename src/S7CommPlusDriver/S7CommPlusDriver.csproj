@@ -11,6 +11,11 @@
   <ItemGroup>
     <PackageReference Include="zlib.net-mutliplatform" Version="1.0.8" />
   </ItemGroup>
+  <!-- HarpoS7 references for legacy encryption support (net8.0+ only, HarpoS7 targets net8.0) -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net6.0'">
+    <ProjectReference Include="..\..\libs\HarpoS7\HarpoS7\HarpoS7.csproj" />
+    <ProjectReference Include="..\..\libs\HarpoS7\HarpoS7.PublicKeys\HarpoS7.PublicKeys.csproj" />
+  </ItemGroup>
   <ItemGroup>
     <Content Include="runtimes\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

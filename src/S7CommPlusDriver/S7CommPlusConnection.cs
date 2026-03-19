@@ -21,6 +21,7 @@ using System.IO;
 using System.Linq;
 using System.Diagnostics;
 using S7CommPlusDriver.ClientApi;
+using S7CommPlusDriver.Encryption;
 using System.Text.RegularExpressions;
 using System.Security.Cryptography;
 
@@ -30,6 +31,7 @@ namespace S7CommPlusDriver
     {
         #region Private Members
         private S7Client m_client;
+        private IEncryptionProvider m_encryptionProvider;
         private MemoryStream m_ReceivedPDU;
         private MemoryStream m_ReceivedTempPDU;
         private Queue<MemoryStream> m_ReceivedPDUs = new Queue<MemoryStream>();
@@ -57,6 +59,12 @@ namespace S7CommPlusDriver
 
         #region Public Members
         public int m_LastError = 0;
+
+        /// <summary>
+        /// Gets the current encryption provider used by this connection.
+        /// Can be used to access provider-specific functionality (e.g., LegacyEncryptionProvider's session key).
+        /// </summary>
+        public IEncryptionProvider EncryptionProvider => m_encryptionProvider;
 
         #endregion
 
@@ -183,10 +191,11 @@ namespace S7CommPlusDriver
 
             // 4 Byte TPKT Header
             // 3 Byte ISO-Header
-            // 5 Byte TLS Header + 17 Bytes addition from TLS
+            // Security overhead from encryption provider (TLS: 5+17, Legacy: 0)
             // 4 Byte S7CommPlus Header
             // 4 Byte S7CommPlus Trailer (must fit into last PDU)
-            int MaxSize = NegotiatedIsoPduSize - 4 - 3 - 5 - 17 - 4 - 4;
+            int securityOverhead = m_encryptionProvider != null ? m_encryptionProvider.SecurityOverheadPerPdu : 5 + 17;
+            int MaxSize = NegotiatedIsoPduSize - 4 - 3 - securityOverhead - 4 - 4;
             byte[] packet = new byte[MaxSize + 4]; //max packet size is always MaxSize + PDU Header
 
             while (bytesToSend > 0)
@@ -384,18 +393,36 @@ namespace S7CommPlusDriver
 
         #region Public Methods
         /// <summary>
-        /// Establishes a connection to the PLC.
+        /// Establishes a connection to the PLC using TLS encryption (default, for newer firmware).
         /// </summary>
         /// <param name="address">PLC IP address</param>
         /// <param name="password">PLC password (if set)</param>
+        /// <param name="username">PLC username (leave empty for legacy login)</param>
         /// <param name="timeoutMs">read timeout in milliseconds (default: 5000 ms)</param>
-        /// <returns></returns>
+        /// <returns>0 on success, error code on failure</returns>
         public int Connect(string address, string password = "", string username = "", int timeoutMs = 5000)
+        {
+            return Connect(address, new TlsEncryptionProvider(), password, username, timeoutMs);
+        }
+
+        /// <summary>
+        /// Establishes a connection to the PLC using the specified encryption provider.
+        /// Use <see cref="TlsEncryptionProvider"/> for newer firmware (TLS 1.3) or
+        /// <see cref="LegacyEncryptionProvider"/> (net8.0+) for older firmware (HarpoS7 challenge-based auth).
+        /// </summary>
+        /// <param name="address">PLC IP address</param>
+        /// <param name="encryptionProvider">The encryption provider to use</param>
+        /// <param name="password">PLC password (if set)</param>
+        /// <param name="username">PLC username (leave empty for legacy login)</param>
+        /// <param name="timeoutMs">read timeout in milliseconds (default: 5000 ms)</param>
+        /// <returns>0 on success, error code on failure</returns>
+        public int Connect(string address, IEncryptionProvider encryptionProvider, string password = "", string username = "", int timeoutMs = 5000)
         {
             if (timeoutMs > 0) {
                 m_ReadTimeout = timeoutMs;
             }
 
+            m_encryptionProvider = encryptionProvider;
             m_LastError = 0;
             int res;
             int Elapsed = Environment.TickCount;
@@ -407,44 +434,47 @@ namespace S7CommPlusDriver
             if (res != 0)
                 return res;
 
-            #region Step 1: Unencrypted InitSSL Request / Response
+            #region Step 1: InitSSL Request / Response (only for TLS)
 
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
-            res = SendS7plusFunctionObject(sslReq);
+            if (m_encryptionProvider.RequiresInitSsl)
+            {
+                InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
+                res = SendS7plusFunctionObject(sslReq);
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+                m_LastError = 0;
+                WaitForNewS7plusReceived(m_ReadTimeout);
+                if (m_LastError != 0)
+                {
+                    m_client.Disconnect();
+                    return m_LastError;
+                }
+                InitSslResponse sslRes;
+                sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
+                if (sslRes == null)
+                {
+                    m_client.Disconnect();
+                    return S7Consts.errInitSslResponse;
+                }
+            }
+
+            #endregion
+
+            #region Step 2: Activate encryption channel
+
+            res = m_encryptionProvider.ActivateChannel(m_client);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
             }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
-            InitSslResponse sslRes;
-            sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (sslRes == null)
-            {
-                m_client.Disconnect();
-                return S7Consts.errInitSslResponse;
-            }
 
             #endregion
 
-            #region Step 2: Activate TLS. Everything from here onwards is TLS encrypted.
-
-            res = m_client.SslActivate();
-            if (res != 0)
-            {
-                m_client.Disconnect();
-                return res;
-            }
-
-            #endregion
-
-            #region Step 3: CreateObjectRequest / Response (with TLS)
+            #region Step 3: CreateObjectRequest / Response
 
             var createObjReq = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
             createObjReq.SetNullServerSessionData();
@@ -534,6 +564,7 @@ namespace S7CommPlusDriver
         public void Disconnect()
         {
             DeleteObject(m_SessionId);
+            m_encryptionProvider?.DeactivateChannel(m_client);
             m_client.Disconnect();
         }
 
