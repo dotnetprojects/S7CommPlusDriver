@@ -397,7 +397,7 @@ namespace S7CommPlusDriver
         /// </summary>
         /// <param name="address">PLC IP address</param>
         /// <param name="password">PLC password (if set)</param>
-        /// <param name="username">PLC username (leave empty for legacy login)</param>
+        /// <param name="username">PLC username (leave empty for password-only authentication)</param>
         /// <param name="timeoutMs">read timeout in milliseconds (default: 5000 ms)</param>
         /// <returns>0 on success, error code on failure</returns>
         public int Connect(string address, string password = "", string username = "", int timeoutMs = 5000)
@@ -413,7 +413,7 @@ namespace S7CommPlusDriver
         /// <param name="address">PLC IP address</param>
         /// <param name="encryptionProvider">The encryption provider to use</param>
         /// <param name="password">PLC password (if set)</param>
-        /// <param name="username">PLC username (leave empty for legacy login)</param>
+        /// <param name="username">PLC username (leave empty for password-only authentication)</param>
         /// <param name="timeoutMs">read timeout in milliseconds (default: 5000 ms)</param>
         /// <returns>0 on success, error code on failure</returns>
         public int Connect(string address, IEncryptionProvider encryptionProvider, string password = "", string username = "", int timeoutMs = 5000)
