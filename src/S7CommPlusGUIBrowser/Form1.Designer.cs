@@ -26,6 +26,8 @@
             this.components = new System.ComponentModel.Container();
             System.ComponentModel.ComponentResourceManager resources = new System.ComponentModel.ComponentResourceManager(typeof(Form1));
             this.groupBox1 = new System.Windows.Forms.GroupBox();
+            this.cbEncryption = new System.Windows.Forms.ComboBox();
+            this.labelEncryption = new System.Windows.Forms.Label();
             this.tbUser = new System.Windows.Forms.TextBox();
             this.label7 = new System.Windows.Forms.Label();
             this.lbStatus = new System.Windows.Forms.Label();
@@ -52,6 +54,8 @@
             // 
             // groupBox1
             // 
+            this.groupBox1.Controls.Add(this.cbEncryption);
+            this.groupBox1.Controls.Add(this.labelEncryption);
             this.groupBox1.Controls.Add(this.tbUser);
             this.groupBox1.Controls.Add(this.label7);
             this.groupBox1.Controls.Add(this.btnDisconnect);
@@ -62,10 +66,28 @@
             this.groupBox1.Controls.Add(this.tbIpAddress);
             this.groupBox1.Location = new System.Drawing.Point(12, 12);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(171, 165);
+            this.groupBox1.Size = new System.Drawing.Size(171, 205);
             this.groupBox1.TabIndex = 0;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Connection";
+            // 
+            // cbEncryption
+            // 
+            this.cbEncryption.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cbEncryption.FormattingEnabled = true;
+            this.cbEncryption.Location = new System.Drawing.Point(9, 149);
+            this.cbEncryption.Name = "cbEncryption";
+            this.cbEncryption.Size = new System.Drawing.Size(151, 21);
+            this.cbEncryption.TabIndex = 10;
+            // 
+            // labelEncryption
+            // 
+            this.labelEncryption.AutoSize = true;
+            this.labelEncryption.Location = new System.Drawing.Point(6, 133);
+            this.labelEncryption.Name = "labelEncryption";
+            this.labelEncryption.Size = new System.Drawing.Size(60, 13);
+            this.labelEncryption.TabIndex = 9;
+            this.labelEncryption.Text = "Encryption:";
             // 
             // tbUser
             // 
@@ -103,7 +125,7 @@
             // 
             // btnDisconnect
             // 
-            this.btnDisconnect.Location = new System.Drawing.Point(85, 136);
+            this.btnDisconnect.Location = new System.Drawing.Point(85, 176);
             this.btnDisconnect.Name = "btnDisconnect";
             this.btnDisconnect.Size = new System.Drawing.Size(75, 23);
             this.btnDisconnect.TabIndex = 4;
@@ -113,7 +135,7 @@
             // 
             // btnConnect
             // 
-            this.btnConnect.Location = new System.Drawing.Point(9, 136);
+            this.btnConnect.Location = new System.Drawing.Point(9, 176);
             this.btnConnect.Name = "btnConnect";
             this.btnConnect.Size = new System.Drawing.Size(75, 23);
             this.btnConnect.TabIndex = 3;
@@ -340,6 +362,8 @@
         private System.Windows.Forms.ImageList imageListTreeIcons;
         private System.Windows.Forms.TextBox tbUser;
         private System.Windows.Forms.Label label7;
+        private System.Windows.Forms.ComboBox cbEncryption;
+        private System.Windows.Forms.Label labelEncryption;
     }
 }
 

@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using S7CommPlusDriver;
+using S7CommPlusDriver.Encryption;
 
 using S7CommPlusDriver.ClientApi;
 
@@ -17,6 +18,7 @@ namespace DriverTest
             string HostIp = "10.0.98.100";
             string Password = "";
             string Username = "";
+            string EncryptionMode = "tls";
             int res;
             List<ItemAddress> readlist = new List<ItemAddress>();
             Console.WriteLine("Main - START");
@@ -35,10 +37,31 @@ namespace DriverTest
             {
                 Username = args[2];
             }
+            // Als Parameter lässt sich der Verschlüsselungsmodus übergeben: "tls" (default) oder "legacy"
+            if (args.Length >= 4)
+            {
+                EncryptionMode = args[3].ToLowerInvariant();
+            }
             Console.WriteLine("Main - Versuche Verbindungsaufbau zu: " + HostIp);
+            Console.WriteLine("Main - Encryption mode: " + EncryptionMode);
+
+            IEncryptionProvider encryptionProvider;
+            if (EncryptionMode == "legacy")
+            {
+#if NET6_0
+                Console.WriteLine("Main - ERROR: Legacy encryption is not supported on net6.0. Use net8.0 or newer.");
+                return;
+#else
+                encryptionProvider = new LegacyEncryptionProvider();
+#endif
+            }
+            else
+            {
+                encryptionProvider = new TlsEncryptionProvider();
+            }
 
             S7CommPlusConnection conn = new S7CommPlusConnection();
-            res = conn.Connect(HostIp, Password, Username);
+            res = conn.Connect(HostIp, encryptionProvider, Password, Username);
             if (res == 0)
             {
                 Console.WriteLine("Main - Connect fertig");

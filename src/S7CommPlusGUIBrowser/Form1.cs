@@ -1,5 +1,6 @@
 ﻿using S7CommPlusDriver;
 using S7CommPlusDriver.ClientApi;
+using S7CommPlusDriver.Encryption;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,6 +18,11 @@ namespace S7CommPlusGUIBrowser
         {
             InitializeComponent();
 
+            // Initialize encryption mode combo box
+            cbEncryption.Items.Add("TLS (new firmware)");
+            cbEncryption.Items.Add("Legacy (old firmware)");
+            cbEncryption.SelectedIndex = 0;
+
             string[] args = Environment.GetCommandLineArgs();
             // 1st argument can be the plc ip-address, otherwise use default
             if (args.Length >= 2)
@@ -33,6 +39,14 @@ namespace S7CommPlusGUIBrowser
             {
                 tbUser.Text = args[3];
             }
+            // 4th argument can be the encryption mode: "tls" (default) or "legacy"
+            if (args.Length >= 5)
+            {
+                if (args[4].ToLowerInvariant() == "legacy")
+                {
+                    cbEncryption.SelectedIndex = 1;
+                }
+            }
         }
 
         private void setStatus(string status)
@@ -45,9 +59,19 @@ namespace S7CommPlusGUIBrowser
         {
             setStatus("connecting...");
 
+            IEncryptionProvider encryptionProvider;
+            if (cbEncryption.SelectedIndex == 1)
+            {
+                encryptionProvider = new LegacyEncryptionProvider();
+            }
+            else
+            {
+                encryptionProvider = new TlsEncryptionProvider();
+            }
+
             if (conn != null) conn.Disconnect();
             conn = new S7CommPlusConnection();
-            int res = conn.Connect(tbIpAddress.Text, tbPassword.Text, tbUser.Text);
+            int res = conn.Connect(tbIpAddress.Text, encryptionProvider, tbPassword.Text, tbUser.Text);
             if (res != 0)
             {
                 setStatus("error: " + S7Client.ErrorText(res));
