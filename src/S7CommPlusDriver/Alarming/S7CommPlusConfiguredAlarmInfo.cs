@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -18,7 +18,7 @@ using System.IO;
 
 namespace S7CommPlusDriver.Alarming
 {
-    public class AlarmsMultipleStai
+    internal class S7CommPlusConfiguredAlarmInfo
     {
         public ushort Alid;
         public ushort AlarmDomain; // 1=Systemdiagnose, 2=Security, 256..272 = UserClass_0..UserClass_16
@@ -26,14 +26,14 @@ namespace S7CommPlusDriver.Alarming
         public byte AlarmEnabled; //0=No, 1=Yes
 
         public ushort HmiInfoLength;
-        public AlarmsHmiInfo HmiInfo;
+        public S7CommPlusAlarmHmiInfo HmiInfo;
         public ushort LidCount;
         public uint[] Lids;
 
         public override string ToString()
         {
             string s = "";
-            s += "<AlarmsMultipleStai>" + Environment.NewLine;
+            s += "<S7CommPlusConfiguredAlarmInfo>" + Environment.NewLine;
             s += "<Alid>" + Alid.ToString() + "</Alid>" + Environment.NewLine;
             s += "<AlarmDomain>" + AlarmDomain.ToString() + "</AlarmDomain>" + Environment.NewLine;
             s += "<MessageType>" + MessageType.ToString() + "</MessageType>" + Environment.NewLine;
@@ -45,11 +45,11 @@ namespace S7CommPlusDriver.Alarming
             {
                 s += "<Lid>" + li.ToString() + "</Lid>" + Environment.NewLine;
             }
-            s += "</AlarmsMultipleStai>" + Environment.NewLine;
+            s += "</S7CommPlusConfiguredAlarmInfo>" + Environment.NewLine;
             return s;
         }
 
-        public int Deserialize(Stream buffer)
+        internal int Deserialize(Stream buffer)
         {
             int ret = 0;
             ret += S7p.DecodeUInt16(buffer, out Alid);
@@ -57,7 +57,7 @@ namespace S7CommPlusDriver.Alarming
             ret += S7p.DecodeUInt16(buffer, out MessageType);
             ret += S7p.DecodeByte(buffer, out AlarmEnabled);
             ret += S7p.DecodeUInt16(buffer, out HmiInfoLength);
-            HmiInfo = new AlarmsHmiInfo();
+            HmiInfo = new S7CommPlusAlarmHmiInfo();
             ret += HmiInfo.Deserialize(buffer);
             ret += S7p.DecodeUInt16(buffer, out LidCount);
             Lids = new uint[LidCount];

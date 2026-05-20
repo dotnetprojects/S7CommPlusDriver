@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -15,7 +15,7 @@
 
 namespace S7CommPlusDriver
 {
-    public interface IS7pResponse
+    internal interface IS7pResponse
     {
         byte ProtocolVersion
         {

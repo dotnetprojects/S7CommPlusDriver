@@ -1,180 +1,95 @@
-﻿//#define _TEST_BASIC_VAR
-#define _TEST_PLCTAG
-
+using S7CommPlusDriver;
+using S7CommPlusDriver.ClientApi;
 using System;
 using System.Collections.Generic;
-using S7CommPlusDriver;
-
-using S7CommPlusDriver.ClientApi;
-
+using System.Linq;
+using System.Threading.Tasks;
 
 namespace DriverTest
 {
-    class Program
+    internal static class Program
     {
-        static void Main(string[] args)
+        private static async Task Main(string[] args)
         {
-            string HostIp = "10.0.98.100";
-            string Password = "";
-            string Username = "";
-            int res;
-            List<ItemAddress> readlist = new List<ItemAddress>();
+            var hostIp = args.Length >= 1 ? args[0] : "10.0.98.100";
+            var password = args.Length >= 2 ? args[1] : string.Empty;
+            var username = args.Length >= 3 ? args[2] : string.Empty;
+
             Console.WriteLine("Main - START");
-            // Als Parameter lässt sich die IP-Adresse übergeben, sonst Default-Wert von oben
-            if (args.Length >= 1)
+            Console.WriteLine("Main - connecting to: " + hostIp);
+
+            var options = new S7CommPlusClientOptions
             {
-                HostIp = args[0];
-            }
-            // Als Parameter lässt sich das Passwort übergeben, sonst Default-Wert von oben (kein Passwort)
-            if (args.Length >= 2)
+                Address = hostIp,
+                Password = password,
+                Username = username,
+                WriteEnabled = true
+            };
+
+            await using var client = new S7CommPlusClient(options);
+            try
             {
-                Password = args[1];
+                await client.ConnectAsync().ConfigureAwait(false);
+                Console.WriteLine("Main - connected");
+
+                Console.WriteLine("Main - browsing variables...");
+                var vars = await client.BrowseAsync().ConfigureAwait(false);
+                Console.WriteLine("Main - browse count=" + vars.Count);
+
+                await ReadBrowsableTagsAsync(client, vars).ConfigureAwait(false);
+
+                // The full typed tag write/read regression test is intentionally disabled by default.
+                // It writes PLC memory and therefore requires a matching test project and WriteEnabled=true.
+                // var test = new TestPlcTag();
+                // var errors = test.DoTests(client, nrandom: 10, testPointers: false);
+                // Console.WriteLine("TestPlcTag errors=" + errors);
             }
-            // Als Parameter lässt sich der Username übergeben, sonst Default-Wert von oben (kein Username)
-            if (args.Length >= 3)
+            catch (S7CommPlusException ex)
             {
-                Username = args[2];
+                Console.WriteLine($"Main - PLC communication failed: {ex.Message} ({ex.ErrorCode})");
             }
-            Console.WriteLine("Main - Versuche Verbindungsaufbau zu: " + HostIp);
-
-            S7CommPlusConnection conn = new S7CommPlusConnection();
-            res = conn.Connect(HostIp, Password, Username);
-            if (res == 0)
+            finally
             {
-                Console.WriteLine("Main - Connect fertig");
-
-                #region Variablenhaushalt browsen
-                Console.WriteLine("Main - Starte Browse...");
-                // Variablenhaushalt auslesen
-                List<VarInfo> vars = new List<VarInfo>();
-                res = conn.Browse(out vars);
-                Console.WriteLine("Main - Browse res=" + res);
-                #endregion
-
-#if _TEST_PLCTAG
-                #region Werte aller Variablen einlesen
-                Console.WriteLine("Main - Lese Werte aller Variablen aus");
-
-                List<PlcTag> taglist = new List<PlcTag>();
-                var tags = new List<PlcTag>();
-
-                foreach (var v in vars)
-                {
-                    taglist.Add(PlcTags.TagFactory(v.Name, new ItemAddress(v.AccessSequence), v.Softdatatype));
-                }
-                foreach (var t in taglist)
-                {
-                    tags.Add(t);
-                }
-                res = conn.ReadTags(tags);
-                if (res == 0)
-                {
-                    Console.WriteLine("====================== VARIABLENHAUSHALT ======================");
-
-                    string formatstring = "{0,-80}{1,-30}{2,-20}{3,-20}";
-                    Console.WriteLine(String.Format(formatstring, "SYMBOLIC-NAME", "ACCESS-SEQUENCE", "TYP", "QC: VALUE"));
-                    for (int i = 0; i < vars.Count; i++)
-                    {
-                        string s;
-
-                        s = String.Format(formatstring, taglist[i].Name, taglist[i].Address.GetAccessString(), Softdatatype.Types[taglist[i].Datatype], taglist[i].ToString());
-                        Console.WriteLine(s);
-                    }
-                }
-                #endregion
-#endif
-
-#if _TEST_BASIC_VAR
-                #region Werte aller Variablen einlesen
-                Console.WriteLine("Main - Lese Werte aller Variablen aus");
-
-                foreach (var v in vars)
-                {
-                    readlist.Add(new ItemAddress(v.AccessSequence));
-                }
-                List<object> values = new List<object>();
-                List<UInt64> errors = new List<UInt64>();
-
-                
-                // Fehlerhafte Variable setzen
-                //readlist[2].LID[0] = 123;
-                res = conn.ReadValues(readlist, out values, out errors);
-                #endregion
-
-
-                #region Variablenhaushalt mit Werten ausgeben
-
-                if (res == 0)
-                {
-                    Console.WriteLine("====================== VARIABLENHAUSHALT ======================");
-
-                    // Liste ausgeben
-                    string formatstring = "{0,-80}{1,-30}{2,-20}{3,-20}";
-                    Console.WriteLine(String.Format(formatstring, "SYMBOLIC-NAME", "ACCESS-SEQUENCE", "TYP", "VALUE"));
-                    for (int i = 0; i < vars.Count; i++)
-                    { 
-                        string s = String.Format(formatstring, vars[i].Name, vars[i].AccessSequence, Softdatatype.Types[vars[i].Softdatatype], values[i]);
-                        Console.WriteLine(s);
-                    }
-                    Console.WriteLine("===============================================================");
-                }
-                #endregion
-#endif
-
-                /*
-                #region Test: Wert schreiben
-                List<PValue> writevalues = new List<PValue>();
-                PValue writeValue = new ValueInt(8888);
-                writevalues.Add(writeValue);
-                List<ItemAddress> writelist = new List<ItemAddress>();
-                writelist.Add(new ItemAddress("8A0E0001.F"));
-                errors.Clear();
-                res = conn.WriteValues(writelist, writevalues, out errors);
-                Console.WriteLine("res=" + res);
-                #endregion
-                */
-
-                /*
-                #region Test: Absolutadressen lesen
-                // Daten aus nicht "optimierten" Datenbausteinen lesen
-                readlist.Clear();
-                ItemAddress absAdr = new ItemAddress();
-                absAdr.SetAccessAreaToDatablock(100); // DB 100
-                absAdr.SymbolCrc = 0;
-
-                absAdr.AccessSubArea = Ids.DB_ValueActual;
-                absAdr.LID.Add(3);  // LID_OMS_STB_ClassicBlob
-                absAdr.LID.Add(0);  // Blob Start Offset, Anfangsadresse
-                absAdr.LID.Add(20); // 20 Bytes
-
-                readlist.Add(absAdr);
-
-                values.Clear();
-                errors.Clear();
-
-                res = conn.ReadValues(readlist, out values, out errors);
-                Console.WriteLine(values.ToString());
-                #endregion
-                */
-
-                /*
-                #region Test: SPS in Stopp setzen
-                Console.WriteLine("Setze SPS in STOP...");
-                conn.SetPlcOperatingState(1);
-                Console.WriteLine("Taste drücken um wieder in RUN zu setzen...");
-                Console.ReadKey();
-                Console.WriteLine("Setze SPS in RUN...");
-                conn.SetPlcOperatingState(3);
-                #endregion
-                */
-                conn.Disconnect();
+                await client.DisconnectAsync().ConfigureAwait(false);
             }
-            else
-            {
-                Console.WriteLine("Main - Connect fehlgeschlagen!");
-            }
-            Console.WriteLine("Main - ENDE. Bitte Taste drücken.");
+
+            Console.WriteLine("Main - END. Press any key.");
             Console.ReadKey();
+        }
+
+        private static async Task ReadBrowsableTagsAsync(S7CommPlusClient client, IReadOnlyList<VarInfo> vars)
+        {
+            Console.WriteLine("Main - reading variable values");
+
+            var tags = new List<PlcTag>();
+            foreach (var variable in vars)
+            {
+                try
+                {
+                    tags.Add(await client.GetTagBySymbolAsync(variable.Name).ConfigureAwait(false));
+                }
+                catch (S7CommPlusException ex)
+                {
+                    Console.WriteLine($"Skipping {variable.Name}: {ex.Message}");
+                }
+            }
+
+            if (tags.Count == 0)
+            {
+                Console.WriteLine("No readable tags found.");
+                return;
+            }
+
+            await client.ReadAsync(tags).ConfigureAwait(false);
+            Console.WriteLine("====================== VARIABLES ======================");
+
+            const string format = "{0,-80}{1,-30}{2,-20}{3,-20}";
+            Console.WriteLine(string.Format(format, "SYMBOLIC-NAME", "ACCESS-SEQUENCE", "TYPE", "QC: VALUE"));
+            foreach (var tag in tags)
+            {
+                var datatype = Softdatatype.Types.TryGetValue(tag.Datatype, out var name) ? name : tag.Datatype.ToString();
+                Console.WriteLine(string.Format(format, tag.Name, tag.Address.GetAccessString(), datatype, tag.ToString()));
+            }
         }
     }
 }

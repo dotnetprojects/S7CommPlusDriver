@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class PObject : IS7pSerialize
+    internal class PObject : IS7pSerialize
     {
         public UInt32 RelationId;
         public UInt32 ClassId;
@@ -70,9 +70,8 @@ namespace S7CommPlusDriver
 
         public void AddObject(PObject obj)
         {
-            // Whether using the ClassId as Key makes sense, remains to be seen
-            // TODO: The ClassId is not unique and may be occur more than once
-            // (e.g. DB.Class_Rid and in RelId is the DB number as DB.1)
+            // ClassId is not unique by itself, so child objects are keyed by
+            // both ClassId and RelationId (for example DB.Class_Rid + DB.1).
             var tuple = new Tuple<UInt32, UInt32>(obj.ClassId, obj.RelationId);
             Objects.Add(tuple, obj);
         }

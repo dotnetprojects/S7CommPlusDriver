@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -16,12 +16,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class SetMultiVariablesRequest : IS7pRequest
+    internal class SetMultiVariablesRequest : IS7pRequest
     {
-        byte TransportFlags = 0x34;
+        byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
 
         public UInt32 InObjectId;
         /* Special
@@ -39,11 +40,12 @@ namespace S7CommPlusDriver
          * But counting them is identically.
          *
          * The only misleading thing is, we have two addresslists as members for both use-cases.
-         * TODO
+         * AddressList is used for object-local writes; AddressListVar is used for symbolic variable writes.
          */
         public List<UInt32> AddressList = new List<UInt32>();
         public List<ItemAddress> AddressListVar = new List<ItemAddress>();
         public List<PValue> ValueList = new List<PValue>();
+        public bool UseRawAddressList;
 
         public uint SessionId { get; set; }
         public byte ProtocolVersion { get; set; }
@@ -78,7 +80,7 @@ namespace S7CommPlusDriver
             // Request set
             ret += S7p.EncodeUInt32(buffer, InObjectId);
             ret += S7p.EncodeUInt32Vlq(buffer, (UInt32)ValueList.Count);
-            if (InObjectId > 0)
+            if (InObjectId > 0 || UseRawAddressList)
             {
                 ret += S7p.EncodeUInt32Vlq(buffer, (UInt32)AddressList.Count);
                 foreach (UInt32 id in AddressList)
@@ -148,7 +150,7 @@ namespace S7CommPlusDriver
             s += "<RequestSet>" + Environment.NewLine;
             s += "<InObjectId>" + InObjectId.ToString() + "</InObjectId>" + Environment.NewLine;
             s += "<ItemCount>" + ValueList.Count + "</ItemCount>" + Environment.NewLine;
-            if (InObjectId > 0)
+            if (InObjectId > 0 || UseRawAddressList)
             {
                 s += "<ItemAddressCount>" + AddressList.Count + "</ItemAddressCount>" + Environment.NewLine;
                 s += "<AddressList>" + Environment.NewLine;

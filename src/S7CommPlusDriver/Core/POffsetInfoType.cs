@@ -676,7 +676,7 @@ namespace S7CommPlusDriver
         }
     }
 
-    public class POffsetInfoType_FbArray : POffsetInfoType, IOffsetInfoType_Relation
+    public class POffsetInfoType_FbArray : POffsetInfoType, IOffsetInfoType_Relation, IOffsetInfoType_MDim
     {
         public UInt16 UnspecifiedOffsetinfo1;
         public UInt16 UnspecifiedOffsetinfo2;
@@ -695,8 +695,8 @@ namespace S7CommPlusDriver
         public UInt32[] MdimArrayElementCount = new UInt32[6];
 
         public override bool HasRelation() { return true; }
-        public override bool Is1Dim() { return false; } //!!! TODO
-        public override bool IsMDim() { return false; } //!!! TODO
+        public override bool Is1Dim() { return false; }
+        public override bool IsMDim() { return true; }
 
         public static POffsetInfoType_FbArray Deserialize(Stream buffer, out int length)
         {
@@ -774,6 +774,26 @@ namespace S7CommPlusDriver
         public uint GetRelationId()
         {
             return RelationId;
+        }
+
+        public Int32 GetArrayLowerBounds()
+        {
+            return MdimArrayLowerBounds[0];
+        }
+
+        public UInt32 GetArrayElementCount()
+        {
+            return ArrayElementCount;
+        }
+
+        public Int32[] GetMdimArrayLowerBounds()
+        {
+            return MdimArrayLowerBounds;
+        }
+
+        public UInt32[] GetMdimArrayElementCount()
+        {
+            return MdimArrayElementCount;
         }
     }
 }

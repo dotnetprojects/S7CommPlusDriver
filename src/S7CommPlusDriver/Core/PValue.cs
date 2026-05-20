@@ -19,8 +19,8 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    // TODO: Maybe there's room for improvement, as the array classes duplicate many code of the base classes
-    public abstract class PValue : IS7pSerialize
+    // Array variants intentionally keep their own serializers because PLC wire flags differ per collection shape.
+    internal abstract class PValue : IS7pSerialize
     {
         protected static byte FLAGS_ARRAY = 0x10;
         protected static byte FLAGS_ADDRESSARRAY = 0x20;
@@ -195,8 +195,7 @@ namespace S7CommPlusDriver
             return null;
         }
     }
-
-    public class ValueNull : PValue
+    internal class ValueNull : PValue
     {
         public ValueNull() : this(0)
         {
@@ -225,8 +224,7 @@ namespace S7CommPlusDriver
             return new ValueNull(flags);
         }
     }
-
-    public class ValueBool : PValue
+    internal class ValueBool : PValue
     {
         bool Value;
 
@@ -273,7 +271,7 @@ namespace S7CommPlusDriver
     /// An Array[0..9] will be transmitted as 16 elements and so on.
     /// At this time, serialize doesn't respect the padding elements, must be done on a higher level.
     /// </summary>
-    public class ValueBoolArray : PValue
+    internal class ValueBoolArray : PValue
     {
         bool[] Value;
 
@@ -301,7 +299,7 @@ namespace S7CommPlusDriver
             int ret = 0;
             ret += S7p.EncodeByte(buffer, DatatypeFlags);
             ret += S7p.EncodeByte(buffer, Datatype.Bool);
-            // TODO: Should we respect the padding inside this class, or at a higher level?
+            // Bool-array padding is handled by the caller because packed/byte-wise layout depends on the PLC offset type.
             ret += S7p.EncodeUInt32Vlq(buffer, (uint)Value.Length);
             for (int i = 0; i < Value.Length; i++)
             {
@@ -343,8 +341,7 @@ namespace S7CommPlusDriver
             return new ValueBoolArray(value, flags);
         }
     }
-
-    public class ValueUSInt : PValue
+    internal class ValueUSInt : PValue
     {
         byte Value;
 
@@ -384,8 +381,7 @@ namespace S7CommPlusDriver
             return new ValueUSInt(value, flags);
         }
     }
-
-    public class ValueUSIntArray : PValue
+    internal class ValueUSIntArray : PValue
     {
         byte[] Value;
 
@@ -452,8 +448,7 @@ namespace S7CommPlusDriver
             return new ValueUSIntArray(value, flags);
         }
     }
-
-    public class ValueUInt : PValue
+    internal class ValueUInt : PValue
     {
         UInt16 Value;
 
@@ -493,8 +488,7 @@ namespace S7CommPlusDriver
             return new ValueUInt(value, flags);
         }
     }
-
-    public class ValueUIntArray : PValue
+    internal class ValueUIntArray : PValue
     {
         UInt16[] Value;
 
@@ -561,8 +555,7 @@ namespace S7CommPlusDriver
             return new ValueUIntArray(value, flags);
         }
     }
-
-    public class ValueUDInt : PValue
+    internal class ValueUDInt : PValue
     {
         UInt32 Value;
 
@@ -609,8 +602,7 @@ namespace S7CommPlusDriver
             return new ValueUDInt(value, flags);
         }
     }
-
-    public class ValueUDIntArray : PValue
+    internal class ValueUDIntArray : PValue
     {
         UInt32[] Value;
 
@@ -687,7 +679,7 @@ namespace S7CommPlusDriver
     // All elements are kind of key,value. And Value is of the selected type.
     // The list is terminated by Null.
     // E.g.: Reading 1037 (SystemLimits) via GetVarSubStreamed
-    public class ValueUDIntSparseArray : PValue
+    internal class ValueUDIntSparseArray : PValue
     {
         Dictionary<UInt32, UInt32> Value;
 
@@ -762,8 +754,7 @@ namespace S7CommPlusDriver
             return new ValueUDIntSparseArray(value, flags);
         }
     }
-
-    public class ValueULInt : PValue
+    internal class ValueULInt : PValue
     {
         UInt64 Value;
 
@@ -810,8 +801,7 @@ namespace S7CommPlusDriver
             return new ValueULInt(value, flags);
         }
     }
-
-    public class ValueULIntArray : PValue
+    internal class ValueULIntArray : PValue
     {
         UInt64[] Value;
 
@@ -883,8 +873,7 @@ namespace S7CommPlusDriver
             return new ValueULIntArray(value, flags);
         }
     }
-
-    public class ValueSInt : PValue
+    internal class ValueSInt : PValue
     {
         sbyte Value;
 
@@ -924,8 +913,7 @@ namespace S7CommPlusDriver
             return new ValueSInt((sbyte)value, flags);
         }
     }
-
-    public class ValueSIntArray : PValue
+    internal class ValueSIntArray : PValue
     {
         sbyte[] Value;
 
@@ -994,8 +982,7 @@ namespace S7CommPlusDriver
             return new ValueSIntArray(value, flags);
         }
     }
-
-    public class ValueInt : PValue
+    internal class ValueInt : PValue
     {
         Int16 Value;
 
@@ -1035,8 +1022,7 @@ namespace S7CommPlusDriver
             return new ValueInt(value, flags);
         }
     }
-
-    public class ValueIntArray : PValue
+    internal class ValueIntArray : PValue
     {
         Int16[] Value;
 
@@ -1103,8 +1089,7 @@ namespace S7CommPlusDriver
             return new ValueIntArray(value, flags);
         }
     }
-
-    public class ValueDInt : PValue
+    internal class ValueDInt : PValue
     {
         Int32 Value;
 
@@ -1151,8 +1136,7 @@ namespace S7CommPlusDriver
             return new ValueDInt(value, flags);
         }
     }
-
-    public class ValueDIntArray : PValue
+    internal class ValueDIntArray : PValue
     {
         Int32[] Value;
 
@@ -1224,8 +1208,7 @@ namespace S7CommPlusDriver
             return new ValueDIntArray(value, flags);
         }
     }
-
-    public class ValueDIntSparseArray : PValue
+    internal class ValueDIntSparseArray : PValue
     {
         Dictionary<UInt32, Int32> Value;
 
@@ -1300,8 +1283,7 @@ namespace S7CommPlusDriver
             return new ValueDIntSparseArray(value, flags);
         }
     }
-
-    public class ValueLInt : PValue
+    internal class ValueLInt : PValue
     {
         Int64 Value;
 
@@ -1348,8 +1330,7 @@ namespace S7CommPlusDriver
             return new ValueLInt(value, flags);
         }
     }
-
-    public class ValueLIntArray : PValue
+    internal class ValueLIntArray : PValue
     {
         Int64[] Value;
 
@@ -1421,8 +1402,7 @@ namespace S7CommPlusDriver
             return new ValueLIntArray(value, flags);
         }
     }
-
-    public class ValueByte : PValue
+    internal class ValueByte : PValue
     {
         byte Value;
 
@@ -1462,8 +1442,7 @@ namespace S7CommPlusDriver
             return new ValueByte(value, flags);
         }
     }
-
-    public class ValueByteArray : PValue
+    internal class ValueByteArray : PValue
     {
         byte[] Value;
 
@@ -1530,8 +1509,7 @@ namespace S7CommPlusDriver
             return new ValueByteArray(value, flags);
         }
     }
-
-    public class ValueWord : PValue
+    internal class ValueWord : PValue
     {
         UInt16 Value;
 
@@ -1571,8 +1549,7 @@ namespace S7CommPlusDriver
             return new ValueWord(value, flags);
         }
     }
-
-    public class ValueWordArray : PValue
+    internal class ValueWordArray : PValue
     {
         UInt16[] Value;
 
@@ -1639,8 +1616,7 @@ namespace S7CommPlusDriver
             return new ValueWordArray(value, flags);
         }
     }
-
-    public class ValueDWord : PValue
+    internal class ValueDWord : PValue
     {
         UInt32 Value;
 
@@ -1680,8 +1656,7 @@ namespace S7CommPlusDriver
             return new ValueDWord(value, flags);
         }
     }
-
-    public class ValueDWordArray : PValue
+    internal class ValueDWordArray : PValue
     {
         UInt32[] Value;
 
@@ -1748,8 +1723,7 @@ namespace S7CommPlusDriver
             return new ValueDWordArray(value, flags);
         }
     }
-
-    public class ValueLWord : PValue
+    internal class ValueLWord : PValue
     {
         UInt64 Value;
 
@@ -1789,8 +1763,7 @@ namespace S7CommPlusDriver
             return new ValueLWord(value, flags);
         }
     }
-
-    public class ValueLWordArray : PValue
+    internal class ValueLWordArray : PValue
     {
         UInt64[] Value;
 
@@ -1857,8 +1830,7 @@ namespace S7CommPlusDriver
             return new ValueLWordArray(value, flags);
         }
     }
-
-    public class ValueReal : PValue
+    internal class ValueReal : PValue
     {
         float Value;
 
@@ -1898,8 +1870,7 @@ namespace S7CommPlusDriver
             return new ValueReal(value, flags);
         }
     }
-
-    public class ValueRealArray : PValue
+    internal class ValueRealArray : PValue
     {
         float[] Value;
 
@@ -1966,8 +1937,7 @@ namespace S7CommPlusDriver
             return new ValueRealArray(value, flags);
         }
     }
-
-    public class ValueLReal : PValue
+    internal class ValueLReal : PValue
     {
         double Value;
 
@@ -2007,8 +1977,7 @@ namespace S7CommPlusDriver
             return new ValueLReal(value, flags);
         }
     }
-
-    public class ValueLRealArray : PValue
+    internal class ValueLRealArray : PValue
     {
         double[] Value;
 
@@ -2075,8 +2044,7 @@ namespace S7CommPlusDriver
             return new ValueLRealArray(value, flags);
         }
     }
-
-    public class ValueTimestamp : PValue
+    internal class ValueTimestamp : PValue
     {
         UInt64 Value;
 
@@ -2149,8 +2117,7 @@ namespace S7CommPlusDriver
             return new ValueTimestamp(value, flags);
         }
     }
-
-    public class ValueTimestampArray : PValue
+    internal class ValueTimestampArray : PValue
     {
         UInt64[] Value;
 
@@ -2213,8 +2180,7 @@ namespace S7CommPlusDriver
             return new ValueTimestampArray(value, flags);
         }
     }
-
-    public class ValueTimespan : PValue
+    internal class ValueTimespan : PValue
     {
         Int64 Value;
 
@@ -2307,8 +2273,7 @@ namespace S7CommPlusDriver
             return new ValueTimespan(value, flags);
         }
     }
-
-    public class ValueTimespanArray : PValue
+    internal class ValueTimespanArray : PValue
     {
         Int64[] Value;
 
@@ -2382,8 +2347,7 @@ namespace S7CommPlusDriver
             return new ValueTimespanArray(value, flags);
         }
     }
-
-    public class ValueRID : PValue
+    internal class ValueRID : PValue
     {
         UInt32 Value;
 
@@ -2423,8 +2387,7 @@ namespace S7CommPlusDriver
             return new ValueRID(value, flags);
         }
     }
-
-    public class ValueRIDArray : PValue
+    internal class ValueRIDArray : PValue
     {
         UInt32[] Value;
 
@@ -2491,8 +2454,7 @@ namespace S7CommPlusDriver
             return new ValueRIDArray(value, flags);
         }
     }
-
-    public class ValueAID : PValue
+    internal class ValueAID : PValue
     {
         UInt32 Value;
 
@@ -2539,8 +2501,7 @@ namespace S7CommPlusDriver
             return new ValueAID(value, flags);
         }
     }
-
-    public class ValueAIDArray : PValue
+    internal class ValueAIDArray : PValue
     {
         UInt32[] Value;
 
@@ -2612,8 +2573,7 @@ namespace S7CommPlusDriver
             return new ValueAIDArray(value, flags);
         }
     }
-
-    public class ValueBlob : PValue
+    internal class ValueBlob : PValue
     {
         public UInt32 BlobRootId;
         byte[] Value;
@@ -2728,8 +2688,7 @@ namespace S7CommPlusDriver
             return blob;
         }
     }
-
-    public class ValueBlobArray : PValue
+    internal class ValueBlobArray : PValue
     {
         ValueBlob[] Value;
 
@@ -2795,8 +2754,7 @@ namespace S7CommPlusDriver
             return new ValueBlobArray(value, flags);
         }
     }
-
-    public class ValueBlobSparseArray : PValue
+    internal class ValueBlobSparseArray : PValue
     {
         public struct BlobEntry
         {
@@ -2893,8 +2851,7 @@ namespace S7CommPlusDriver
             return new ValueBlobSparseArray(value, flags);
         }
     }
-
-    public class ValueWString : PValue
+    internal class ValueWString : PValue
     {
         string Value;
 
@@ -2944,8 +2901,7 @@ namespace S7CommPlusDriver
             return new ValueWString(value, flags);
         }
     }
-
-    public class ValueWStringArray : PValue
+    internal class ValueWStringArray : PValue
     {
         string[] Value;
 
@@ -3017,8 +2973,7 @@ namespace S7CommPlusDriver
             return new ValueWStringArray(value, flags);
         }
     }
-
-    public class ValueWStringSparseArray : PValue
+    internal class ValueWStringSparseArray : PValue
     {
         Dictionary<UInt32, string> Value;
 
@@ -3097,8 +3052,7 @@ namespace S7CommPlusDriver
             return new ValueWStringSparseArray(value, flags);
         }
     }
-
-    public class ValueStruct : PValue
+    internal class ValueStruct : PValue
     {
         UInt32 Value;
         private Dictionary<uint, PValue> Elements = new Dictionary<uint, PValue>();
@@ -3151,7 +3105,6 @@ namespace S7CommPlusDriver
             ret += S7p.EncodeByte(buffer, DatatypeFlags);
             ret += S7p.EncodeByte(buffer, Datatype.Struct);
             ret += S7p.EncodeUInt32(buffer, Value);
-            // TODO: EXPERIMENTAL!
             // Packed Struct, see comment in Deserialize
             if ((Value > 0x90000000 && Value < 0x9fffffff) || (Value > 0x02000000 && Value < 0x02ffffff))
             {

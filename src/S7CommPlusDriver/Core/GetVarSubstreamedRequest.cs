@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -15,12 +15,13 @@
 
 using System;
 using System.IO;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class GetVarSubstreamedRequest : IS7pRequest
+    internal class GetVarSubstreamedRequest : IS7pRequest
     {
-        public byte TransportFlags = 0x34;
+        public byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
 
         public UInt32 InObjectId;
 
@@ -57,14 +58,15 @@ namespace S7CommPlusDriver
 
             // Request set
             ret += S7p.EncodeUInt32(buffer, InObjectId);
-            ret += S7p.EncodeByte(buffer, 0x20); // Addressarray
+            ret += S7p.EncodeByte(buffer, S7CommPlusProtocolConstants.ValueAddressArrayFlag);
             ret += S7p.EncodeByte(buffer, Datatype.UDInt);
             ret += S7p.EncodeByte(buffer, 1); // Array size
             ret += S7p.EncodeUInt32Vlq(buffer, Address);
 
             ret += S7p.EncodeObjectQualifier(buffer);
-            // 2 Bytes unknown
-            ret += S7p.EncodeUInt16(buffer, 0x0001);
+            // 2 Bytes unknown, decoded by the Wireshark S7CommPlus dissector as
+            // getvarsubstr.req_unknown1. Captured legacy V3 traffic uses 0x0001.
+            ret += S7p.EncodeUInt16(buffer, S7CommPlusProtocolConstants.GetVarSubstreamedRequestUnknown1);
 
             if (WithIntegrityId)
             {
@@ -73,6 +75,10 @@ namespace S7CommPlusDriver
 
             // Fill?
             ret += S7p.EncodeUInt32(buffer, 0);
+            if (ProtocolVersion == S7CommPlusDriver.ProtocolVersion.V3)
+            {
+                ret += S7p.EncodeByte(buffer, 0);
+            }
 
             return ret;
         }

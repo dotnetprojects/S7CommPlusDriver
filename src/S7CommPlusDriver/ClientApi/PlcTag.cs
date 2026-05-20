@@ -38,7 +38,7 @@ namespace S7CommPlusDriver.ClientApi
             LastWriteError = error;
         }
 
-        public abstract PValue GetWriteValue();
+        internal abstract PValue GetWriteValue();
 
         protected static int CheckErrorAndType(ulong error, object valueObj, Type checkType)
         {
@@ -120,7 +120,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueBool(Value);
         }
@@ -157,7 +157,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueByte(Value);
         }
@@ -176,7 +176,16 @@ namespace S7CommPlusDriver.ClientApi
         public char Value
         {
             get { return m_Value; }
-            set { m_Value = value; } // TODO: check if fits in ASCII area, include the encoding?
+            set
+            {
+                var encoding = Encoding.GetEncoding(m_Encoding);
+                var encoded = encoding.GetBytes(new[] { value });
+                if (encoded.Length != 1 || encoding.GetString(encoded)[0] != value)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value), $"Character must fit in one byte of {m_Encoding}.");
+                }
+                m_Value = value;
+            }
         }
 
         public PlcTagChar(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
@@ -197,7 +206,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             var c = new char[1];
             c[0] = Value;
@@ -243,7 +252,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueWord(Value);
         }
@@ -280,7 +289,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueInt(Value);
         }
@@ -317,7 +326,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueDWord(Value);
         }
@@ -354,7 +363,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueDInt(Value);
         }
@@ -391,7 +400,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueReal(Value);
         }
@@ -405,8 +414,7 @@ namespace S7CommPlusDriver.ClientApi
     public class PlcTagDate : PlcTag
     {
         // Specifies the number of days from January 1, 1990.
-        // .Net has no type with only date or only time
-        // TODO: Switch to .Net 6 (for DateOnly) or stay just as UInt?
+        // Public API stays on DateTime to keep all target frameworks/source users compatible.
         private DateTime m_Value;
 
         public DateTime Value
@@ -450,7 +458,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             var dtbase = new DateTime(1990, 1, 1);
             return new ValueUInt((ushort)(Value - dtbase).Days);
@@ -464,7 +472,6 @@ namespace S7CommPlusDriver.ClientApi
 
     public class PlcTagTimeOfDay : PlcTag
     {
-        // TODO: .Net has no type with only date or only time
         // Specification: 01:02:03 = 3723000 number of milliseconds since 00:00:00
         private uint m_Value;
 
@@ -508,7 +515,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUDInt(Value);
         }
@@ -566,7 +573,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueDInt(Value);
         }
@@ -686,7 +693,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             ushort v;
             v = UshortToBcdUshort(TimeValue);
@@ -786,7 +793,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             int[] ts = new int[8];
             byte[] b = new byte[8];
@@ -877,7 +884,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             // Must write the complete array of MaxLength of the string (plus two bytes header).
             byte[] sb = Encoding.GetEncoding(m_Encoding).GetBytes(Value);
@@ -932,7 +939,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUSIntArray(Value);
         }
@@ -977,7 +984,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUSIntArray(Value);
         }
@@ -1022,7 +1029,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueLReal(Value);
         }
@@ -1059,7 +1066,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueULInt(Value);
         }
@@ -1096,7 +1103,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueLInt(Value);
         }
@@ -1133,7 +1140,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueLWord(Value);
         }
@@ -1170,7 +1177,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUSInt(Value);
         }
@@ -1207,7 +1214,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUInt(Value);
         }
@@ -1244,7 +1251,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUDInt(Value);
         }
@@ -1281,7 +1288,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueSInt(Value);
         }
@@ -1318,7 +1325,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUInt(Convert.ToUInt16(Value));
         }
@@ -1379,7 +1386,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             // Must write the complete array of MaxLength of the string (plus two ushort for the header).
             var b = new ushort[Value.Length + 2];
@@ -1424,7 +1431,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueTimespan(Value);
         }
@@ -1442,7 +1449,7 @@ namespace S7CommPlusDriver.ClientApi
 
     public class PlcTagLTOD : PlcTag
     {
-        // TODO: Like the 32 Bit Types Date/TOD, in .Net there's no type for date / time only. Only in .Net 6.
+        // Public API stays on UInt64 nanoseconds for source compatibility across all target frameworks.
         // Specification: Number of nanoseconds since 00:00:00.
         private ulong m_Value;
 
@@ -1486,7 +1493,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueULInt(Value);
         }
@@ -1541,7 +1548,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueTimestamp(Value);
         }
@@ -1658,7 +1665,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             var struct_val = new ValueStruct(0x02000043); // 0x02000043 = TI_LIB.SimpleType.67 -> DTL Systemdatatype
             struct_val.PackedStructInterfaceTimestamp = DTLInterfaceTimestamp;
@@ -1737,7 +1744,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueBoolArray(Value);
         }
@@ -1779,7 +1786,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueByteArray(Value);
         }
@@ -1821,7 +1828,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueWordArray(Value);
         }
@@ -1863,7 +1870,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueIntArray(Value);
         }
@@ -1905,7 +1912,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueDWordArray(Value);
         }
@@ -1947,7 +1954,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueDIntArray(Value);
         }
@@ -1989,7 +1996,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueRealArray(Value);
         }
@@ -2031,7 +2038,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUSIntArray(Value);
         }
@@ -2073,7 +2080,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUIntArray(Value);
         }
@@ -2115,7 +2122,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueUDIntArray(Value);
         }
@@ -2157,7 +2164,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             return new ValueSIntArray(Value);
         }
@@ -2254,7 +2261,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             var byteStrings = new List<byte>();
             foreach (var item in Value)
@@ -2375,7 +2382,7 @@ namespace S7CommPlusDriver.ClientApi
             }
         }
 
-        public override PValue GetWriteValue()
+        internal override PValue GetWriteValue()
         {
             var byteStrings = new List<byte>();
             foreach (var item in Value)

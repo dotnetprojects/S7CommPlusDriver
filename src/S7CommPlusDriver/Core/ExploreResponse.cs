@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.Collections.Generic;
 
 namespace S7CommPlusDriver
 {
-    public class ExploreResponse : IS7pResponse
+    internal class ExploreResponse : IS7pResponse
     {
         public byte TransportFlags;
         public UInt64 ReturnValue;

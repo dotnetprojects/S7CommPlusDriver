@@ -25,6 +25,25 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void ConnectAcceptsConnectionConfirmForShortRemoteTsap()
+        {
+            var transport = new FakeS7Transport { EmptyReceiveDelayMilliseconds = 500 };
+            transport.EnqueueReceive(new byte[] { 0x03, 0x00, 0x00, 0x23 });
+            transport.EnqueueReceive(new byte[] { 0x1E, 0xD0, 0x00 });
+            transport.EnqueueReceive(new byte[28]);
+
+            var client = new S7Client(() => transport);
+            client.SetConnectionParams("1.2.3.4", 0x0600, System.Text.Encoding.ASCII.GetBytes(S7CommPlusDefaults.RemoteTsapEs));
+
+            var error = client.Connect();
+            client.Disconnect(50);
+
+            Assert.Equal(0, error);
+            Assert.Single(transport.Sent);
+            Assert.Equal(35, transport.Sent[0].Length);
+        }
+
+        [Fact]
         public void DisconnectClosesInjectedTransport()
         {
             var transport = new FakeS7Transport { Connected = true };

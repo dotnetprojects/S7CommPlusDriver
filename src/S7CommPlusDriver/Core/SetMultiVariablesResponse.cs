@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class SetMultiVariablesResponse : IS7pResponse
+    internal class SetMultiVariablesResponse : IS7pResponse
     {
         public byte TransportFlags;
         public UInt64 ReturnValue;
@@ -56,7 +56,7 @@ namespace S7CommPlusDriver
             {
                 ret += S7p.DecodeUInt64Vlq(buffer, out retval);
                 ErrorValues.Add(itemnr, retval);
-                ret += S7p.DecodeUInt32Vlq(buffer, out itemnr); /// TODO: Is this correct?
+                ret += S7p.DecodeUInt32Vlq(buffer, out itemnr);
             }
             ret += S7p.DecodeUInt32Vlq(buffer, out uint iid);
             IntegrityId = iid;

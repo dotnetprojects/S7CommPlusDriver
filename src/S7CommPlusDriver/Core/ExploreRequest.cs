@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -16,12 +16,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class ExploreRequest : IS7pRequest
+    internal class ExploreRequest : IS7pRequest
     {
-        byte TransportFlags = 0x34; // or 0x36???
+        byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
         public UInt32 ExploreId;
         public UInt32 ExploreRequestId;
         public byte ExploreChildsRecursive;
@@ -69,7 +70,7 @@ namespace S7CommPlusDriver
             {
                 ret += S7p.EncodeByte(buffer, 1); // 1 object / value
                 
-                // TODO / Experimental:
+                // Experimental compatibility path for older firmware/protocol captures:
                 // Not 100% sure about how this has to be used:
                 // On a Struct, we don't write the datatypeflags into the stream.
                 // Maybe the byte before are the flags (which is the way I have it in the Wireshark dissector so far, which may be wrong).

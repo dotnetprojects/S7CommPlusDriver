@@ -1,25 +1,26 @@
 # S7CommPlusDriver
 
-Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS.
+Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with optional legacy challenge authentication for pre-V17/pre-TLS CPUs on `net8.0` and later.
 
-The recommended API for new applications is `S7CommPlusClient`. The older `S7CommPlusConnection` API is still present for existing tools and low-level protocol work, but production code should prefer the new client.
+The public API for new applications is `S7CommPlusClient`. Low-level protocol/session types are internal implementation details; production code should use the client surface.
 
 ## What The Production Client Provides
 
-- Async connect, disconnect, browse, read, and write methods
+- Async connect, disconnect, browse, read, write, active-alarm, subscription, and legitimation methods
 - Serialized request execution for safe concurrent callers
 - Typed exceptions with PLC endpoint, operation, error code, and transient/non-transient classification
 - Connection-state and communication-error events
 - Read/browse reconnect retry support
 - Explicit write enablement so accidental PLC writes are blocked by default
 - Bounded disconnect behavior and better socket disconnect detection
+- TLS and legacy S7CommPlus challenge authentication modes
 - No library writes to `Console`
 
 ## Requirements
 
 ### PLC / CPU
 
-The driver supports CPUs and projects that allow secure PG/HMI communication over TLS:
+The default mode supports CPUs and projects that allow secure PG/HMI communication over TLS:
 
 - S7-1200 firmware V4.3 or newer, TLS 1.3 from V4.5
 - S7-1500 firmware V2.9 or newer
@@ -27,14 +28,19 @@ The driver supports CPUs and projects that allow secure PG/HMI communication ove
 
 The PLC project must also be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer.
 
-### OpenSSL
+For older S7-1200/1500 CPUs that do not support TLS, use `S7CommPlusSecurityMode.LegacyChallenge` or `Auto` on `net8.0`/`net9.0`. Legacy mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0` builds remain TLS-only and fail fast if legacy mode is requested.
 
-TLS communication uses OpenSSL. The package includes the required native OpenSSL runtime files for supported platforms and copies them to the output directory. If OpenSSL is installed system-wide, make sure the matching native binaries are available on the process path.
+### TLS Backend
+
+TLS communication uses the managed BouncyCastle backend by default. The older OpenSSL backend remains available through `S7CommPlusClientOptions.TlsBackend = S7CommPlusTlsBackend.OpenSsl`, but it depends on native runtime files and may be less portable across PLC firmware/OpenSSL combinations.
+
+The package includes the required native OpenSSL runtime files for supported platforms and copies them to the output directory when the OpenSSL backend is selected. If OpenSSL is installed system-wide, make sure the matching native binaries are available on the process path.
 
 Windows runtime files include:
 
 - `libcrypto-3.dll` / `libssl-3.dll` for x86
 - `libcrypto-3-x64.dll` / `libssl-3-x64.dll` for x64
+- `libcrypto-3-arm64.dll` / `libssl-3-arm64.dll` plus `vcruntime140.dll` for ARM64
 
 ## Quick Start
 
@@ -61,6 +67,7 @@ client.CommunicationError += (_, e) =>
 await client.ConnectAsync();
 
 var cpuInfo = await client.GetCpuInfoAsync();
+var cpuCulture = await client.GetCpuCultureInfoAsync();
 var variables = await client.BrowseAsync();
 
 var tag = await client.GetTagBySymbolAsync("MyDb.MyValue");
@@ -73,6 +80,172 @@ if (read.Items[0].IsSuccess)
 
 await client.DisconnectAsync();
 ```
+
+`GetCpuCultureInfoAsync()` reads the CPU text-container LCIDs and exposes both
+the raw language IDs and resolved .NET cultures:
+
+```csharp
+foreach (var culture in cpuCulture.Cultures)
+{
+    Console.WriteLine($"{culture.LCID}: {culture.Name}");
+}
+```
+
+The built-in connection defaults match Siemens S7CommPlus HMI communication:
+ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
+`S7CommPlusDefaults.LocalTsap` (`0x0600`), and remote TSAP
+`S7CommPlusDefaults.RemoteTsapHmi` (`SIMATIC-ROOT-HMI`). Project/engineering
+captures sometimes use `S7CommPlusDefaults.RemoteTsapEs`
+(`SIMATIC-ROOT-ES`). Remote TSAP values are validated as ASCII COTP
+parameters before a socket is opened.
+
+## Password Legitimation
+
+Initial session authentication and PLC password legitimation are separate
+steps. If the PLC requires a password for the desired access level, either pass
+credentials in the options so they are used during connect, or call
+`LegitimateAsync` after connecting:
+
+```csharp
+await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
+{
+    Address = "10.0.110.120",
+    Password = "plc-password"
+});
+
+await client.ConnectAsync();
+
+// Or, for an already connected session:
+await client.LegitimateAsync("plc-password", username: "");
+```
+
+Legitimation is a session-security operation, not a PLC signal write, so it
+does not require `WriteEnabled = true`. Failed legitimation attempts throw
+`S7CommPlusLegitimationException`.
+
+## Active Alarms
+
+Active alarms are exposed through the same serialized read pipeline and can
+therefore use the normal timeout, reconnect, logging, and typed-error behavior:
+
+```csharp
+var alarms = await client.GetActiveAlarmsAsync(languageId: 1033);
+```
+
+Use this call to get alarms that are already active when your application
+connects. Alarm subscriptions report new notification frames on that session;
+they should not be used as the only source for pre-existing alarms.
+
+## Communication Limits
+
+PLC communication limits are available through the production client. This is
+useful before creating subscriptions or planning large batch reads:
+
+```csharp
+var resources = await client.GetCommunicationResourcesAsync();
+
+Console.WriteLine(resources.TagsPerReadRequestMax);
+Console.WriteLine(resources.PlcSubscriptionsFree);
+```
+
+## Subscriptions
+
+Subscriptions are exposed as long-running, disposable objects. They own the
+client operation pipeline while active because notification frames arrive on the
+same PLC session as normal request/response traffic. Stop or dispose a
+subscription before issuing other reads or writes on the same client.
+
+```csharp
+var tag = await client.GetTagBySymbolAsync("MyDb.MyValue");
+
+await using var subscription = await client.SubscribeTagsAsync(
+    new[] { tag },
+    new S7CommPlusSubscriptionOptions
+    {
+        CycleTimeMilliseconds = 250,
+        NotificationTimeout = TimeSpan.FromSeconds(5)
+    });
+
+subscription.NotificationReceived += (_, e) =>
+{
+    foreach (var item in e.Notification.Items)
+    {
+        if (item.IsSuccess)
+        {
+            Console.WriteLine(item.Tag);
+        }
+    }
+};
+
+subscription.CommunicationError += (_, e) =>
+{
+    Console.WriteLine($"{e.Exception.Operation}: 0x{e.Exception.ErrorCode:X8}");
+};
+```
+
+Alarm notifications use the same lifecycle and credit handling:
+
+```csharp
+await using var alarmSession = await client.SubscribeAlarmsWithSnapshotAsync(languageId: 1033);
+
+foreach (var activeAlarm in alarmSession.ActiveAlarms)
+{
+    Console.WriteLine(activeAlarm.AlarmTexts?.AlarmText);
+}
+
+alarmSession.Subscription.NotificationReceived += (_, e) =>
+{
+    foreach (var alarm in e.Notification.Alarms)
+    {
+        Console.WriteLine(alarm.ToString());
+    }
+};
+```
+
+Do not poll or read tags on the same `S7CommPlusClient` while a subscription is
+running. S7CommPlus notification frames share the same encrypted session and the
+client intentionally serializes access to avoid overlapping sequence numbers and
+TLS record failures. Use a second client connection for independent polling.
+
+`SubscribeAlarmsWithSnapshotAsync` creates that second connection automatically.
+It creates the alarm subscription first, opens a temporary second
+`S7CommPlusClient` with the same options to read active alarms, disposes the
+temporary client, and buffers early notifications so there is no
+read-then-subscribe blind spot. If you need custom connection ownership, use the
+overload that accepts a separate snapshot client. Stopping an alarm subscription
+closes the current PLC session; the next read or browse on the same client will
+reconnect automatically when `AutoReconnect` is enabled.
+
+Idle notification waits are not treated as failures by default. Set
+`MaxConsecutiveTimeoutsBeforeFault` when a quiet subscription should become a
+typed communication failure after a fixed number of empty waits. Write
+protection is unchanged: subscriptions do not enable PLC signal writes.
+
+## Older PLCs / Legacy Challenge Auth
+
+TLS remains the default to avoid accidental security downgrades. Enable the older Siemens challenge authentication explicitly:
+
+```csharp
+await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
+{
+    Address = "10.0.110.120",
+    SecurityMode = S7CommPlusSecurityMode.LegacyChallenge,
+    RequestTimeout = TimeSpan.FromSeconds(5)
+});
+
+await client.ConnectAsync();
+Console.WriteLine(client.Options.NegotiatedSecurityMode);
+```
+
+`S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy challenge authentication. Reconnect and write safety behave the same in all modes: read/browse may reconnect once, writes are never retried automatically, and writes still require `WriteEnabled = true`.
+
+The HarpoS7 `1.1.0` NuGet package currently declares unpublished dependency package IDs, so this repository references the required HarpoS7 source projects directly under `src/HarpoS7`. HarpoS7 source is MIT licensed; this project remains LGPL-3.0-or-later unless noted otherwise.
+
+Legacy packet-capture notes, auth frame variants, and live PLC observations are tracked in `docs/legacy-s7commplus-memory.md`.
+
+Recent legacy auth work parses `ServerSessionVersion` from the CreateObject
+response where available, so S7-1500 V3.x authentication-frame selection is
+response-driven before falling back to capture-compatible heuristics.
 
 ## Write Safety
 
@@ -130,6 +303,12 @@ By default the live test only connects, reads CPU info, browses, and disconnects
 
 ```powershell
 $env:S7COMMPLUS_LIVE_TAGS = "MyDb.MyValue;OtherDb.Counter"
+```
+
+To exercise legacy auth or auto fallback in the live test:
+
+```powershell
+$env:S7COMMPLUS_LIVE_SECURITY_MODE = "LegacyChallenge" # or "Auto"
 ```
 
 Never use the live smoke test for writes.

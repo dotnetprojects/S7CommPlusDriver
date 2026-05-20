@@ -16,21 +16,24 @@
 using System;
 using System.Collections.Generic;
 using S7CommPlusDriver.ClientApi;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    partial class S7CommPlusConnection
+    internal sealed class S7CommPlusTagSubscriptionService
     {
-        // *************************************************
-        // *                IMPORTANT!                     *
-        // * This is basically a test for subscriptions,   *
-        // * how to use them, and how to later integrate   *
-        // * this into the complete library!               *
-        // *************************************************
+        private readonly IS7CommPlusProtocolSession _session;
+        private readonly S7CommPlusProtocolRequests _requests;
+
+        public S7CommPlusTagSubscriptionService(IS7CommPlusProtocolSession session)
+        {
+            _session = session;
+            _requests = new S7CommPlusProtocolRequests(session);
+        }
 
         Dictionary<UInt32, PlcTag> m_SubscribedTags; // ItemRefId
         byte m_SubcriptionChangeCounter = 1;
-        uint m_SubscriptionRelationId = 0x7fffc001; // TODO! Unknown value!0x7fffc001. Seems to be a startvalue, increases on next CreateObject. Guess: It's stored in the plc under this id.
+        uint m_SubscriptionRelationId = S7CommPlusProtocolConstants.SubscriptionRelationIdStart;
         short m_NextCreditLimit;
         uint m_SubscriptionObjectId;
 
@@ -40,7 +43,12 @@ namespace S7CommPlusDriver
         /// <param name="plcTags">The list of tags to add to the subscription</param>
         /// <param name="cycleTime">Cycle time for update in milliseconds. Lowest value seems to be 100 ms (if it's not dependant on the CPU).</param>
         /// <returns></returns>
-        public int SubscriptionCreate(List<PlcTag> plcTags, ushort cycleTime)
+        public int Create(List<PlcTag> plcTags, ushort cycleTime)
+        {
+            return Create(plcTags, cycleTime, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimit);
+        }
+
+        public int Create(List<PlcTag> plcTags, ushort cycleTime, short initialCreditLimit)
         {
             int res;
             m_SubscribedTags = new Dictionary<uint, PlcTag>();
@@ -48,10 +56,10 @@ namespace S7CommPlusDriver
             subsobj.ClassId = Ids.ClassSubscription;
             subsobj.RelationId = m_SubscriptionRelationId;
             subsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("Subscription_" + m_SubscriptionRelationId.ToString()));
-            subsobj.AddAttribute(Ids.SubscriptionFunctionClassId, new ValueUSInt(0));
+            subsobj.AddAttribute(Ids.SubscriptionFunctionClassId, new ValueUSInt((byte)SubscriptionFunctionClass.Variables));
             subsobj.AddAttribute(Ids.SubscriptionMissedSendings, new ValueUInt(0));
             subsobj.AddAttribute(Ids.SubscriptionSubsystemError, new ValueLInt(0));
-            subsobj.AddAttribute(Ids.SubscriptionRouteMode, new ValueUSInt(0x14)); // TODO Unknown, mostly seen 0x04, 0x14 or 0x15. Needs to be tested
+            subsobj.AddAttribute(Ids.SubscriptionRouteMode, new ValueUSInt((byte)SubscriptionRouteMode.CyclicAndChangedValues));
 
             // Testresults of some RouteModes (0x04, 0x14, 0x20) some applications are using, together with credit limits:
             // For Alarm Subscription RouteMode 0x02 is used.
@@ -76,39 +84,24 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionCycleTime, new ValueUDInt(cycleTime));
             subsobj.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
-            m_NextCreditLimit = 10;
+            m_NextCreditLimit = initialCreditLimit;
             subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(m_NextCreditLimit)); // -1=unlimited, 255 = max
-            subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(65535));
-            // 1055 = Unknown -> is working without setting this.
-            subsobj.AddAttribute(1055, new ValueUSInt(0));
+            subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(S7CommPlusProtocolConstants.SubscriptionTicksUnlimited));
+            subsobj.AddAttribute(S7CommPlusProtocolConstants.SubscriptionDefaultAttribute1055, new ValueUSInt(0));
 
             // Build the request object
             var createObjReq = new CreateObjectRequest(ProtocolVersion.V2, 0, true);
-            createObjReq.TransportFlags = 0x34;
-            createObjReq.RequestId = SessionId2;
+            createObjReq.TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
+            createObjReq.RequestId = _session.SessionId2;
             createObjReq.RequestValue = new ValueUDInt(0);
             createObjReq.SetRequestObject(subsobj);
 
             // Send it
-            res = SendS7plusFunctionObject(createObjReq);
+            res = _requests.CreateObject(createObjReq, out var createObjRes);
             if (res != 0)
             {
-                m_client.Disconnect();
+                _session.DisconnectTransport();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
-            }
-
-            var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (createObjRes == null)
-            {
-                System.Diagnostics.Trace.WriteLine("Subscription - Create: CreateObjectResponse with Error!");
-                return S7Consts.errIsoInvalidPDU;
             }
 
             if (createObjRes.ReturnValue == 0)
@@ -128,21 +121,14 @@ namespace S7CommPlusDriver
 
         private int SubscriptionSetCreditLimit(short limit)
         {
-            int res;
-            var setVarReq = new SetVariableRequest(ProtocolVersion.V2);
-            setVarReq.TransportFlags = 0x74; // Set flag, that we need no response
-            setVarReq.InObjectId = m_SubscriptionObjectId;
-            setVarReq.Address = Ids.SubscriptionCreditLimit;
-            setVarReq.Value = new ValueInt(limit);
-            res = SendS7plusFunctionObject(setVarReq);
-            return res;
+            return _requests.SetSubscriptionCreditLimit(m_SubscriptionObjectId, limit);
         }
 
         private ValueUDIntArray GetSubscriptionListArray(List<PlcTag> plcTags)
         {
             var la = new List<uint>();
-            // 0x8?ssxxxx = 8 = flag CreateNew, ss = 1 byte subscription Change counter, xxxx = unknown
-            la.Add(0x80000000 | ((uint)(m_SubcriptionChangeCounter) << 16));
+            // 0x8?ssxxxx = 8 = create/update flag, ss = subscription change counter.
+            la.Add(S7CommPlusProtocolConstants.SubscriptionListCreateFlag | ((uint)(m_SubcriptionChangeCounter) << 16));
             la.Add(0);                     // Number of items to unsubscribe
             la.Add((uint)plcTags.Count);   // Number of items to subscribe
 
@@ -154,7 +140,7 @@ namespace S7CommPlusDriver
                 // and know to which tag the value belongs to.
                 m_SubscribedTags.Add(tagReferenceId, tag);
                 // Write the Item address
-                head = 0x80040000;
+                head = S7CommPlusProtocolConstants.SubscriptionItemAddressHeaderFlag;
                 // It's not known where 0x8004 stands for -> 4 was a guess it's for the number of fields
                 // before the LIDs, but that's wrong (coincidentally fits here in this special case).
                 // Get the number of IDs in advance, Sub-Area counts as one, and then count each LID.
@@ -174,38 +160,30 @@ namespace S7CommPlusDriver
                 tagReferenceId++;
             }
             // Convert all data to protocol UDInt Array (VLQ encoded)
-            return new ValueUDIntArray(la.ToArray(), 0x20); // 0x20 -> Adressarray
+            return new ValueUDIntArray(la.ToArray(), S7CommPlusProtocolConstants.ValueAddressArrayFlag);
         }
 
-        public int TestWaitForVariableChangeNotifications(int untilNumberOfNotifications)
+        public int TestWaitForNotifications(int untilNumberOfNotifications)
         {
             int res = 0;
-            short creditLimitStep = 5;
+            short creditLimitStep = S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimitStep;
 
             for (int i = 1; i <= untilNumberOfNotifications; i++)
             {
                 System.Diagnostics.Trace.WriteLine(Environment.NewLine + "WaitForNotifications(): *** Loop #" + i.ToString() + " ***");
-                m_LastError = 0;
-                WaitForNewS7plusReceived(5000);
-                if (m_LastError != 0)
+                var result = _requests.WaitNotification(5000, out var noti);
+                if (result != 0)
                 {
-                    return m_LastError;
-                }
-
-                var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
-                if (noti == null)
-                {
-                    System.Diagnostics.Trace.WriteLine("Notification == null!");
-                    return S7Consts.errIsoInvalidPDU;
+                    return result;
                 }
                 else
                 {
-                    Console.Write("Notification: CreditTick=" + noti.NotificationCreditTick + " SequenceNumber=" + noti.NotificationSequenceNumber);
-                    System.Diagnostics.Trace.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03} ValuesCount={2}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond, noti.Values.Count));
+                    System.Diagnostics.Trace.WriteLine("Notification: CreditTick=" + noti.NotificationCreditTick + " SequenceNumber=" + noti.NotificationSequenceNumber);
+                    System.Diagnostics.Trace.WriteLine(String.Format("PLC-Timestamp={0}.{1:D03} ValuesCount={2}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond, noti.Values.Count));
                     foreach(var v in noti.Values)
                     {
                         System.Diagnostics.Trace.WriteLine("---> key=" + v.Key + " value=" + v.Value.ToString());
-                        // Error value in tags expects a 64 bit value, in subscriptions it's only 1 byte (for it's not known what all values are for -> TODO)
+                        // Notification item errors are one-byte return codes; tag read errors use the 64-bit PLC return value space.
                         m_SubscribedTags[v.Key].ProcessReadResult(v.Value, 0);
                     }
 
@@ -221,13 +199,60 @@ namespace S7CommPlusDriver
             return res;
         }
 
-        public int SubscriptionDelete()
+        public int WaitForNotifications(int waitTimeout, short creditLimitStep, out List<Notification> notifications)
+        {
+            notifications = new List<Notification>();
+
+            var result = _requests.WaitNotification(waitTimeout, out var noti);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            notifications.Add(noti);
+
+            foreach (var value in noti.Values)
+            {
+                if (m_SubscribedTags != null && m_SubscribedTags.TryGetValue(value.Key, out var tag))
+                {
+                    tag.ProcessReadResult(value.Value, 0);
+                }
+            }
+
+            foreach (var returnValue in noti.ReturnValues)
+            {
+                if (m_SubscribedTags != null && m_SubscribedTags.TryGetValue(returnValue.Key, out var tag))
+                {
+                    tag.ProcessReadResult(null, returnValue.Value);
+                }
+            }
+
+            if (creditLimitStep > 0 && noti.NotificationCreditTick >= m_NextCreditLimit - 1)
+            {
+                m_NextCreditLimit = (short)((m_NextCreditLimit + creditLimitStep) % 255);
+                if (m_NextCreditLimit == 0)
+                {
+                    m_NextCreditLimit = creditLimitStep;
+                }
+                return SubscriptionSetCreditLimit(m_NextCreditLimit);
+            }
+
+            return 0;
+        }
+
+        public int Delete()
         {
             int res;
-            m_SubscribedTags.Clear();
+            var subscriptionObjectId = m_SubscriptionObjectId;
+            m_SubscribedTags?.Clear();
             m_SubscriptionObjectId = 0;
-            System.Diagnostics.Trace.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SessionId2={0:X8}", SessionId2));
-            res = DeleteObject(SessionId2);
+            if (subscriptionObjectId == 0)
+            {
+                return 0;
+            }
+
+            System.Diagnostics.Trace.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SubscriptionObjectId={0:X8}", subscriptionObjectId));
+            res = _session.DeleteObject(subscriptionObjectId);
             return res;
         }
     }

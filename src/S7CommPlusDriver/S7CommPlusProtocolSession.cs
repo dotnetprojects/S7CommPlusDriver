@@ -22,12 +22,13 @@ using System.IO;
 using System.Linq;
 using System.Diagnostics;
 using S7CommPlusDriver.ClientApi;
+using S7CommPlusDriver.Internal;
 using System.Text.RegularExpressions;
-using System.Security.Cryptography;
+using Microsoft.Extensions.Logging;
 
 namespace S7CommPlusDriver
 {
-    public partial class S7CommPlusConnection
+    internal partial class S7CommPlusProtocolSession
     {
         #region Private Members
         private S7Client m_client;
@@ -49,7 +50,15 @@ namespace S7CommPlusDriver
         private UInt16 m_SequenceNumber = 0;
         private UInt32 m_IntegrityId = 0;
         private UInt32 m_IntegrityId_Set = 0;
-        private CommRessources m_CommRessources = new CommRessources();
+        private bool m_LegacyDigestActive;
+        private byte[] m_LegacySessionKey;
+#if NET8_0_OR_GREATER
+        private long m_LegacyDigestTraceSequence;
+#endif
+        private ValueStruct m_ServerSessionVersion;
+        private S7CommPlusSecurityMode m_NegotiatedSecurityMode = S7CommPlusSecurityMode.Tls;
+        private S7CommPlusCommunicationResourceSnapshot m_CommunicationResources = new S7CommPlusCommunicationResourceSnapshot();
+        private string m_LastErrorDetail = string.Empty;
 
         private List<DatablockInfo> dbInfoList;
         private List<PObject> typeInfoList = new List<PObject>();
@@ -139,7 +148,7 @@ namespace S7CommPlusDriver
             m_LastError = ReceiveNextS7plusPdu(Timeout, out m_ReceivedPDU);
             if (m_LastError != 0)
             {
-                Trace.WriteLine("S7CommPlusConnection - WaitForNewS7plusReceived: ERROR: " + S7Client.ErrorText(m_LastError));
+                Trace.WriteLine("S7CommPlusProtocolSession - WaitForNewS7plusReceived: ERROR: " + S7Client.ErrorText(m_LastError));
             }
         }
 
@@ -169,6 +178,11 @@ namespace S7CommPlusDriver
 
         private int SendS7plusFunctionObject(IS7pRequest funcObj)
         {
+            if (m_LegacyDigestActive && funcObj.ProtocolVersion != ProtocolVersion.V1)
+            {
+                funcObj.ProtocolVersion = ProtocolVersion.V3;
+            }
+
             // If we don't have a SessionId, this must be the first CreateObjectRequest, where we use the Id for NullServerSession
             if (m_SessionId == 0)
             {
@@ -198,15 +212,18 @@ namespace S7CommPlusDriver
             int curSize;
             int sourcePos = 0;
             int sendLen;
-            int NegotiatedIsoPduSize = 1024;// TODO: Respect the negotiated TPDU size
-
-            // 4 Byte TPKT Header
-            // 3 Byte ISO-Header
-            // 5 Byte TLS Header + 17 Bytes addition from TLS
-            // 4 Byte S7CommPlus Header
-            // 4 Byte S7CommPlus Trailer (must fit into last PDU)
-            int MaxSize = NegotiatedIsoPduSize - 4 - 3 - 5 - 17 - 4 - 4;
-            byte[] packet = new byte[MaxSize + 4]; //max packet size is always MaxSize + PDU Header
+            bool useLegacyDigest = ShouldUseLegacyDigest(protoVersion);
+            int legacyDigestLength = useLegacyDigest ? LegacyDigestFieldLength : 0;
+            int MaxSize = GetMaxS7CommPlusPayloadSize(legacyDigestLength);
+            if (MaxSize <= 0)
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
+            if (useLegacyDigest && bytesToSend > MaxSize)
+            {
+                return S7Consts.errS7CommPlusLegacyRequestTooLarge;
+            }
+            byte[] packet = new byte[MaxSize + S7CommPlusProtocolConstants.S7CommPlusHeaderLength + legacyDigestLength];
 
             while (bytesToSend > 0)
             {
@@ -221,20 +238,32 @@ namespace S7CommPlusDriver
                     bytesToSend -= curSize;
                 }
                 // Header
-                packet[0] = 0x72;
+                packet[0] = S7CommPlusProtocolConstants.FrameMarker;
                 packet[1] = protoVersion;
-                packet[2] = (byte)(curSize >> 8);
-                packet[3] = (byte)(curSize & 0x00FF);
+                int s7DataLength = curSize + legacyDigestLength;
+                packet[2] = (byte)(s7DataLength >> 8);
+                packet[3] = (byte)(s7DataLength & 0x00FF);
                 // Data part
-                Array.Copy(sendPduData, sourcePos, packet, 4, curSize);
+                if (useLegacyDigest)
+                {
+                    if (!TryWriteLegacyDigest(packet, 4, sendPduData, 0, sourcePos + curSize))
+                    {
+                        return S7Consts.errS7CommPlusDigestMismatch;
+                    }
+                    Array.Copy(sendPduData, sourcePos, packet, 4 + legacyDigestLength, curSize);
+                }
+                else
+                {
+                    Array.Copy(sendPduData, sourcePos, packet, 4, curSize);
+                }
                 sourcePos += curSize;
-                sendLen = 4 + curSize;
+                sendLen = S7CommPlusProtocolConstants.S7CommPlusHeaderLength + s7DataLength;
 
                 // Trailer only in last packet
                 if (bytesToSend == 0)
                 {
-                    Array.Resize(ref packet, sendLen + 4); //resize only the last package to sendLen + TrailerLen
-                    packet[sendLen] = 0x72;
+                    Array.Resize(ref packet, sendLen + S7CommPlusProtocolConstants.S7CommPlusTrailerLength);
+                    packet[sendLen] = S7CommPlusProtocolConstants.FrameMarker;
                     sendLen++;
                     packet[sendLen] = protoVersion;
                     sendLen++;
@@ -244,8 +273,54 @@ namespace S7CommPlusDriver
                     sendLen++;
                 }
                 m_client.Send(packet);
+                if (m_client._LastError != 0)
+                {
+                    return m_client._LastError;
+                }
             }
             return m_LastError;
+        }
+
+        private static int GetMaxS7CommPlusPayloadSize(int legacyDigestLength)
+        {
+            return S7CommPlusProtocolConstants.DefaultIsoTpduSize
+                - S7CommPlusProtocolConstants.TpktHeaderLength
+                - S7CommPlusProtocolConstants.CotpHeaderLength
+                - S7CommPlusProtocolConstants.TlsRecordHeaderLength
+                - S7CommPlusProtocolConstants.TlsAesGcmRecordOverhead
+                - legacyDigestLength
+                - S7CommPlusProtocolConstants.S7CommPlusHeaderLength
+                - S7CommPlusProtocolConstants.S7CommPlusTrailerLength;
+        }
+
+        private int GetLegacySingleFramePayloadLimit(byte protocolVersion)
+        {
+            if (!ShouldUseLegacyDigest(protocolVersion))
+            {
+                return int.MaxValue;
+            }
+
+            return GetMaxS7CommPlusPayloadSize(LegacyDigestFieldLength);
+        }
+
+        private bool ExceedsLegacySingleFramePayload(GetMultiVariablesRequest request, int maxPayloadSize)
+        {
+            if (maxPayloadSize == int.MaxValue)
+            {
+                return false;
+            }
+
+            var probe = new GetMultiVariablesRequest(ProtocolVersion.V3)
+            {
+                SessionId = UInt32.MaxValue,
+                SequenceNumber = UInt16.MaxValue,
+                IntegrityId = UInt32.MaxValue
+            };
+            probe.AddressList.AddRange(request.AddressList);
+
+            using var stream = new MemoryStream();
+            probe.Serialize(stream);
+            return stream.Length > maxPayloadSize;
         }
 
         private void OnDataReceived(byte[] PDU, int len)
@@ -265,7 +340,7 @@ namespace S7CommPlusDriver
             // This method is called from a different thread.
             // If we use subscriptions or alarming, we may get new data before the last PDU was processed completely.
             // First step we push the complete PDU to a queue.
-            // TODO: m_LastError handling would also not work as expected. This needs some more redesign.
+            // Receive errors are published through the receive queue so request waiters fail immediately.
 
             if (!m_ReceivedNeedMoreDataForCompletePDU)
             {
@@ -276,7 +351,7 @@ namespace S7CommPlusDriver
             int pos = 0;
             int s7HeaderDataLen = 0;
             // Check header
-            if (PDU[pos] != 0x72)
+            if (PDU[pos] != S7CommPlusProtocolConstants.FrameMarker)
             {
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 PublishReceiveError(S7Consts.errIsoInvalidPDU1);
@@ -308,7 +383,7 @@ namespace S7CommPlusDriver
                 // As we don't have a trailer on this types, it's not possible that they are transmitted as fragments.
                 if (protoVersion == ProtocolVersion.SystemEvent)
                 {
-                    Trace.WriteLine("S7CommPlusConnection - OnDataReceived: ProtocolVersion 0xfe SystemEvent received");
+                    Trace.WriteLine("S7CommPlusProtocolSession - OnDataReceived: ProtocolVersion 0xfe SystemEvent received");
                     m_ReceivedTempPDU.Write(PDU, pos, s7HeaderDataLen);
                     pos += s7HeaderDataLen;
                     // Create SystemEventObject
@@ -319,19 +394,68 @@ namespace S7CommPlusDriver
                     var sysevt = SystemEvent.DeserializeFromPdu(m_ReceivedTempPDU);
                     if (sysevt.IsFatalError())
                     {
-                        Trace.WriteLine("S7CommPlusConnection - OnDataReceived: SystemEvent has fatal error");
+                        Trace.WriteLine("S7CommPlusProtocolSession - OnDataReceived: SystemEvent has fatal error");
                         // Termination neccessary
                         PublishReceiveError(S7Consts.errIsoInvalidPDU3);
                     }
                     else
                     {
-                        Trace.WriteLine("S7CommPlusConnection - OnDataReceived: SystemEvent with non fatal error, do nothing");
+                        Trace.WriteLine("S7CommPlusProtocolSession - OnDataReceived: SystemEvent with non fatal error, do nothing");
                     }
                 }
                 else
                 {
+                    var dataPos = pos;
+                    var dataLen = s7HeaderDataLen;
+                    if (ShouldUseLegacyDigest(protoVersion))
+                    {
+                        if (dataLen < LegacyDigestFieldLength)
+                        {
+                            m_ReceivedNeedMoreDataForCompletePDU = false;
+                            PublishReceiveError(S7Consts.errS7CommPlusDigestMismatch);
+                            return;
+                        }
+                        var legacyBodyPos = dataPos + LegacyDigestFieldLength;
+                        var legacyBodyLen = dataLen - LegacyDigestFieldLength;
+                        var previousBodyLen = Math.Max(0, (int)m_ReceivedTempPDU.Length - 1);
+                        var digestData = previousBodyLen == 0
+                            ? PDU
+                            : BuildLegacyAccumulatedDigestData(PDU, legacyBodyPos, legacyBodyLen, previousBodyLen);
+                        var digestDataOffset = previousBodyLen == 0 ? legacyBodyPos : 0;
+                        var digestDataLen = previousBodyLen + legacyBodyLen;
+                        // Siemens OMS verifies the first protected large frame, then sets an internal
+                        // "MAC already verified" flag for continuation fragments in the same logical PDU.
+                        var legacyDigestVerified = previousBodyLen == 0;
+                        var legacyDigestMatched = !legacyDigestVerified || TryVerifyLegacyDigest(
+                                PDU,
+                                dataPos,
+                                digestData,
+                                digestDataOffset,
+                                digestDataLen);
+                        TraceLegacyDigestReceive(
+                            PDU,
+                            len,
+                            dataPos,
+                            legacyBodyPos,
+                            legacyBodyLen,
+                            previousBodyLen,
+                            digestData,
+                            digestDataOffset,
+                            digestDataLen,
+                            legacyDigestVerified,
+                            legacyDigestMatched);
+                        if (legacyDigestVerified && !legacyDigestMatched)
+                        {
+                            m_ReceivedNeedMoreDataForCompletePDU = false;
+                            m_ReceivedTempPDU = null;
+                            PublishReceiveError(S7Consts.errS7CommPlusDigestMismatch);
+                            return;
+                        }
+                        dataPos += LegacyDigestFieldLength;
+                        dataLen -= LegacyDigestFieldLength;
+                    }
                     // Copy data part to destination stream
-                    m_ReceivedTempPDU.Write(PDU, pos, s7HeaderDataLen);
+                    m_ReceivedTempPDU.Write(PDU, dataPos, dataLen);
                     pos += s7HeaderDataLen;
                     // If this is a fragmented PDU, then at this point no trailer
                     if ((len - 4 - 4) == s7HeaderDataLen)
@@ -361,6 +485,15 @@ namespace S7CommPlusDriver
             m_ReceivedPDUs.Writer.TryWrite(new ReceivedS7PlusPdu(null, errorCode));
         }
 
+        private byte[] BuildLegacyAccumulatedDigestData(byte[] pdu, int bodyPos, int bodyLen, int previousBodyLen)
+        {
+            var digestData = new byte[previousBodyLen + bodyLen];
+            var temp = m_ReceivedTempPDU.GetBuffer();
+            Array.Copy(temp, 1, digestData, 0, previousBodyLen);
+            Array.Copy(pdu, bodyPos, digestData, previousBodyLen, bodyLen);
+            return digestData;
+        }
+
         internal void DebugOnDataReceivedForTests(byte[] pdu)
         {
             OnDataReceived(pdu, pdu.Length);
@@ -382,6 +515,24 @@ namespace S7CommPlusDriver
             m_LastError = 0;
         }
 
+        internal void DebugEnableLegacyDigestForTests(byte[] sessionKey)
+        {
+            m_LegacySessionKey = sessionKey;
+            m_LegacyDigestActive = true;
+        }
+
+        internal bool DebugGetMultiVariablesRequestExceedsLegacySingleFrameForTests(IEnumerable<ItemAddress> addresses)
+        {
+            var request = new GetMultiVariablesRequest(ProtocolVersion.V3);
+            request.AddressList.AddRange(addresses);
+            return ExceedsLegacySingleFramePayload(request, GetMaxS7CommPlusPayloadSize(LegacyDigestFieldLength));
+        }
+
+        internal int DebugSendLegacyPayloadForTests(byte[] payload)
+        {
+            return SendS7plusPDUdata(payload, payload.Length, ProtocolVersion.V3);
+        }
+
         private UInt16 GetWordAt(byte[] Buffer, int Pos)
         {
             return (UInt16)((Buffer[Pos] << 8) | Buffer[Pos + 1]);
@@ -395,11 +546,7 @@ namespace S7CommPlusDriver
 
         private void printBuf(byte[] b)
         {
-            for (int i = 0; i < b.Length; i++)
-            {
-                Console.Write("0x" + String.Format("{0:X02} ", b[i]));
-            }
-            Console.Write(Environment.NewLine);
+            Trace.WriteLine(BitConverter.ToString(b));
         }
 
         private int checkResponseWithIntegrity(IS7pRequest request, IS7pResponse response)
@@ -440,23 +587,88 @@ namespace S7CommPlusDriver
 
         public int Connect(string address, string password = "", string username = "", int timeoutMs = 5000, int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null)
         {
-            if (timeoutMs > 0) {
-                m_ReadTimeout = timeoutMs;
+            return ConnectTls(address, password, username, timeoutMs, port, localTsap, remoteTsap);
+        }
+
+        internal int Connect(S7CommPlusClientOptions options)
+        {
+            if (options == null)
+            {
+                return S7Consts.errCliInvalidParams;
             }
 
+            switch (options.SecurityMode)
+            {
+                case S7CommPlusSecurityMode.Tls:
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
+                case S7CommPlusSecurityMode.LegacyChallenge:
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                case S7CommPlusSecurityMode.Auto:
+                    var tlsResult = ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
+                    if (tlsResult == 0)
+                    {
+                        return 0;
+                    }
+                    options.Logger.LogInformation("TLS connect to PLC {Address}:{Port} failed with {ErrorCode}; trying legacy challenge authentication.", options.Address, options.Port, tlsResult);
+                    TryDisconnect(options.DisconnectTimeoutMilliseconds);
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                default:
+                    return S7Consts.errCliInvalidParams;
+            }
+        }
+
+        private int ConnectAndSetNegotiatedMode(S7CommPlusClientOptions options, S7CommPlusSecurityMode securityMode)
+        {
+            var result = securityMode == S7CommPlusSecurityMode.Tls
+                ? ConnectTls(options.Address, options.Password, options.Username, options.RequestTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend)
+                : ConnectLegacyChallenge(options);
+            if (result == 0)
+            {
+                m_NegotiatedSecurityMode = securityMode;
+                options.NegotiatedSecurityMode = securityMode;
+            }
+            return result;
+        }
+
+        private void PrepareClient(string address, int timeoutMs, int port, ushort localTsap, byte[] remoteTsap)
+        {
             m_LastError = 0;
-            int res;
-            int Elapsed = Environment.TickCount;
+            m_LastErrorDetail = string.Empty;
+            m_LegacyDigestActive = false;
+            m_LegacySessionKey = null;
+            m_ServerSessionVersion = null;
+            m_ReceivedPDU = null;
+            m_ReceivedTempPDU = null;
+            m_ReceivedNeedMoreDataForCompletePDU = false;
+            m_NewS7CommPlusReceived = false;
+            m_SessionId = 0;
+            m_SessionId2 = 0;
+            m_SequenceNumber = 0;
+            m_IntegrityId = 0;
+            m_IntegrityId_Set = 0;
+            dbInfoList = null;
+            typeInfoList.Clear();
             m_ReceivedPDUs.Writer.TryComplete();
             m_ReceivedPDUs = CreateReceiveChannel();
             m_client = new S7Client();
             m_client.OnDataReceived = this.OnDataReceived;
+            m_client.OnReceiveError = this.PublishReceiveError;
             m_client.PLCPort = port;
             m_client.ConnTimeout = timeoutMs;
             m_client.RecvTimeout = timeoutMs;
             m_client.SendTimeout = timeoutMs;
-
             m_client.SetConnectionParams(address, localTsap, remoteTsap ?? Encoding.ASCII.GetBytes("SIMATIC-ROOT-HMI"));
+        }
+
+        private int ConnectTls(string address, string password = "", string username = "", int timeoutMs = 5000, int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null, S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl)
+        {
+            if (timeoutMs > 0) {
+                m_ReadTimeout = timeoutMs;
+            }
+
+            int res;
+            int Elapsed = Environment.TickCount;
+            PrepareClient(address, timeoutMs, port, localTsap, remoteTsap);
             res = m_client.Connect();
             if (res != 0)
                 return res;
@@ -489,9 +701,10 @@ namespace S7CommPlusDriver
 
             #region Step 2: Activate TLS. Everything from here onwards is TLS encrypted.
 
-            res = m_client.SslActivate();
+            res = m_client.SslActivate(tlsBackend);
             if (res != 0)
             {
+                m_LastErrorDetail = m_client.LastErrorDetail;
                 m_client.Disconnect();
                 return res;
             }
@@ -505,6 +718,7 @@ namespace S7CommPlusDriver
             res = SendS7plusFunctionObject(createObjReq);
             if (res != 0)
             {
+                m_LastErrorDetail = m_client.LastErrorDetail;
                 m_client.Disconnect();
                 return res;
             }
@@ -512,6 +726,7 @@ namespace S7CommPlusDriver
             WaitForNewS7plusReceived(m_ReadTimeout);
             if (m_LastError != 0)
             {
+                m_LastErrorDetail = m_client.LastErrorDetail;
                 m_client.Disconnect();
                 return m_LastError;
             }
@@ -519,7 +734,7 @@ namespace S7CommPlusDriver
             var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (createObjRes == null)
             {
-                //System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Connect: CreateObjectResponse with Error!");
+                //System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Connect: CreateObjectResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU6;
             }
@@ -527,11 +742,12 @@ namespace S7CommPlusDriver
             // Usually the first is used for polling data, and the 2nd for jobs which use notifications, e.g. alarming, subscriptions.
             m_SessionId = createObjRes.ObjectIds[0];
             m_SessionId2 = createObjRes.ObjectIds[1];
-            //System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Connect: Using SessionId=0x" + String.Format("{0:X04}", m_SessionId));
+            //System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Connect: Using SessionId=0x" + String.Format("{0:X04}", m_SessionId));
 
             // Evaluate Struct 314
             PValue sval = createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion);
             ValueStruct serverSession = (ValueStruct)sval;
+            m_ServerSessionVersion = serverSession;
 
             #endregion
 
@@ -556,7 +772,7 @@ namespace S7CommPlusDriver
             var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setMultiVarRes == null)
             {
-                //System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Connect: SetMultiVariablesResponse with Error!");
+                //System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Connect: SetMultiVariablesResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU7;
             }
@@ -564,7 +780,7 @@ namespace S7CommPlusDriver
             #endregion
 
             #region Step 5: Read SystemLimits
-            res = m_CommRessources.ReadMax(this);
+            res = m_CommunicationResources.ReadMax(this);
             if (res != 0)
             {
                 m_client.Disconnect();
@@ -581,8 +797,40 @@ namespace S7CommPlusDriver
             #endregion
 
             // If everything has been error-free up to this point, then the connection has been established successfully.
-            Trace.WriteLine("S7CommPlusConnection - Connect: Time for connection establishment: " + (Environment.TickCount - Elapsed) + " ms.");
+            Trace.WriteLine("S7CommPlusProtocolSession - Connect: Time for connection establishment: " + (Environment.TickCount - Elapsed) + " ms.");
             return 0;
+        }
+
+        public int Legitimate(string password, string username = "")
+        {
+            if (!IsConnected)
+            {
+                return S7Consts.errTCPNotConnected;
+            }
+
+            if (m_ServerSessionVersion == null)
+            {
+                return S7Consts.errCliFirmwareNotSupported;
+            }
+
+            return legitimate(m_ServerSessionVersion, password ?? string.Empty, username ?? string.Empty);
+        }
+
+        public int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
+        {
+            resources = m_CommunicationResources ?? new S7CommPlusCommunicationResourceSnapshot();
+            if (!IsConnected)
+            {
+                return S7Consts.errTCPNotConnected;
+            }
+
+            var result = resources.ReadMax(this);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            return resources.ReadFree(this);
         }
 
         public void Disconnect()
@@ -647,6 +895,41 @@ namespace S7CommPlusDriver
             return res;
         }
 
+        internal int CloseTransport(int timeoutMs = 2000)
+        {
+            var oldTimeout = m_ReadTimeout;
+            if (timeoutMs > 0)
+            {
+                m_ReadTimeout = timeoutMs;
+            }
+
+            try
+            {
+                return m_client?.Disconnect(timeoutMs) ?? 0;
+            }
+            catch
+            {
+                return S7Consts.errTCPDataReceive;
+            }
+            finally
+            {
+                m_ReadTimeout = oldTimeout;
+                m_ReceivedPDU = null;
+                m_ReceivedTempPDU = null;
+                m_ReceivedPDUs.Writer.TryComplete();
+                m_ReceivedPDUs = CreateReceiveChannel();
+                m_ReceivedNeedMoreDataForCompletePDU = false;
+                m_NewS7CommPlusReceived = false;
+                m_SessionId = 0;
+                m_SessionId2 = 0;
+                m_SequenceNumber = 0;
+                m_IntegrityId = 0;
+                m_IntegrityId_Set = 0;
+                dbInfoList = null;
+                typeInfoList.Clear();
+            }
+        }
+
         /// <summary>
         /// Deletes the object with the given Id.
         /// </summary>
@@ -671,7 +954,7 @@ namespace S7CommPlusDriver
             if (deleteObjectId == m_SessionId)
             {
                 var delObjRes = DeleteObjectResponse.DeserializeFromPdu(m_ReceivedPDU, false);
-                Trace.WriteLine("S7CommPlusConnection - DeleteSession: Deleted our own Session Id object, not checking the response.");
+                Trace.WriteLine("S7CommPlusProtocolSession - DeleteSession: Deleted our own Session Id object, not checking the response.");
                 m_SessionId = 0; // not valid anymore
                 m_SessionId2 = 0;
             }
@@ -685,7 +968,7 @@ namespace S7CommPlusDriver
                 }
                 if (delObjRes.ReturnValue != 0)
                 {
-                    Trace.WriteLine("S7CommPlusConnection - DeleteSession: Executed with Error! ReturnValue=" + delObjRes.ReturnValue);
+                    Trace.WriteLine("S7CommPlusProtocolSession - DeleteSession: Executed with Error! ReturnValue=" + delObjRes.ReturnValue);
                     res = -1;
                 }
             }
@@ -704,10 +987,16 @@ namespace S7CommPlusDriver
                 values.Add(null);
                 errors.Add(0xffffffffffffffff);
             }
+            if (addresslist.Count == 0)
+            {
+                return 0;
+            }
 
             // Split request into chunks, taking the MaxTags per request into account
             int chunk_startIndex = 0;
             int count_perChunk = 0;
+            int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax);
+            int maxLegacyPayloadSize = GetLegacySingleFramePayloadLimit(ProtocolVersion.V3);
             do
             {
                 int res;
@@ -715,9 +1004,14 @@ namespace S7CommPlusDriver
 
                 getMultiVarReq.AddressList.Clear();
                 count_perChunk = 0;
-                while (count_perChunk < m_CommRessources.TagsPerReadRequestMax  && (chunk_startIndex + count_perChunk) < addresslist.Count)
+                while (count_perChunk < maxTagsPerRequest && (chunk_startIndex + count_perChunk) < addresslist.Count)
                 {
                     getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + count_perChunk]);
+                    if (count_perChunk > 0 && ExceedsLegacySingleFramePayload(getMultiVarReq, maxLegacyPayloadSize))
+                    {
+                        getMultiVarReq.AddressList.RemoveAt(getMultiVarReq.AddressList.Count - 1);
+                        break;
+                    }
                     count_perChunk++;
                 }
 
@@ -738,11 +1032,11 @@ namespace S7CommPlusDriver
                 // ReturnValue shows also an error, if only one single variable could not be read
                 if (getMultiVarRes.ReturnValue != 0)
                 {
-                    Trace.WriteLine("S7CommPlusConnection - ReadValues: Executed with Error! ReturnValue=" + getMultiVarRes.ReturnValue);
+                    Trace.WriteLine("S7CommPlusProtocolSession - ReadValues: Executed with Error! ReturnValue=" + getMultiVarRes.ReturnValue);
                 }
 
-                // TODO: If a variable could not be read, there is no value, but there is an ErrorValue.
-                // The user must therefore check whether Value != null. Maybe there's a more elegant solution.
+                // If a variable could not be read, there is no value, but there is an ErrorValue.
+                // The production client maps this to per-item batch status.
                 foreach (var v in getMultiVarRes.Values)
                 {
                     values[chunk_startIndex + (int)v.Key - 1] = v.Value;
@@ -765,22 +1059,31 @@ namespace S7CommPlusDriver
         {
             int res;
             errors = new List<UInt64>();
+            if (addresslist.Count != values.Count)
+            {
+                return S7Consts.errCliInvalidParams;
+            }
             for (int i = 0; i < addresslist.Count; i++)
             {
                 // Initialize to no error value, as there's no explicit value for write success.
                 errors.Add(0);
             }
+            if (addresslist.Count == 0)
+            {
+                return 0;
+            }
 
             // Split request into chunks, taking the MaxTags per request into account
             int chunk_startIndex = 0;
             int count_perChunk = 0;
+            int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerWriteRequestMax);
             do
             {
                 var setMultiVarReq = new SetMultiVariablesRequest(ProtocolVersion.V2);
                 setMultiVarReq.AddressListVar.Clear();
                 setMultiVarReq.ValueList.Clear();
                 count_perChunk = 0;
-                while (count_perChunk < m_CommRessources.TagsPerWriteRequestMax && (chunk_startIndex + count_perChunk) < addresslist.Count)
+                while (count_perChunk < maxTagsPerRequest && (chunk_startIndex + count_perChunk) < addresslist.Count)
                 {
                     setMultiVarReq.AddressListVar.Add(addresslist[chunk_startIndex + count_perChunk]);
                     setMultiVarReq.ValueList.Add(values[chunk_startIndex + count_perChunk]);
@@ -808,7 +1111,7 @@ namespace S7CommPlusDriver
                 // ReturnValue shows also an error, if only one single variable could not be written
                 if (setMultiVarRes.ReturnValue != 0)
                 {
-                    Trace.WriteLine("S7CommPlusConnection - WriteValues: Write with errors. ReturnValue=" + setMultiVarRes.ReturnValue);
+                    Trace.WriteLine("S7CommPlusProtocolSession - WriteValues: Write with errors. ReturnValue=" + setMultiVarRes.ReturnValue);
                 }
 
                 foreach (var ev in setMultiVarRes.ErrorValues)
@@ -847,7 +1150,7 @@ namespace S7CommPlusDriver
             var setVarRes = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setVarRes == null)
             {
-                //System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Connect: SetVariableResponse with Error!");
+                //System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Connect: SetVariableResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU12;
             }
@@ -968,7 +1271,7 @@ namespace S7CommPlusDriver
                 else
                 {
                     // On error, set the relid to zero, will be removed from the list in the next step.
-                    // TODO: Report this as an error?
+                    Trace.WriteLine(String.Format("Explore: Skipping block type info relation for {0}, item error 0x{1:X}.", exploreData[i].db_name, errors[i]));
                     var data = exploreData[i];
                     data.db_block_ti_relid = 0;
                     exploreData[i] = data;
@@ -1267,7 +1570,16 @@ namespace S7CommPlusDriver
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theIArea_Rid);
                 tag = browsePlcTagBySymbol(0x90010000, ref symbol, varInfo);
                 if (tag != null) return tag;
-                // TODO: implement s5timers and counters... no one uses them anymore anyway
+                symbol = varInfo.Name;
+                // S7 timers
+                varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theS7Timers_Rid);
+                tag = browsePlcTagBySymbol(0x90050000, ref symbol, varInfo);
+                if (tag != null) return tag;
+                symbol = varInfo.Name;
+                // S7 counters
+                varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theS7Counters_Rid);
+                tag = browsePlcTagBySymbol(0x90060000, ref symbol, varInfo);
+                if (tag != null) return tag;
             }
             return null;
         }

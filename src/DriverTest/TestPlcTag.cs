@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -21,7 +21,7 @@ using S7CommPlusDriver.ClientApi;
 
 namespace DriverTest
 {
-    public class TestPlcTag
+    internal class TestPlcTag
     {
         // If the DB is created from source, the .x IDs should
         // be remain the same, if there's no change in the DB at the variables after compiling.
@@ -61,6 +61,32 @@ namespace DriverTest
 
         private Random m_Rand;
 
+        private static int ReadTags(S7CommPlusClient client, IEnumerable<PlcTag> tags)
+        {
+            try
+            {
+                client.ReadAsync(tags).GetAwaiter().GetResult();
+                return 0;
+            }
+            catch (S7CommPlusException ex)
+            {
+                return ex.ErrorCode;
+            }
+        }
+
+        private static int WriteTags(S7CommPlusClient client, IEnumerable<PlcTag> tags)
+        {
+            try
+            {
+                client.WriteAsync(tags).GetAwaiter().GetResult();
+                return 0;
+            }
+            catch (S7CommPlusException ex)
+            {
+                return ex.ErrorCode;
+            }
+        }
+
         /// <summary>
         /// Start the testrun for the PlcTag types
         /// </summary>
@@ -68,7 +94,7 @@ namespace DriverTest
         /// <param name="nrandom">Number of random values to generate for each Tag type</param>
         /// <param name="testPointers">Option to do the testruns on Pointer types (Any, Pointer)</param>
         /// <returns></returns>
-        public int DoTests(S7CommPlusConnection conn, int nrandom, bool testPointers)
+        public int DoTests(S7CommPlusClient conn, int nrandom, bool testPointers)
         {
             int result = 0;
             m_Rand = new Random();
@@ -123,7 +149,7 @@ namespace DriverTest
         }
 
         #region Tests for Boolean tags
-        private int Test_PlcTag_Bool(S7CommPlusConnection conn)
+        private int Test_PlcTag_Bool(S7CommPlusClient conn)
         {
             int result = 0;
             Console.WriteLine("*** TestPlcTag_Bool ***");
@@ -133,13 +159,13 @@ namespace DriverTest
             tags.Add(tag);
             for (int i = 0; i < 5; i++)
             {
-                conn.ReadTags(tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 writevalue = !(tag.Value);
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -157,7 +183,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Bitstring tags
-        private int Test_PlcTag_Byte(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Byte(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Byte ***");
@@ -172,14 +198,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X2}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = 0x{1:X2}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X2}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -195,7 +221,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_Word(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Word(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Word ***");
@@ -211,14 +237,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X4}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = 0x{1:X4}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X4}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -234,7 +260,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_DWord(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_DWord(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_DWord ***");
@@ -249,14 +275,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X8}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = 0x{1:X8}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X8}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -272,7 +298,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LWord(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LWord(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LWord ***");
@@ -287,14 +313,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X8}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = 0x{1:X8}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = 0x{1:X8}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -312,7 +338,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Integer tags
-        private int Test_PlcTag_USInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_USInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_USInt ***");
@@ -327,14 +353,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -350,7 +376,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_SInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_SInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_SInt ***");
@@ -365,14 +391,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -388,7 +414,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_UInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_UInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_UInt ***");
@@ -403,14 +429,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -426,7 +452,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_Int(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Int(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Int ***");
@@ -441,14 +467,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -464,7 +490,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_UDInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_UDInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_UDInt ***");
@@ -479,14 +505,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -502,7 +528,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_DInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_DInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_DInt ***");
@@ -517,14 +543,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -540,7 +566,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_ULInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_ULInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_ULInt ***");
@@ -555,14 +581,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -578,7 +604,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LInt(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LInt(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LInt ***");
@@ -593,14 +619,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -618,7 +644,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Floating point tags
-        private int Test_PlcTag_Real(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Real(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Real ***");
@@ -636,14 +662,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -659,7 +685,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LReal(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LReal(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LReal ***");
@@ -675,14 +701,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -700,7 +726,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Time value tags
-        private int Test_PlcTag_Time(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Time(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Time ***");
@@ -715,14 +741,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-11} - as String {2}", tag.Name, tag.Value, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1,-11}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-11} - as String {2}", tag.Name, tag.Value, tag.ToString()));
                 if (tag.Value == writevalue)
                 {
@@ -738,7 +764,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LTime(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LTime(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LTime ***");
@@ -753,14 +779,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-22} - as String {2}", tag.Name, tag.Value, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1,-22}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-22} - as String {2}", tag.Name, tag.Value, tag.ToString()));
                 if (tag.Value == writevalue)
                 {
@@ -776,7 +802,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_S5Time(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_S5Time(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_S5Time ***");
@@ -792,15 +818,15 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  (TimeValue, TimeBase) = ({1,-3}, {2,-3}) -> {3,-5}", tag.Name, tag.TimeValue, tag.TimeBase, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.TimeValue = writevalue.TimeValue;
                 tag.TimeBase = writevalue.TimeBase;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value (TimeValue, TimeBase) = ({1,-3}, {2,-3})", tag.Name, writevalue.TimeValue, writevalue.TimeBase));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  (TimeValue, TimeBase) = ({1,-3}, {2,-3}) -> {3,-5}", tag.Name, tag.TimeValue, tag.TimeBase, tag.ToString()));
                 if (tag.TimeValue == writevalue.TimeValue && tag.TimeBase == writevalue.TimeBase)
                 {
@@ -818,7 +844,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Date and Time value tags
-        private int Test_PlcTag_Date(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Date(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Date ***");
@@ -833,14 +859,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value.ToShortDateString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue.ToShortDateString()));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value.ToShortDateString()));
                 if (tag.Value == writevalue)
                 {
@@ -856,7 +882,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_DateAndTime(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_DateAndTime(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_DateAndTime ***");
@@ -873,14 +899,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}.{2:D03}", tag.Name, tag.Value, tag.Value.Millisecond));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}.{2:D03}", tag.Name, writevalue, writevalue.Millisecond));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}.{2:D03}", tag.Name, tag.Value, tag.Value.Millisecond));
                 if (tag.Value == writevalue)
                 {
@@ -896,7 +922,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LDT(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LDT(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LDT ***");
@@ -911,14 +937,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1,-20}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
                 if (tag.Value == writevalue)
                 {
@@ -934,7 +960,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_TimeOfDay(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_TimeOfDay(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_TimeOfDay ***");
@@ -949,14 +975,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1,-20}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
                 if (tag.Value == writevalue)
                 {
@@ -972,7 +998,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_LTOD(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_LTOD(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_LTOD ***");
@@ -987,14 +1013,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1,-20}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1,-20} - as String {2}", tag.Name, tag.Value, tag.ToString()));
                 if (tag.Value == writevalue)
                 {
@@ -1010,7 +1036,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_DTL(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_DTL(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_DTL ***");
@@ -1036,15 +1062,15 @@ namespace DriverTest
             Console.WriteLine("DTLInterfaceTimestamp=" + tag.DTLInterfaceTimestamp);
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}.{2:D09}", tag.Name, tag.Value, tag.ValueNanosecond));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue.dt;
                 tag.ValueNanosecond = writevalue.ns;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}.{2:D09}", tag.Name, writevalue.dt, writevalue.ns));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}.{2:D09}", tag.Name, tag.Value, tag.ValueNanosecond));
                 if (tag.Value == writevalue.dt && tag.ValueNanosecond == writevalue.ns)
                 {
@@ -1062,13 +1088,13 @@ namespace DriverTest
         #endregion
 
         #region Tests for Character / String tags
-        private int Test_PlcTag_Char(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Char(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Char ***");
             var tags = new List<PlcTag>();
             var tag = new PlcTagChar("Char_Var", new ItemAddress(PlcTagCharAddress), Softdatatype.S7COMMP_SOFTDATATYPE_CHAR);
-            var testvalues = new List<char>() { 'A', 'B', ' ', 'ä', '1' };
+            var testvalues = new List<char>() { 'A', 'B', ' ', '�', '1' };
 
             int cval;
             for (int i = 0; i < nrandom; i++)
@@ -1078,15 +1104,15 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
 
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -1102,13 +1128,13 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_WChar(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_WChar(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_WChar ***");
             var tags = new List<PlcTag>();
             var tag = new PlcTagWChar("WChar_Var", new ItemAddress(PlcTagWCharAddress), Softdatatype.S7COMMP_SOFTDATATYPE_WCHAR);
-            var testvalues = new List<char>() { 'A', 'B', ' ', 'ä', '1', 'Ʃ' };
+            var testvalues = new List<char>() { 'A', 'B', ' ', '�', '1', '?' };
 
             int cval;
             for (int i = 0; i < nrandom; i++)
@@ -1118,15 +1144,15 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
 
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -1142,14 +1168,14 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_String(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_String(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_String ***");
             byte string_maxlength = 254;
             var tags = new List<PlcTag>();
             var tag = new PlcTagString("String_Var", new ItemAddress(PlcTagStringAddress), Softdatatype.S7COMMP_SOFTDATATYPE_STRING, string_maxlength);
-            var testvalues = new List<string>() { "Hello", "World", "This is a test!", "Motörhead", "abcdefghijklmnopqrstuvwxyz1234567890" };
+            var testvalues = new List<string>() { "Hello", "World", "This is a test!", "Mot�rhead", "abcdefghijklmnopqrstuvwxyz1234567890" };
 
             // Generate a string of maxlength
             string smax = String.Empty;
@@ -1164,15 +1190,15 @@ namespace DriverTest
             testvalues.Add(smax);
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
 
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -1188,14 +1214,14 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_WString(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_WString(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_WString ***");
             byte string_maxlength = 254;
             var tags = new List<PlcTag>();
             var tag = new PlcTagWString("WString_Var", new ItemAddress(PlcTagWStringAddress), Softdatatype.S7COMMP_SOFTDATATYPE_WSTRING, string_maxlength);
-            var testvalues = new List<string>() { "Hello", "World", "This is a test!", "Motörhead", "Test Greek ΣΛΔ end." };
+            var testvalues = new List<string>() { "Hello", "World", "This is a test!", "Mot�rhead", "Test Greek S?? end." };
 
             // Generate a string of maxlength
             string smax = String.Empty;
@@ -1210,15 +1236,15 @@ namespace DriverTest
             testvalues.Add(smax);
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
 
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, writevalue));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1}", tag.Name, tag.Value));
                 if (tag.Value == writevalue)
                 {
@@ -1236,7 +1262,7 @@ namespace DriverTest
         #endregion
 
         #region Tests for Pointers type tags
-        private int Test_PlcTag_Pointer(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Pointer(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Pointer ***");
@@ -1266,14 +1292,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1} {2}", tag.Name, GetHexstring(tag.Value), tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, GetHexstring(writevalue)));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1} {2}", tag.Name, GetHexstring(tag.Value), tag.ToString()));
                 if (tag.Value.SequenceEqual(writevalue))
                 {
@@ -1289,7 +1315,7 @@ namespace DriverTest
             return result;
         }
 
-        private int Test_PlcTag_Any(S7CommPlusConnection conn, int nrandom)
+        private int Test_PlcTag_Any(S7CommPlusClient conn, int nrandom)
         {
             int result = 0;
             Console.WriteLine("*** Test_PlcTag_Any ***");
@@ -1325,14 +1351,14 @@ namespace DriverTest
             }
 
             tags.Add(tag);
-            conn.ReadTags(tags);
+            ReadTags(conn, tags);
             Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1} {2}", tag.Name, GetHexstring(tag.Value), tag.ToString()));
             foreach (var writevalue in testvalues)
             {
                 tag.Value = writevalue;
                 Console.WriteLine(String.Format("Name= {0,-20}: Write value = {1}", tag.Name, GetHexstring(writevalue)));
-                conn.WriteTags(tags);
-                conn.ReadTags(tags);
+                WriteTags(conn, tags);
+                ReadTags(conn, tags);
                 Console.WriteLine(String.Format("Name= {0,-20}: Read value  = {1} {2}", tag.Name, GetHexstring(tag.Value), tag.ToString()));
                 if (tag.Value.SequenceEqual(writevalue))
                 {

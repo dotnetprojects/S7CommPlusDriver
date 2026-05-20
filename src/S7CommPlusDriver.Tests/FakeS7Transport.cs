@@ -12,6 +12,7 @@ namespace S7CommPlusDriver.Tests
         public int CloseCount { get; private set; }
         public int ConnectError { get; set; }
         public int SendError { get; set; }
+        public int EmptyReceiveDelayMilliseconds { get; set; }
         public List<byte[]> Sent { get; } = new List<byte[]>();
         public (string Address, int Port, int ConnectTimeout, int ReceiveTimeout, int SendTimeout) LastConnect { get; private set; }
 
@@ -57,6 +58,10 @@ namespace S7CommPlusDriver.Tests
             }
             if (_receiveChunks.Count == 0)
             {
+                if (EmptyReceiveDelayMilliseconds > 0)
+                {
+                    System.Threading.Thread.Sleep(EmptyReceiveDelayMilliseconds);
+                }
                 Connected = false;
                 return S7Consts.errTCPConnectionReset;
             }

@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -15,12 +15,13 @@
 
 using System;
 using System.IO;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class DeleteObjectRequest : IS7pRequest
+    internal class DeleteObjectRequest : IS7pRequest
     {
-        byte TransportFlags = 0x34;
+        byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
         public UInt32 DeleteObjectId;
 
         public uint SessionId { get; set; }

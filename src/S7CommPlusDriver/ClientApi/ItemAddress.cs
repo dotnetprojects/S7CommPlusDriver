@@ -40,14 +40,26 @@ namespace S7CommPlusDriver
 
         public ItemAddress(string variableAccessString)
         {
+            if (string.IsNullOrWhiteSpace(variableAccessString))
+            {
+                throw new ArgumentException("Variable access string is required.", nameof(variableAccessString));
+            }
+
             // Uses a complete access string consisting of hexadecimal strings separated by a dot (".").
             // Returns a list of the extracted IDs, e.g. 8A0E0001.A or 52.A
             List<UInt32> ids = new List<UInt32>();
             foreach (string p in variableAccessString.Split('.'))
             {
-                ids.Add(UInt32.Parse(p, System.Globalization.NumberStyles.HexNumber));
+                if (!UInt32.TryParse(p, System.Globalization.NumberStyles.HexNumber, null, out var id))
+                {
+                    throw new ArgumentException($"Variable access string contains an invalid hexadecimal field: '{p}'.", nameof(variableAccessString));
+                }
+                ids.Add(id);
             }
-            // TODO: Check for an error, number of fields should be at least 2
+            if (ids.Count < 2)
+            {
+                throw new ArgumentException("Variable access string must contain an access area and at least one local ID field.", nameof(variableAccessString));
+            }
             SymbolCrc = 0;
             AccessArea = ids[0];
             // Set access area

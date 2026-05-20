@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -15,10 +15,11 @@
 
 using System;
 using System.Collections.Generic;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class CommRessources
+    internal sealed class S7CommPlusCommunicationResourceSnapshot
     {
         public int TagsPerReadRequestMax { get; private set; } = 20;
         public int TagsPerWriteRequestMax { get; private set; } = 20;
@@ -29,12 +30,13 @@ namespace S7CommPlusDriver
         public int SubscriptionMemoryMax { get; private set; }
         public int SubscriptionMemoryFree { get; private set; }
 
-        public int ReadMax(S7CommPlusConnection conn)
+        public int ReadMax(S7CommPlusProtocolSession conn)
         {
             // Read SystemLimits
             // Assumption (so far, because for all CPUs which have be seen both values were the same):
-            // 1000 = Number for Reading
-            // 1001 = Number for Writing
+            // Siemens SystemLimits LIDs:
+            // 1000 = number of tags per read request
+            // 1001 = number of tags per write request
             int res;
             var readlist = new List<ItemAddress>();
             var values = new List<object>();
@@ -45,35 +47,35 @@ namespace S7CommPlusDriver
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.SystemLimits
             };
-            adrTagsPerReadRequestMax.LID.Add(1000);
+            adrTagsPerReadRequestMax.LID.Add(S7CommPlusProtocolConstants.SystemLimitTagsPerReadRequest);
 
             var adrTagsPerWriteRequestMax = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.SystemLimits
             };
-            adrTagsPerWriteRequestMax.LID.Add(1001);
+            adrTagsPerWriteRequestMax.LID.Add(S7CommPlusProtocolConstants.SystemLimitTagsPerWriteRequest);
 
             var adrPlcSubscriptionsMax = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.SystemLimits
             };
-            adrPlcSubscriptionsMax.LID.Add(0);
+            adrPlcSubscriptionsMax.LID.Add(S7CommPlusProtocolConstants.SystemLimitPlcSubscriptions);
 
             var adrPlcAttributesMax = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.SystemLimits
             };
-            adrPlcAttributesMax.LID.Add(1);
+            adrPlcAttributesMax.LID.Add(S7CommPlusProtocolConstants.SystemLimitPlcAttributes);
 
             var adrSubscriptionMemoryMax = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.SystemLimits
             };
-            adrSubscriptionMemoryMax.LID.Add(2);
+            adrSubscriptionMemoryMax.LID.Add(S7CommPlusProtocolConstants.SystemLimitSubscriptionMemory);
 
             readlist.Add(adrTagsPerReadRequestMax);
             readlist.Add(adrTagsPerWriteRequestMax);
@@ -85,9 +87,9 @@ namespace S7CommPlusDriver
             int i = 0;
             for (i = 0; i < values.Count; i++)
             {
-                if (values[i] != null && errors[i] == 0)
+                if (i < errors.Count && errors[i] == 0 && values[i] is ValueDInt value)
                 {
-                    int v = ((ValueDInt)values[i]).GetValue();
+                    int v = value.GetValue();
                     switch (i)
                     {
                         case 0:
@@ -111,7 +113,7 @@ namespace S7CommPlusDriver
             return res;
         }
 
-        public int ReadFree(S7CommPlusConnection conn)
+        public int ReadFree(S7CommPlusProtocolSession conn)
         {
             int res;
             var readlist = new List<ItemAddress>();
@@ -123,21 +125,21 @@ namespace S7CommPlusDriver
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.FreeItems
             };
-            adrPlcSubscriptionsFree.LID.Add(0);
+            adrPlcSubscriptionsFree.LID.Add(S7CommPlusProtocolConstants.SystemLimitPlcSubscriptions);
 
             var adrPlcAttributesFree = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.FreeItems
             };
-            adrPlcAttributesFree.LID.Add(1);
+            adrPlcAttributesFree.LID.Add(S7CommPlusProtocolConstants.SystemLimitPlcAttributes);
 
             var adrSubscriptionMemoryFree = new ItemAddress
             {
                 AccessArea = Ids.ObjectRoot,
                 AccessSubArea = Ids.FreeItems
             };
-            adrSubscriptionMemoryFree.LID.Add(2);
+            adrSubscriptionMemoryFree.LID.Add(S7CommPlusProtocolConstants.SystemLimitSubscriptionMemory);
 
             readlist.Add(adrPlcSubscriptionsFree);
             readlist.Add(adrPlcAttributesFree);
@@ -147,9 +149,9 @@ namespace S7CommPlusDriver
             int i = 0;
             for (i = 0; i < values.Count; i++)
             {
-                if (values[i] != null && errors[i] == 0)
+                if (i < errors.Count && errors[i] == 0 && values[i] is ValueDInt value)
                 {
-                    int v = ((ValueDInt)values[i]).GetValue();
+                    int v = value.GetValue();
                     switch (i)
                     {
                         case 0:
@@ -169,7 +171,7 @@ namespace S7CommPlusDriver
 
         public override string ToString()
         {
-            string s = "<CommRessources>" + Environment.NewLine;
+            string s = "<S7CommPlusCommunicationResourceSnapshot>" + Environment.NewLine;
             s += "<TagsPerReadRequestMax>" + TagsPerReadRequestMax.ToString() + "</TagsPerReadRequestMax>" + Environment.NewLine;
             s += "<TagsPerWriteRequestMax>" + TagsPerWriteRequestMax.ToString() + "</TagsPerWriteRequestMax>" + Environment.NewLine;
             s += "<PlcAttributesMax>" + PlcAttributesMax.ToString() + "</PlcAttributesMax>" + Environment.NewLine;
@@ -178,7 +180,7 @@ namespace S7CommPlusDriver
             s += "<PlcSubscriptionsFree>" + PlcSubscriptionsFree.ToString() + "</PlcSubscriptionsFree>" + Environment.NewLine;
             s += "<SubscriptionMemoryMax>" + SubscriptionMemoryMax.ToString() + "</SubscriptionMemoryMax>" + Environment.NewLine;
             s += "<SubscriptionMemoryFree>" + SubscriptionMemoryFree.ToString() + "</SubscriptionMemoryFree>" + Environment.NewLine;
-            s += "</CommRessources>" + Environment.NewLine;
+            s += "</S7CommPlusCommunicationResourceSnapshot>" + Environment.NewLine;
             return s;
         }
     }

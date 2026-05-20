@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -18,7 +18,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class GetVarSubstreamedResponse : IS7pResponse
+    internal class GetVarSubstreamedResponse : IS7pResponse
     {
         public byte TransportFlags;
         public UInt64 ReturnValue;

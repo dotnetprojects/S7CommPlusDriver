@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -24,7 +24,7 @@ namespace S7CommPlusDriver
     /// The 22 byte version may contain a string like "LOGOUT", but this only after a DeleteObject.
     /// In contrast to all other protocol functions, the values don't use the VLQ encoding!
     /// </summary>
-    public class SystemEvent
+    internal class SystemEvent
     {
         public byte TransportFlags;
         public UInt64 ReturnValue;

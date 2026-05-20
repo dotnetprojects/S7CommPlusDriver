@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -16,10 +16,11 @@
 using System;
 using System.Text;
 using System.Collections.Generic;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public class S7p
+    internal class S7p
     {
         private static bool TryReadExactly(System.IO.Stream buffer, byte[] value, int length)
         {
@@ -256,7 +257,12 @@ namespace S7CommPlusDriver
             int length = 0;
             for (counter = 1; counter <= 5; counter++)
             {
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated UInt32 VLQ value.");
+                }
+                octet = (byte)read;
                 length++;
                 val <<= 7;
                 cont = (byte)(octet & 0x80);
@@ -280,7 +286,12 @@ namespace S7CommPlusDriver
             int length = 0;
             for (counter = 1; counter <= 5; counter++)
             {
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated Int32 VLQ value.");
+                }
+                octet = (byte)read;
                 length++;
                 if ((counter == 1) && ((octet & 0x40) != 0))
                 {     // check sign 
@@ -431,7 +442,12 @@ namespace S7CommPlusDriver
             int length = 0;
             for (counter = 1; counter <= 8; counter++)
             {
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated UInt64 VLQ value.");
+                }
+                octet = (byte)read;
                 length++;
                 val <<= 7;
                 cont = (byte)(octet & 0x80);
@@ -444,7 +460,12 @@ namespace S7CommPlusDriver
             }
             if (cont > 0)         /* 8*7 bit + 8 bit = 64 bit -> Special case in last octet! */
             {
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated UInt64 VLQ extension byte.");
+                }
+                octet = (byte)read;
                 length++;
                 val <<= 8;
                 val += octet;
@@ -462,7 +483,12 @@ namespace S7CommPlusDriver
             int length = 0;
             for (counter = 1; counter <= 8; counter++)
             {
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated Int64 VLQ value.");
+                }
+                octet = (byte)read;
                 length++;
                 if ((counter == 1) && ((octet & 0x40) != 0))
                 {     // check sign 
@@ -484,7 +510,12 @@ namespace S7CommPlusDriver
             if (cont > 0)
             {
                 // 8*7 bit + 8 bit = 64 bit -> Special case in last octet!
-                octet = (byte)buffer.ReadByte();
+                int read = buffer.ReadByte();
+                if (read < 0)
+                {
+                    throw new System.IO.InvalidDataException("Truncated Int64 VLQ extension byte.");
+                }
+                octet = (byte)read;
                 length++;
                 val <<= 8;
                 val += octet;
@@ -671,14 +702,25 @@ namespace S7CommPlusDriver
             byte tagId;
             objList = new List<PObject>();
             // Peek one byte and set buffer back
-            S7p.DecodeByte(buffer, out tagId);
+            if (S7p.DecodeByte(buffer, out tagId) == 0)
+            {
+                return ret;
+            }
             buffer.Position -= 1;
             while (tagId == ElementID.StartOfObject)
             {
+                var positionBefore = buffer.Position;
                 PObject obj = null;
                 ret += S7p.DecodeObject(buffer, ref obj, AsList: true);
+                if (buffer.Position <= positionBefore)
+                {
+                    throw new System.IO.InvalidDataException("Object-list parser made no progress.");
+                }
                 objList.Add(obj);
-                S7p.DecodeByte(buffer, out tagId);
+                if (S7p.DecodeByte(buffer, out tagId) == 0)
+                {
+                    break;
+                }
                 buffer.Position -= 1;
             }
             return ret;
@@ -692,7 +734,12 @@ namespace S7CommPlusDriver
             int ret = 0;
             do
             {
+                var positionBefore = buffer.Position;
                 ret += DecodeByte(buffer, out tagId);
+                if (buffer.Position <= positionBefore)
+                {
+                    throw new System.IO.InvalidDataException("Object parser made no progress.");
+                }
                 switch (tagId)
                 {
                     case ElementID.StartOfObject:
@@ -703,8 +750,7 @@ namespace S7CommPlusDriver
                             ret += DecodeUInt32Vlq(buffer, out obj.ClassId);
                             ret += DecodeUInt32Vlq(buffer, out obj.ClassFlags);
                             ret += DecodeUInt32Vlq(buffer, out obj.AttributeId);
-                            // If a List is expected, don't add the objects coming next to the parent object
-                            // TODO: May be it's better to always expect a list? Adding the following objects to the first as children must always be wrong.
+                            // If a list is expected, keep following objects as siblings instead of adding them to the parent.
                             if (AsList == false)
                             {
                                 ret += DecodeObject(buffer, ref obj);
@@ -766,7 +812,7 @@ namespace S7CommPlusDriver
 
         public static int EncodeHeader(System.IO.Stream buffer, byte version, UInt16 length)
         {
-            buffer.WriteByte(0x72);
+            buffer.WriteByte(S7CommPlusProtocolConstants.FrameMarker);
             buffer.WriteByte(version);
             EncodeUInt16(buffer, length);
             return 4;

@@ -18,7 +18,7 @@ using System.Collections.Generic;
 
 namespace S7CommPlusDriver
 {
-    public class Browser
+    internal class Browser
     {
         VarRoot m_Root;
         List<PObject> m_objs;
@@ -81,7 +81,7 @@ namespace S7CommPlusDriver
                     break;
                 case eNodeType.StructArray:
                     names += node.Name;
-                    // TODO: Special: Between an array-index and the access-id is an additional 1. It's not known if it's a fixed or variable value.
+                    // Siemens symbolic paths include a literal ".1" between the struct-array index and the member access id.
                     accessIds += "." + String.Format("{0:X}", node.AccessId) + ".1";
                     break;
                 default:
@@ -222,7 +222,7 @@ namespace S7CommPlusDriver
                     };
 
                     node.Childs.Add(subnode);
-                    // Process arrays. TODO: Put the processing to separate methods, to shorten this method.
+                    // Process arrays before simple relation-based structs so array element offsets are materialized.
                     if (vte.OffsetInfoType.Is1Dim())
                     {
                         #region Struct/UDT or flat arrays with one dimension
@@ -300,6 +300,11 @@ namespace S7CommPlusDriver
                             {
                                 actdimensions++;
                             }
+                        }
+                        if (ArrayElementCount == 0 || actdimensions == 0)
+                        {
+                            element_index++;
+                            continue;
                         }
 
                         string aname = "";
@@ -416,7 +421,7 @@ namespace S7CommPlusDriver
             switch (vte.Softdatatype)
             {
                 case Softdatatype.S7COMMP_SOFTDATATYPE_BOOL:
-                    // TODO: Bit Bool?
+                    // BBOOL arrays are addressed byte-wise by the browser tree.
                     return 1;
                 case Softdatatype.S7COMMP_SOFTDATATYPE_BYTE:
                     return 1;
@@ -444,7 +449,6 @@ namespace S7CommPlusDriver
                     return 8;
                 case Softdatatype.S7COMMP_SOFTDATATYPE_STRING:
                 case Softdatatype.S7COMMP_SOFTDATATYPE_WSTRING:
-                    // TODO:
                     // If an array of String or WString, offsetinfo1 is the string length.
                     // First though was, that offsetinfo2 is length including header of 2 bytes.
                     // but with an Multidim Array [0..2, 0..1] of String[5] offsetinfo is 8, which is not
@@ -507,10 +511,10 @@ namespace S7CommPlusDriver
                 case Softdatatype.S7COMMP_SOFTDATATYPE_EVENTATT:
                     return 4;
                 case Softdatatype.S7COMMP_SOFTDATATYPE_AOMAID:
-                    // TODO: Not possible to define this type
+                    // AOM reference types do not have a fixed scalar payload size.
                     return 0;
                 case Softdatatype.S7COMMP_SOFTDATATYPE_AOMLINK:
-                    // TODO: Not possible to define this type
+                    // AOM reference types do not have a fixed scalar payload size.
                     return 0;
                 case Softdatatype.S7COMMP_SOFTDATATYPE_EVENTHWINT:
                     return 4;
@@ -690,7 +694,7 @@ namespace S7CommPlusDriver
         public int NonOptBitoffset;     // NonOptimized access: Bit-Offset where the value is located when reading a complete DB content.
     }
 
-    public enum eNodeType
+    internal enum eNodeType
     {
         Undefined = 0,
         Root,

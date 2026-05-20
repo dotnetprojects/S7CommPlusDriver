@@ -91,6 +91,9 @@ namespace S7CommPlusDriver
 
 		public const int errOpenSSL = 0x03100000;
 		public const int errInitSslResponse = 0x03100001;
+		public const int errS7CommPlusLegacyAuthentication = 0x03100002;
+		public const int errS7CommPlusDigestMismatch = 0x03100003;
+		public const int errS7CommPlusLegacyRequestTooLarge = 0x03100004;
 		//------------------------------------------------------------------------------
 		//        PARAMS LIST FOR COMPATIBILITY WITH Snap7.net.cs           
 		//------------------------------------------------------------------------------

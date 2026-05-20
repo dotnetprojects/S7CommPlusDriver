@@ -19,11 +19,19 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using S7CommPlusDriver.Alarming;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
-    public partial class S7CommPlusConnection
+    internal sealed class S7CommPlusAlarmBrowseService
     {
+        private readonly S7CommPlusProtocolRequests _requests;
+
+        public S7CommPlusAlarmBrowseService(IS7CommPlusProtocolSession session)
+        {
+            _requests = new S7CommPlusProtocolRequests(session);
+        }
+
         /// <summary>
         /// Explores the AS and the User program alarms, gets the corresponding texts usind the language id (e.g.1031 = de-DE)
         ///
@@ -44,26 +52,7 @@ namespace S7CommPlusDriver
             int res;
 
             #region Explore all other than Alarm AP (AnwenderProgramAlarme)
-            var exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = 0x8a7e0000; // ASAlarms.0
-            exploreReq.ExploreRequestId = Ids.None;
-            exploreReq.ExploreChildsRecursive = 1;
-            exploreReq.ExploreParents = 0;
-
-            res = SendS7plusFunctionObject(exploreReq);
-            if (res != 0)
-            {
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
-
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
-            res = checkResponseWithIntegrity(exploreReq, exploreRes);
+            res = _requests.Explore(0x8a7e0000, null, out var exploreRes); // ASAlarms.0
             if (res != 0)
             {
                 return res;
@@ -82,7 +71,7 @@ namespace S7CommPlusDriver
                         var dict = ((ValueBlobSparseArray)stais).GetValue();
                         foreach (var entry in dict)
                         {
-                            var alarm = new AlarmData(0x8a7e0000); // TODO: Get this from parent object?
+                            var alarm = new AlarmData(0x8a7e0000); // ASAlarms.0 relation.
                             Stream buffer = new MemoryStream(entry.Value.value);
                             alarm.Deserialize(buffer);
                             Alarms.Add(alarm.GetCpuAlarmId(), alarm);
@@ -105,34 +94,12 @@ namespace S7CommPlusDriver
             #endregion
 
             #region Explore Alarm AP
-            exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = Ids.NativeObjects_thePLCProgram_Rid;
-            exploreReq.ExploreRequestId = Ids.None;
-            exploreReq.ExploreChildsRecursive = 1;
-            exploreReq.ExploreParents = 0;
-
-            // Add the requestes attributes
-            exploreReq.AddressList.Add(Ids.ObjectVariableTypeParentObject);
-            exploreReq.AddressList.Add(Ids.MultipleSTAI_STAIs);
-
-            res = SendS7plusFunctionObject(exploreReq);
+            // Add the requested attributes.
+            var alarmProgramAttributes = new uint[] { Ids.ObjectVariableTypeParentObject, Ids.MultipleSTAI_STAIs };
+            res = _requests.Explore(Ids.NativeObjects_thePLCProgram_Rid, alarmProgramAttributes, out exploreRes);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
-
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
-            if ((exploreRes == null) ||
-                (exploreRes.SequenceNumber != exploreReq.SequenceNumber) ||
-                (exploreRes.ReturnValue != 0))
-            {
-                return S7Consts.errIsoInvalidPDU;
             }
 
             // All objects which have Alarm AP inside, have a sub-Object with ID 7854 = MultipleSTAI.Class_Rid
@@ -173,41 +140,30 @@ namespace S7CommPlusDriver
 
             #region Explore AlarmTextLists
 
-            exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = 0x8a360000 + (ushort)languageId; // There may be several languages, add language ID (e.g. 1031 = german / de-DE)
-            exploreReq.ExploreRequestId = Ids.None;
-            exploreReq.ExploreChildsRecursive = 0;
-            exploreReq.ExploreParents = 0;
-
-            res = SendS7plusFunctionObject(exploreReq);
+            var textLibraryRelationId = 0x8a360000 + (ushort)languageId; // There may be several languages, add language ID (e.g. 1031 = german / de-DE)
+            res = _requests.Explore(textLibraryRelationId, null, out exploreRes, exploreChildsRecursive: 0);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
-
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
-            if ((exploreRes == null) ||
-                (exploreRes.SequenceNumber != exploreReq.SequenceNumber) ||
-                (exploreRes.ReturnValue != 0))
-            {
-                return S7Consts.errIsoInvalidPDU;
             }
 
             // TextLibraryOffsetArea is an array[3] of Blob, which contains offset information.
             // [0] contains informations of how to get infos from [1], which has infos about offsets in [2].
             // [2] contains the resulting offsets for the strings in TextLibraryStringArea.
-            // TODO: Check if all fields are present, or use try/catch?
-            ValueBlob[] tloa = null;
-            byte[] tlsa = null;
-            var textlib = exploreRes.Objects.First(o => o.ClassId == Ids.TextLibraryClassRID);
-            tloa = ((ValueBlobArray)textlib.GetAttribute(Ids.TextLibraryOffsetArea)).GetValue();
-            tlsa = ((ValueBlob)textlib.GetAttribute(Ids.TextLibraryStringArea)).GetValue();
+            var textlib = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.TextLibraryClassRID);
+            if (textlib == null ||
+                textlib.GetAttribute(Ids.TextLibraryOffsetArea) is not ValueBlobArray offsetArea ||
+                textlib.GetAttribute(Ids.TextLibraryStringArea) is not ValueBlob stringArea)
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
+
+            var tloa = offsetArea.GetValue();
+            var tlsa = stringArea.GetValue();
+            if (tloa.Length < 3 || tlsa == null)
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
 
             var tloa_1 = tloa[0].GetValue();
             var tloa_2 = tloa[1].GetValue();
@@ -338,7 +294,7 @@ namespace S7CommPlusDriver
         ///
         /// Call example:
         /// CultureInfo ci = new CultureInfo("de-DE");
-        /// var alarmList = new List<AlarmsDai>();
+        /// var alarmList = new List<S7CommPlusAlarm>();
         /// conn.GetActiveAlarms(out alarmList, ci.LCID);
         /// foreach (var a in alarmList)
         /// {
@@ -348,46 +304,33 @@ namespace S7CommPlusDriver
         /// <param name="alarmList">Contains the alarms, empty if there is no active alarm</param>
         /// <param name="languageId">Language id for retrieving the text entries, use language code e.g. 1031 for german</param>
         /// <returns>0 on success</returns>
-        public int GetActiveAlarms(out List<AlarmsDai> alarmList, int languageId)
+        public int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId)
         {
             int res;
 
-            alarmList = new List<AlarmsDai>();
+            alarmList = new List<S7CommPlusAlarm>();
 
             var exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = Ids.NativeObjects_theAlarmSubsystem_Rid;
-            exploreReq.ExploreRequestId = Ids.AlarmSubsystem_itsUpdateRelevantDAI;
+            exploreReq.ExploreId = Ids.AlarmSubSystem;
+            exploreReq.ExploreRequestId = Ids.AlarmSubSystem_Update_DAI;
             exploreReq.ExploreChildsRecursive = 1;
             exploreReq.ExploreParents = 0;
 
             // Add the requestes attributes.
             // Request the same attributes we get from an alarm notification, so we can reuse other methods.
-            exploreReq.AddressList.Add(Ids.DAI_CPUAlarmID);
-            exploreReq.AddressList.Add(Ids.DAI_AllStatesInfo);
-            exploreReq.AddressList.Add(Ids.DAI_AlarmDomain);
-            exploreReq.AddressList.Add(Ids.DAI_Coming);
-            exploreReq.AddressList.Add(Ids.DAI_Going);
-            exploreReq.AddressList.Add(Ids.DAI_MessageType);
-            exploreReq.AddressList.Add(Ids.DAI_HmiInfo);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_AlarmId);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_AllStateInformation);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_AlarmDomain);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_Coming);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_Going);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_Messagetype);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_HMIInformation);
             // Extra ones which we only need for compatibility with notification.
             exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
-            exploreReq.AddressList.Add(Ids.DAI_SequenceCounter);
-            exploreReq.AddressList.Add(Ids.DAI_AlarmTexts_Rid);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_SequenceCounter);
+            exploreReq.AddressList.Add(Ids.DynamicAlarmInstance_DAI_Alarmtext);
 
-            res = SendS7plusFunctionObject(exploreReq);
-            if (res != 0)
-            {
-                return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
-            }
-
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
-            res = checkResponseWithIntegrity(exploreReq, exploreRes);
+            res = _requests.SendExplore(exploreReq, out var exploreRes);
             if (res != 0)
             {
                 return res;
@@ -395,62 +338,11 @@ namespace S7CommPlusDriver
 
             foreach (var obj in exploreRes.Objects)
             {
-                alarmList.Add(AlarmsDai.FromNotificationObject(obj, languageId));
+                alarmList.Add(S7CommPlusAlarm.FromNotificationObject(obj, languageId));
             }
 
             return 0;
         }
     }
 
-    public class AlarmData
-    {
-        public AlarmData(uint relationid)
-        {
-            RelationId = relationid;
-        }
-
-        public ulong GetCpuAlarmId()
-        {
-            return ((ulong)(RelationId) << 32) | ((ulong)(MultipleStai.Alid) << 16);
-        }
-
-        public uint RelationId;
-
-        public AlarmsMultipleStai MultipleStai;
-        public AlarmsAlarmTexts AlText = new AlarmsAlarmTexts();
-
-        public int Deserialize(Stream buffer)
-        {
-            int ret = 0;
-            MultipleStai = new AlarmsMultipleStai();
-            ret += MultipleStai.Deserialize(buffer);
-            return ret;
-        }
-
-        public override string ToString()
-        {
-            string s = "";
-            s += "<AlarmData>" + Environment.NewLine;
-            s += "<CpuAlarmId>" + GetCpuAlarmId().ToString() + "</CpuAlarmId>" + Environment.NewLine;
-            s += "<RelationId>" + RelationId.ToString() + Environment.NewLine +"</RelationId>" + Environment.NewLine;
-            s += "<MultipleStai>" + Environment.NewLine + MultipleStai.ToString() + "</MultipleStai>" + Environment.NewLine;
-            s += "<AlText>" + Environment.NewLine;
-            s += "<Infotext>" + AlText.Infotext + "</Infotext>" + Environment.NewLine;
-            s += "<AlarmText>" + AlText.AlarmText + "</AlarmText>" + Environment.NewLine;
-            s += "<AdditionalText1>" + AlText.AdditionalText1 + "</AdditionalText1>" + Environment.NewLine;
-            s += "<AdditionalText2>" + AlText.AdditionalText2 + "</AdditionalText2>" + Environment.NewLine;
-            s += "<AdditionalText3>" + AlText.AdditionalText3 + "</AdditionalText3>" + Environment.NewLine;
-            s += "<AdditionalText4>" + AlText.AdditionalText4 + "</AdditionalText4>" + Environment.NewLine;
-            s += "<AdditionalText5>" + AlText.AdditionalText5 + "</AdditionalText5>" + Environment.NewLine;
-            s += "<AdditionalText6>" + AlText.AdditionalText6 + "</AdditionalText6>" + Environment.NewLine;
-            s += "<AdditionalText7>" + AlText.AdditionalText7 + "</AdditionalText7>" + Environment.NewLine;
-            s += "<AdditionalText8>" + AlText.AdditionalText8 + "</AdditionalText8>" + Environment.NewLine;
-            s += "<AdditionalText9>" + AlText.AdditionalText9 + "</AdditionalText9>" + Environment.NewLine;
-            s += "<UnknownValue1>" + AlText.UnknownValue1.ToString() + "</UnknownValue1>" + Environment.NewLine;
-            s += "<UnknownValue2>" + AlText.UnknownValue2.ToString() + "</UnknownValue2>" + Environment.NewLine;
-            s += "</AlText>" + Environment.NewLine;
-            s += "</AlarmData>" + Environment.NewLine;
-            return s;
-        }
-    }
 }

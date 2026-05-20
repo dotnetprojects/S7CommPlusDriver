@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace S7CommPlusDriver
 {
-    public partial class S7CommPlusConnection
+    internal partial class S7CommPlusProtocolSession
     {
 
         private byte[] omsSecret;
@@ -52,7 +52,7 @@ namespace S7CommPlusDriver
             Match m = reVersions.Match(sessionVersionPAOMString);
             if (!m.Success)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Could not extract firmware version!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Could not extract firmware version!");
                 return S7Consts.errCliFirmwareNotSupported;
             }
             string deviceVersion = m.Groups[1].Value;   // e.g., "672"
@@ -64,7 +64,7 @@ namespace S7CommPlusDriver
                 var parts = firmwareVersion.Split('.');
                 if (parts.Length < 2 || !int.TryParse(parts[0], out var major) || !int.TryParse(parts[1], out var minor))
                 {
-                    System.Diagnostics.Trace.WriteLine($"S7CommPlusConnection - Legitimate: Invalid firmware format: {firmwareVersion}");
+                    System.Diagnostics.Trace.WriteLine($"S7CommPlusProtocolSession - Legitimate: Invalid firmware format: {firmwareVersion}");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 fwVerNo = (major * 100) + minor;
@@ -76,7 +76,7 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 209)
                 {
-                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 301)
@@ -92,7 +92,7 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 403)
                 {
-                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 407)
@@ -104,14 +104,14 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 2109)
                 {
-                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 legacyLegitimation = true;
             }
             else
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Device version is not supported!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Device version is not supported!");
                 return S7Consts.errCliDeviceNotSupported;
             }
 
@@ -137,7 +137,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes == null)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: GetVarSubstreamedResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: GetVarSubstreamedResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -159,7 +159,7 @@ namespace S7CommPlusDriver
             }
             else if (accessLevel > AccessLevel.FullAccess)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Warning: Access level is not fullaccess but no password set!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Warning: Access level is not fullaccess but no password set!");
             }
 
             return 0;
@@ -195,7 +195,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes_challenge == null)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: getVarSubstreamedRes_challenge with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -241,7 +241,7 @@ namespace S7CommPlusDriver
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setVariableResponse == null)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: setVariableResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -249,7 +249,7 @@ namespace S7CommPlusDriver
             Int16 errorCode = (Int16)setVariableResponse.ReturnValue;
             if (errorCode < 0)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: access denied");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: access denied");
                 m_client.Disconnect();
                 return S7Consts.errCliAccessDenied;
             }
@@ -327,7 +327,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes_challenge == null)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: getVarSubstreamedRes_challenge with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -342,7 +342,7 @@ namespace S7CommPlusDriver
             }
             if (challengeResponse.Length != challenge.Length)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: challengeResponse.Length != challenge.Length");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: challengeResponse.Length != challenge.Length");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -374,7 +374,7 @@ namespace S7CommPlusDriver
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setVariableResponse == null)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: setVariableResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -382,7 +382,7 @@ namespace S7CommPlusDriver
             Int16 errorCode = (Int16)setVariableResponse.ReturnValue;
             if (errorCode < 0)
             {
-                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: access denied");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: access denied");
                 m_client.Disconnect();
                 return S7Consts.errCliAccessDenied;
             }

@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -16,12 +16,13 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
     class GetMultiVariablesRequest : IS7pRequest
     {
-        byte TransportFlags = 0x34;
+        byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
         public UInt32 LinkId = 0;       // for reading variables, this should be 0
         public List<ItemAddress> AddressList = new List<ItemAddress>();
 

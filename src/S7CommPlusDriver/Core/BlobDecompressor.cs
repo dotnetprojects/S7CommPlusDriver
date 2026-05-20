@@ -15,10 +15,11 @@
 
 using ComponentAce.Compression.Libs.zlib;
 using System;
+using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class BlobDecompressor
+    internal class BlobDecompressor
     {
         /// <summary>
         /// Decompresses a zlib compressed blob.
@@ -29,6 +30,15 @@ namespace S7CommPlusDriver
         /// <returns>The decompressed blob as string. If decompression failed, the string is empty</returns>
         public string decompress(byte[] compressed_blob, int startoffset)
         {
+            if (compressed_blob == null)
+            {
+                throw new ArgumentNullException(nameof(compressed_blob));
+            }
+            if (startoffset < 0 || startoffset >= compressed_blob.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(startoffset));
+            }
+
             int retcode;
             string retstring = String.Empty;
             byte[] dict = null;
@@ -38,7 +48,7 @@ namespace S7CommPlusDriver
 
             ZStream z = new ZStream();
             z.inflateInit();
-            z.avail_in = compressed_blob.Length;
+            z.avail_in = compressed_blob.Length - startoffset;
             z.next_in = compressed_blob;
             z.next_in_index = startoffset;
             z.next_out = uncompressed_blob;
@@ -143,26 +153,27 @@ namespace S7CommPlusDriver
                 }
                 retcode = z.inflate(zlibConst.Z_FINISH);
             }
-            if (retcode == zlibConst.Z_STREAM_END)
+            int producedLength = checked((int)z.total_out);
+            if (retcode == zlibConst.Z_STREAM_END || (retcode == zlibConst.Z_BUF_ERROR && producedLength > 0))
             {
-                uncomp_length -= z.avail_out;
-
-                if (uncomp_length > 0)
+                if (producedLength > 0)
                 {
                     if (z.avail_out == 0)
                     {
                         // need one more byte for string null terminator
-                        Array.Resize(ref uncompressed_blob, uncomp_length + 1);
+                        Array.Resize(ref uncompressed_blob, producedLength + 1);
                     }
-                    uncompressed_blob[uncomp_length] = 0x00;
+                    uncompressed_blob[producedLength] = 0x00;
                 }
-                retstring = System.Text.Encoding.UTF8.GetString(uncompressed_blob, 0, uncomp_length);
+                if (retcode == zlibConst.Z_BUF_ERROR)
+                {
+                    System.Diagnostics.Trace.WriteLine(String.Format("BlobDecompressor: Blob ended without a zlib stream trailer; returning {0} decompressed bytes.", producedLength));
+                }
+                retstring = System.Text.Encoding.UTF8.GetString(uncompressed_blob, 0, producedLength);
             }
             else
             {
-                retstring = System.Text.Encoding.UTF8.GetString(uncompressed_blob, 0, uncomp_length);
-                //TODO: error!!!
-                System.Diagnostics.Trace.WriteLine(String.Format("BlobDecompressor: Blob decompression failed! Zlib retcode={0} msg={1} ", retcode, z.msg));
+                throw new InvalidDataException(String.Format("Blob decompression failed. Zlib retcode={0} msg={1}.", retcode, z.msg));
             }
             z.inflateEnd();
             return retstring;

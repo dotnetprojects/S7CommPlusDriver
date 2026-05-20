@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class Notification
+    internal class Notification
     {
         public byte ProtocolVersion { get; set; }
 
@@ -37,17 +37,20 @@ namespace S7CommPlusDriver
 
         public Dictionary<UInt32, PValue> Values;       // Item reference number, Value
         public Dictionary<UInt32, byte> ReturnValues;   // Item reference number, ReturnValue
+        public Dictionary<UInt32, UInt32> OnlineStatusTableValues; // Item reference number, raw status-table word
 
         public UInt32 P2SubscriptionObjectId;           // for alarm object
         public UInt16 P2Unknown1;                       // for alarm object
         public byte P2ReturnValue;                      // for alarm object
         public List<PObject> P2Objects;                 // for alarm object
+        public byte[] TrailingBytes;                    // for non-alarm notification extensions
 
         public Notification(byte protocolVersion)
         {
             ProtocolVersion = protocolVersion;
             Values = new Dictionary<UInt32, PValue>();
             ReturnValues = new Dictionary<UInt32, byte>();
+            OnlineStatusTableValues = new Dictionary<UInt32, UInt32>();
         }
 
         public int Deserialize(Stream buffer)
@@ -56,7 +59,6 @@ namespace S7CommPlusDriver
             byte subscrccnt;
             byte item_return_value;
             UInt32 itemref;
-            UInt32 dummy;
             byte PeekByte;
 
             ret += S7p.DecodeUInt32(buffer, out SubscriptionObjectId);
@@ -85,8 +87,7 @@ namespace S7CommPlusDriver
             }
             // Return value: If the value != 0 then follows a dataset with the common known structure.
             // If an access error occurs, we have here an error-value, in this case datatype==NULL.
-            // TODO: The returncodes follow not any known structure. I've tried to reproduce some errors
-            // on different controllers and generations with the following results:
+            // Known observed return codes from different controllers and generations:
             //  hex       bin       ref-id  value   description
             //  0x03 = 0000 0011 -> ntohl   -       Addressing error (S7-1500 - Plcsim), like 0x13
             //  0x13 = 0001 0011 -> ntohl   -       Addressing error (S7-1200) and 1500-Plcsim
@@ -98,30 +99,34 @@ namespace S7CommPlusDriver
             do
             {
                 ret += S7p.DecodeByte(buffer, out item_return_value);
-                switch (item_return_value)
+                var returnCode = (S7CommPlusNotificationReturnCode)item_return_value;
+                switch (returnCode)
                 {
-                    case 0x00:
+                    case S7CommPlusNotificationReturnCode.EndOfList:
                         break;
-                    case 0x92:
+                    case S7CommPlusNotificationReturnCode.ValueWithUInt32Reference:
                         // Item reference number: Is sent to plc in the subscription-telegram for the addresses.
                         ret += S7p.DecodeUInt32(buffer, out itemref);
                         Values.Add(itemref, PValue.Deserialize(buffer));
                         break;
-                    case 0x9b:
+                    case S7CommPlusNotificationReturnCode.ValueWithVlqReference:
                         ret += S7p.DecodeUInt32Vlq(buffer, out itemref);
                         Values.Add(itemref, PValue.Deserialize(buffer));
                         break;
-                    case 0x9c:
-                        // Don't do anything with the data (for now)
-                        ret += S7p.DecodeUInt32(buffer, out dummy);
+                    case S7CommPlusNotificationReturnCode.OnlineStatusTable:
+                        // Observed online status-table item shape:
+                        // 9C rr ss ss vv, where rr is the subscription item reference,
+                        // ss ss is a status-table field id, and vv is the compact status value.
+                        ret += S7p.DecodeUInt32(buffer, out var onlineStatusTableValue);
+                        OnlineStatusTableValues[onlineStatusTableValue >> 24] = onlineStatusTableValue;
                         break;
-                    case 0x13:
-                    case 0x03:
+                    case S7CommPlusNotificationReturnCode.AddressingError1200:
+                    case S7CommPlusNotificationReturnCode.AddressingError:
                         ret += S7p.DecodeUInt32(buffer, out itemref);
                         ReturnValues.Add(itemref, item_return_value);
                         break;
                     //case 0x81: //Only in protocol version v1, but also used in S7-1500 in part 2 for ProgramAlarm
-                    case 0x83:
+                    case S7CommPlusNotificationReturnCode.LegacyValue:
                         // Probably only in protocol version v1
                         throw new NotImplementedException();
                     default:
@@ -136,20 +141,37 @@ namespace S7CommPlusDriver
             buffer.Position -= 1;
             if (PeekByte != 0)
             {
+                var part2Start = buffer.Position;
                 ret += S7p.DecodeUInt32(buffer, out P2SubscriptionObjectId);
                 ret += S7p.DecodeUInt16(buffer, out P2Unknown1);
                 ret += S7p.DecodeByte(buffer, out P2ReturnValue);
                 // It's not known if there are more than one object (as List), each object has
                 // it's return value, or if there is really only one.
                 // I wasn't able to produce a notification with more than one.
-                if (P2ReturnValue == 0x81)
+                if ((S7CommPlusNotificationReturnCode)P2ReturnValue == S7CommPlusNotificationReturnCode.AlarmObject)
                 {
                     P2Objects = new List<PObject>();
                     ret += S7p.DecodeObjectList(buffer, ref P2Objects);
                 }
                 else
                 {
-                    throw new NotImplementedException();
+                    buffer.Position = part2Start;
+                    var remaining = (int)(buffer.Length - buffer.Position);
+                    TrailingBytes = new byte[remaining];
+                    if (remaining > 0)
+                    {
+                        var readTotal = 0;
+                        while (readTotal < remaining)
+                        {
+                            var read = buffer.Read(TrailingBytes, readTotal, remaining - readTotal);
+                            if (read == 0)
+                            {
+                                throw new EndOfStreamException();
+                            }
+                            readTotal += read;
+                        }
+                        ret += remaining;
+                    }
                 }
             }
             return ret;
@@ -185,19 +207,37 @@ namespace S7CommPlusDriver
                 s += "<ReturnValue>" + Environment.NewLine;
                 s += "<ItemRefId>" + errval.Key.ToString() + "</ItemRefId>" + Environment.NewLine;
                 s += "<ReturnValue>" + errval.Value.ToString() + "</ReturnValue>" + Environment.NewLine;
+                s += "<ReturnValueName>" + ((S7CommPlusNotificationReturnCode)errval.Value).ToString() + "</ReturnValueName>" + Environment.NewLine;
                 s += "</ReturnValue>" + Environment.NewLine;
             }
             s += "</ReturnValueList>" + Environment.NewLine;
+            s += "<OnlineStatusTableValueList>" + Environment.NewLine;
+            foreach (var value in OnlineStatusTableValues)
+            {
+                s += "<OnlineStatusTableValue>" + Environment.NewLine;
+                s += "<ItemRefId>" + value.Key.ToString() + "</ItemRefId>" + Environment.NewLine;
+                s += "<RawValue>" + value.Value.ToString() + "</RawValue>" + Environment.NewLine;
+                s += "</OnlineStatusTableValue>" + Environment.NewLine;
+            }
+            s += "</OnlineStatusTableValueList>" + Environment.NewLine;
             // For alarm object(s)
             s += "<P2SubscriptionObjectId>" + P2SubscriptionObjectId.ToString() + "</P2SubscriptionObjectId>" + Environment.NewLine;
             s += "<P2Unknown1>" + P2Unknown1.ToString() + "</P2Unknown1>" + Environment.NewLine;
             s += "<P2ReturnValue>" + P2ReturnValue.ToString() + "</P2ReturnValue>" + Environment.NewLine;
+            s += "<P2ReturnValueName>" + ((S7CommPlusNotificationReturnCode)P2ReturnValue).ToString() + "</P2ReturnValueName>" + Environment.NewLine;
             s += "<P2Objects>" + Environment.NewLine;
-            foreach (var p2o in P2Objects)
+            if (P2Objects != null)
             {
-                s += p2o.ToString();
+                foreach (var p2o in P2Objects)
+                {
+                    s += p2o.ToString();
+                }
             }
             s += "</P2Objects>" + Environment.NewLine;
+            if (TrailingBytes != null)
+            {
+                s += "<TrailingBytes>" + BitConverter.ToString(TrailingBytes) + "</TrailingBytes>" + Environment.NewLine;
+            }
             s += "</Notification>" + Environment.NewLine;
             return s;
         }

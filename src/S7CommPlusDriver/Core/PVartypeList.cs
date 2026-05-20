@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class PVartypeList
+    internal class PVartypeList
     {
         public List<PVartypeListElement> Elements;
         public UInt32 FirstId;
@@ -39,12 +39,22 @@ namespace S7CommPlusDriver
 
             while (blocklen > 0)
             {
-                do
+                if (maxret > buffer.Length)
                 {
+                    throw new InvalidDataException("Variable-type block length exceeds the available payload.");
+                }
+
+                while (ret < maxret)
+                {
+                    var positionBefore = buffer.Position;
                     var elem = new PVartypeListElement();
                     ret += elem.Deserialize(buffer);
                     Elements.Add(elem);
-                } while (ret < maxret);
+                    if (buffer.Position <= positionBefore)
+                    {
+                        throw new InvalidDataException("Variable-type parser made no progress.");
+                    }
+                }
                 ret += S7p.DecodeUInt16(buffer, out blocklen);
                 maxret = ret + blocklen;
             }
@@ -69,7 +79,7 @@ namespace S7CommPlusDriver
         }
     }
 
-    public class PVartypeListElement
+    internal class PVartypeListElement
     {
         /* flags in tag description for 1500 */
         const int S7COMMP_TAGDESCR_ATTRIBUTE2_OFFSETINFOTYPE = 0xf000;      /* Bits 13..16 */

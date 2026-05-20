@@ -8,6 +8,7 @@
 #endregion
 
 using OpenSsl;
+using S7CommPlusDriver.Tls;
 using System;
 using System.IO;
 using System.Threading;
@@ -19,9 +20,8 @@ namespace S7CommPlusDriver
 	// |  it under the terms of the Lesser GNU General Public License as published by |
 	// |  the Free Software Foundation, either version 3 of the License, or           |
 	// |  (at your option) any later version.                                         |
-	public class S7Client : OpenSSLConnector.IConnectorCallback
+	public class S7Client : IS7TlsConnectorCallback, IDisposable
 	{
-		//TODO: better API, maybe a Callback
 		public static bool WriteSslKeyToFile;
 		public static string WriteSslKeyPath;
 
@@ -77,7 +77,9 @@ namespace S7CommPlusDriver
 		bool m_runThread_DoStop;
 		IntPtr m_ptr_ssl_method;
 		IntPtr m_ptr_ctx;
-		OpenSSLConnector m_sslconn;
+		IS7TlsConnector m_sslconn;
+		S7CommPlusTlsBackend m_TlsBackend = S7CommPlusTlsBackend.OpenSsl;
+		public string LastErrorDetail { get; private set; } = string.Empty;
 
 		DateTime m_DateTimeStarted;
 		Native.SSL_CTX_keylog_cb_func m_keylog_cb;
@@ -86,12 +88,22 @@ namespace S7CommPlusDriver
 		public void WriteData(byte[] pData, int dataLength)
 		{
 			// SSL fordert Daten zum Absenden an
-			// TODO: Was ist, wenn SSL Daten verschicken m�chte, die gr��er als eine TPDU sind?
-			// Bei gro�en Zertifikaten oder �hnlichem? Fragmentierung hier?
 			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
-			byte[] sendData = new byte[dataLength];
-			Array.Copy(pData, sendData, dataLength);
-			SendIsoPacket(sendData);
+			int offset = 0;
+			int maxPayloadSize = Math.Min(MaxPduSizeToRequest, PDU.Length - IsoHSize);
+			if (maxPayloadSize <= 0)
+			{
+				_LastError = S7Consts.errIsoInvalidPDU;
+				return;
+			}
+			while (offset < dataLength && _LastError == 0)
+			{
+				int chunkSize = Math.Min(maxPayloadSize, dataLength - offset);
+				byte[] sendData = new byte[chunkSize];
+				Array.Copy(pData, offset, sendData, 0, chunkSize);
+				SendIsoPacket(sendData);
+				offset += chunkSize;
+			}
 		}
 
 		// OpenSSL meldet fertige Daten (decrypted) zum einlesen
@@ -104,6 +116,15 @@ namespace S7CommPlusDriver
 			byte[] readData = new byte[bytesRead];
 			Array.Copy(buf, readData, bytesRead);
 			OnDataReceived?.Invoke(readData, bytesRead);
+		}
+
+		public void OnSslError(int sslError, string sslState)
+		{
+			_LastError = S7Consts.errOpenSSL;
+			LastErrorDetail = string.IsNullOrWhiteSpace(sslState)
+				? $"OpenSSL reported SSL error {sslError}."
+				: $"OpenSSL reported SSL error {sslError}: {sslState}";
+			OnReceiveError?.Invoke(_LastError);
 		}
 
 		// OpenSSL Key Callback Funktion. Gibt die ausgehandelden privaten Schl�ssel aus. Kann beispielsweise
@@ -119,14 +140,26 @@ namespace S7CommPlusDriver
 		}
 
 		// Startet OpenSSL und aktiviert ab jetzt TLS
-		public int SslActivate()
+		public int SslActivate(S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl)
 		{
 			int ret;
+			LastErrorDetail = string.Empty;
 			try
 			{
+				m_TlsBackend = tlsBackend;
+				if (m_TlsBackend == S7CommPlusTlsBackend.BouncyCastle)
+				{
+					var bouncyCastleConnector = new BouncyCastleTlsConnector(this);
+					m_sslconn = bouncyCastleConnector;
+					m_SslActive = true;
+					bouncyCastleConnector.StartHandshake();
+					return 0;
+				}
+
 				ret = Native.OPENSSL_init_ssl(0, IntPtr.Zero); // returns 1 on success or 0 on error
 				if (ret != 1)
 				{
+					LastErrorDetail = "OpenSSL initialization failed.";
 					return S7Consts.errOpenSSL;
 				}
 				m_ptr_ssl_method = Native.ExpectNonNull(Native.TLS_client_method());
@@ -139,10 +172,10 @@ namespace S7CommPlusDriver
 				ret = Native.SSL_CTX_set_ciphersuites(m_ptr_ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256");
 				if (ret != 1)
 				{
+					LastErrorDetail = "OpenSSL rejected the configured TLS 1.3 cipher suites.";
 					return S7Consts.errOpenSSL;
 				}
-				m_sslconn = new OpenSSLConnector(m_ptr_ctx, this);
-				m_sslconn.ExpectConnect();
+				m_sslconn = new OpenSslTlsConnector(m_ptr_ctx, this);
 
 				// Keylog callback setzen
 				if (WriteSslKeyToFile)
@@ -153,18 +186,40 @@ namespace S7CommPlusDriver
 
 				m_SslActive = true;
 			}
-			catch
+			catch (Exception ex)
 			{
+				LastErrorDetail = CreateOpenSslActivationError(tlsBackend, ex);
+				m_SslActive = false;
+				m_sslconn?.Dispose();
+				m_sslconn = null;
 				return S7Consts.errOpenSSL;
 			}
 			return 0;
+		}
+
+		private static string CreateOpenSslActivationError(S7CommPlusTlsBackend tlsBackend, Exception exception)
+		{
+			return tlsBackend == S7CommPlusTlsBackend.OpenSsl
+				? $"OpenSSL backend could not load or initialize its native dependencies for process architecture {System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture}. {exception.GetType().Name}: {exception.Message}"
+				: $"TLS backend {tlsBackend} could not initialize. {exception.GetType().Name}: {exception.Message}";
 		}
 
 		// Deaktiviert TLS
 		public void SslDeactivate()
 		{
 			m_SslActive = false;
-			// TODO: Ist hier etwas zu OpenSSL-Ressourcen explizit freizugeben?
+			m_sslconn?.Dispose();
+			m_sslconn = null;
+			if (m_ptr_ctx != IntPtr.Zero)
+			{
+				Native.SSL_CTX_free(m_ptr_ctx);
+				m_ptr_ctx = IntPtr.Zero;
+			}
+		}
+
+		public void Dispose()
+		{
+			SslDeactivate();
 		}
 		#endregion
 
@@ -184,7 +239,6 @@ namespace S7CommPlusDriver
 				// Versuchen zu lesen
 				_LastError = 0;
 				Length = RecvIsoPacket();
-				// TODO: Hier nur den Payload zur�ckgeben
 				if (Length > 0) {
 					byte[] Buffer = new byte[Length - TPKT_ISO.Length];
 					Array.Copy(PDU, TPKT_ISO.Length, Buffer, 0, Length - TPKT_ISO.Length);
@@ -198,11 +252,17 @@ namespace S7CommPlusDriver
 						OnDataReceived?.Invoke(Buffer, Size);
 					}
 				}
+				else if (_LastError != 0 && _LastError != S7Consts.errTCPReceiveTimeout)
+				{
+					OnReceiveError?.Invoke(_LastError);
+					break;
+				}
 			}
 		}
 
 		public _OnDataReceived OnDataReceived;
 		public delegate void _OnDataReceived(byte[] PDU, int len);
+		public Action<int> OnReceiveError;
 
 		#region [Internals]
 
@@ -280,6 +340,7 @@ namespace S7CommPlusDriver
 
 		public void Send(byte[] Buffer)
 		{
+			_LastError = 0;
 			if (m_SslActive)
 			{
 				m_sslconn.Write(Buffer, Buffer.Length);
@@ -288,6 +349,13 @@ namespace S7CommPlusDriver
 			{
 				SendIsoPacket(Buffer);
 			}
+		}
+
+		internal int SendEmptyDtData()
+		{
+			byte[] emptyDtData = { 0x03, 0x00, 0x00, 0x07, 0x02, 0xF0, 0x00 };
+			SendPacket(emptyDtData);
+			return _LastError;
 		}
 
 		private int SendIsoPacket(byte[] Buffer)
@@ -326,6 +394,7 @@ namespace S7CommPlusDriver
 		{
 			Boolean Done = false;
 			int Size = 0;
+			int emptyDataPacketCount = 0;
 			while ((_LastError == 0) && !Done)
 			{
 				// Get TPKT (4 bytes)
@@ -333,17 +402,23 @@ namespace S7CommPlusDriver
 				if (_LastError == 0)
 				{
 					Size = GetWordAt(PDU, 2);
+					if (Size < IsoHSize || Size > PDU.Length)
+					{
+						_LastError = S7Consts.errIsoInvalidPDU;
+						break;
+					}
 					// Check 0 bytes Data Packet (only TPKT+COTP = 7 bytes)
 					if (Size == IsoHSize)
-						RecvPacket(PDU, 4, 3); // Skip remaining 3 bytes and Done is still false
-					else
 					{
-						// TODO: Gr��e korrekt pr�fen
-						//if ((Size > _PduSizeRequested + IsoHSize) || (Size < MinPduSize))
-						//	_LastError = S7Consts.errIsoInvalidPDU;
-						//else
-							Done = true; // a valid Length !=7 && >16 && <247
+						RecvPacket(PDU, 4, 3); // Skip remaining 3 bytes and Done is still false
+						emptyDataPacketCount++;
+						if (emptyDataPacketCount > 16)
+						{
+							_LastError = S7Consts.errIsoInvalidPDU;
+						}
 					}
+					else
+						Done = true;
 				}
 			}
 			if (_LastError == 0)
@@ -381,13 +456,8 @@ namespace S7CommPlusDriver
 				Size = RecvIsoPacket();
 				if (_LastError == 0)
 				{
-					if (Size == 36)
-					{
-						if (LastPDUType != (byte)0xD0) // 0xD0 = CC Connection confirm
-							_LastError = S7Consts.errIsoConnect;
-					}
-					else
-						_LastError = S7Consts.errIsoInvalidPDU;
+					if (Size < IsoHSize || LastPDUType != (byte)0xD0) // 0xD0 = CC Connection confirm
+						_LastError = S7Consts.errIsoConnect;
 				}
 			}
 			return _LastError;
@@ -396,7 +466,7 @@ namespace S7CommPlusDriver
 		public byte[] getOMSExporterSecret()
 		{
 			if (m_sslconn == null) return null;
-			return m_sslconn.getOMSExporterSecret();
+			return m_sslconn.GetOmsExporterSecret();
 		}
 
 		#endregion
@@ -441,7 +511,11 @@ namespace S7CommPlusDriver
 				}
 			}
 			if (_LastError != 0)
+			{
+				var connectError = _LastError;
 				Disconnect();
+				_LastError = connectError;
+			}
 			else
 				Time_ms = Environment.TickCount - Elapsed;
 
@@ -469,12 +543,17 @@ namespace S7CommPlusDriver
 		public int Disconnect(int timeoutMilliseconds)
 		{
 			m_runThread_DoStop = true;
+			_LastError = 0;
 			Socket?.Close();
 			if (m_runThread != null && m_runThread.IsAlive)
 			{
 				if (!m_runThread.Join(Math.Max(1, timeoutMilliseconds)))
 				{
 					_LastError = S7Consts.errCliDestroying;
+				}
+				else
+				{
+					_LastError = 0;
 				}
 			}
 			SslDeactivate();
@@ -622,6 +701,11 @@ namespace S7CommPlusDriver
 				case S7Consts.errCliFunctionNotImplemented: return "CLI : Function not implemented";
 				case S7Consts.errCliFirmwareNotSupported: return "CLI : Firmware not supported";
 				case S7Consts.errCliDeviceNotSupported: return "CLI : Device type not supported";
+				case S7Consts.errOpenSSL: return "OPENSSL : OpenSSL error";
+				case S7Consts.errInitSslResponse: return "S7COMMP : Init SSL response error";
+				case S7Consts.errS7CommPlusLegacyAuthentication: return "S7COMMP : Legacy challenge authentication failed";
+				case S7Consts.errS7CommPlusDigestMismatch: return "S7COMMP : Legacy packet digest mismatch";
+				case S7Consts.errS7CommPlusLegacyRequestTooLarge: return "S7COMMP : Legacy request exceeds single-frame limit";
 				default: return "CLI : Unknown error (0x" + Convert.ToString(Error, 16) + ")";
 			};
 		}

@@ -37,31 +37,58 @@ namespace OpenSsl
             if (libraryName == DLLNAME)
             {
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X86)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x86", "native", "libcrypto-3.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-x86", "libcrypto-3.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x64", "native", "libcrypto-3-x64.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-x64", "libcrypto-3-x64.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-arm64", "native", "libcrypto-3-arm64.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-arm64", "libcrypto-3-arm64.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load("libcrypto.3.dylib", assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "osx-arm64", "libcrypto.3.dylib");
                 return IntPtr.Zero;
             }
 
             if(libraryName == SSLDLLNAME)
             {
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X86)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x86", "native", "libssl-3.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-x86", "libssl-3.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.X64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-x64", "native", "libssl-3-x64.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-x64", "libssl-3-x64.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load(Path.Combine("runtimes", "win-arm64", "native", "libssl-3-arm64.dll"), assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "win-arm64", "libssl-3-arm64.dll");
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX) && RuntimeInformation.ProcessArchitecture == Architecture.Arm64)
-                    return NativeLibrary.Load("libssl.3.dylib", assembly, searchPath);
+                    return LoadRuntimeNativeLibrary(assembly, searchPath, "osx-arm64", "libssl.3.dylib");
                 return IntPtr.Zero;
             }
 
             // Otherwise, fallback to default import resolver.
             return IntPtr.Zero;
+        }
+
+        private static IntPtr LoadRuntimeNativeLibrary(Assembly assembly, DllImportSearchPath? searchPath, string runtimeIdentifier, string fileName)
+        {
+            var path = RuntimeNativePath(assembly, runtimeIdentifier, fileName);
+            try
+            {
+                return NativeLibrary.Load(path, assembly, searchPath);
+            }
+            catch (Exception ex) when (ex is DllNotFoundException || ex is BadImageFormatException)
+            {
+                throw new DllNotFoundException(
+                    $"Could not load native OpenSSL dependency '{path}' for process architecture {RuntimeInformation.ProcessArchitecture}. " +
+                    "Install the matching Visual C++ runtime or package dependent runtime DLLs app-local beside the OpenSSL binaries.",
+                    ex);
+            }
+        }
+
+        private static string RuntimeNativePath(Assembly assembly, string runtimeIdentifier, string fileName)
+        {
+            var assemblyDirectory = Path.GetDirectoryName(assembly.Location);
+            if (string.IsNullOrEmpty(assemblyDirectory))
+            {
+                return Path.Combine("runtimes", runtimeIdentifier, "native", fileName);
+            }
+
+            return Path.Combine(assemblyDirectory, "runtimes", runtimeIdentifier, "native", fileName);
         }
 
         #region Delegates

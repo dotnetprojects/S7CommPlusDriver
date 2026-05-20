@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class CreateObjectResponse : IS7pResponse
+    internal class CreateObjectResponse : IS7pResponse
     {
         public byte TransportFlags;
         public UInt64 ReturnValue;

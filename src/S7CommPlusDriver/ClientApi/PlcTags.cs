@@ -5,9 +5,9 @@ using System.Diagnostics;
 
 namespace S7CommPlusDriver.ClientApi
 {
-    public static class PlcTags
+    internal static class PlcTags
     {
-        public static int ReadTags(this S7CommPlusConnection conn, IEnumerable<PlcTag> plcTags)
+        public static int ReadTags(this S7CommPlusProtocolSession conn, IEnumerable<PlcTag> plcTags)
         {
             var readlist = new List<ItemAddress>();
             List<object> values;
@@ -37,7 +37,7 @@ namespace S7CommPlusDriver.ClientApi
             return res;
         }
 
-        public static int WriteTags(this S7CommPlusConnection conn, IEnumerable<PlcTag> plcTags)
+        public static int WriteTags(this S7CommPlusProtocolSession conn, IEnumerable<PlcTag> plcTags)
         {
             var writelist = new List<ItemAddress>();
             var values = new List<PValue>();

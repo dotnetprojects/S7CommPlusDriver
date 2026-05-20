@@ -123,7 +123,7 @@ namespace S7CommPlusDriver
 				{
 					LastError = S7Consts.errTCPDataReceive;
 				}
-				if (LastError != 0)
+				if (LastError != 0 && LastError != S7Consts.errTCPReceiveTimeout)
 				{
 					Close();
 				}

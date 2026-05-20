@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -17,7 +17,7 @@ using System;
 
 namespace S7CommPlusDriver.Alarming
 {
-    public class AlarmsAsCgs
+    public class S7CommPlusAlarmStateChange
     {
         public enum SubtypeIds
         {
@@ -28,28 +28,28 @@ namespace S7CommPlusDriver.Alarming
 
         public byte AllStatesInfo;
         public DateTime Timestamp;
-        public AlarmsAssociatedValues AssociatedValues;
+        public S7CommPlusAlarmAssociatedValues AssociatedValues;
         public DateTime AckTimestamp;
 
         public override string ToString()
         {
-            string s = "<AlarmsAsCgs>" + Environment.NewLine;
+            string s = "<S7CommPlusAlarmStateChange>" + Environment.NewLine;
             s += "<SubtypeId>" + SubtypeId.ToString() + "</SubtypeId>" + Environment.NewLine;
             s += "<SubtypeIdName>" + ((SubtypeIds)SubtypeId).ToString() + "</SubtypeIdName>" + Environment.NewLine;
             s += "<AllStatesInfo>" + AllStatesInfo.ToString() + "</AllStatesInfo>" + Environment.NewLine;
             s += "<AssociatedValues>" + Environment.NewLine + AssociatedValues.ToString() + "</AssociatedValues>" + Environment.NewLine;
             s += "<Timestamp>" + Timestamp.ToString() + "</Timestamp>" + Environment.NewLine;
             s += "<AckTimestamp>" + AckTimestamp.ToString() + "</AckTimestamp>" + Environment.NewLine;
-            s += "</AlarmsAsCgs>" + Environment.NewLine;
+            s += "</S7CommPlusAlarmStateChange>" + Environment.NewLine;
             return s;
         }
 
-        public static AlarmsAsCgs FromValueStruct(ValueStruct str)
+        internal static S7CommPlusAlarmStateChange FromValueStruct(ValueStruct str)
         {
-            var asCgs = new AlarmsAsCgs();
+            var asCgs = new S7CommPlusAlarmStateChange();
             asCgs.AllStatesInfo = ((ValueUSInt)str.GetStructElement(Ids.AS_CGS_AllStatesInfo)).GetValue();
             asCgs.Timestamp = Utils.DtFromValueTimestamp(((ValueTimestamp)str.GetStructElement(Ids.AS_CGS_Timestamp)).GetValue());
-            asCgs.AssociatedValues = AlarmsAssociatedValues.FromValueBlob(((ValueBlobArray)str.GetStructElement(Ids.AS_CGS_AssociatedValues)));
+            asCgs.AssociatedValues = S7CommPlusAlarmAssociatedValues.FromValueBlob(((ValueBlobArray)str.GetStructElement(Ids.AS_CGS_AssociatedValues)));
             asCgs.AckTimestamp = Utils.DtFromValueTimestamp(((ValueTimestamp)str.GetStructElement(Ids.AS_CGS_AckTimestamp)).GetValue());
             return asCgs;
         }

@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  * 
@@ -19,7 +19,7 @@ using System.IO;
 
 namespace S7CommPlusDriver
 {
-    public class PVarnameList
+    internal class PVarnameList
     {
         public List<string> Names;
 
@@ -38,8 +38,14 @@ namespace S7CommPlusDriver
             maxret = ret + blocklen;
             while (blocklen > 0)
             {
-                do
+                if (maxret > buffer.Length)
                 {
+                    throw new InvalidDataException("Variable-name block length exceeds the available payload.");
+                }
+
+                while (ret < maxret)
+                {
+                    var positionBefore = buffer.Position;
                     name = String.Empty;
                     // Length of a name is max. 128 chars
                     ret += S7p.DecodeByte(buffer, out namelen);
@@ -47,7 +53,11 @@ namespace S7CommPlusDriver
                     Names.Add(name);
                     // Additional 1 Byte with 0 at the end. Why Null termination when the length is given? I don't know...
                     ret += S7p.DecodeByte(buffer, out unknown2);
-                } while (ret < maxret);
+                    if (buffer.Position <= positionBefore)
+                    {
+                        throw new InvalidDataException("Variable-name parser made no progress.");
+                    }
+                }
                 ret += S7p.DecodeUInt16(buffer, out blocklen);
                 maxret = ret + blocklen;
             }

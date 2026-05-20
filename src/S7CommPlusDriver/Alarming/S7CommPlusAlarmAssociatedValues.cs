@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -14,26 +14,27 @@
 #endregion
 
 using System;
+using System.Globalization;
 using System.Text;
 
 namespace S7CommPlusDriver.Alarming
 {
-    public class AlarmsAssociatedValues
+    public class S7CommPlusAlarmAssociatedValues
     {
-        public AssociatedValue SD_1;
-        public AssociatedValue SD_2;
-        public AssociatedValue SD_3;
-        public AssociatedValue SD_4;
-        public AssociatedValue SD_5;
-        public AssociatedValue SD_6;
-        public AssociatedValue SD_7;
-        public AssociatedValue SD_8;
-        public AssociatedValue SD_9;
-        public AssociatedValue SD_10;
+        public S7CommPlusAlarmAssociatedValue SD_1;
+        public S7CommPlusAlarmAssociatedValue SD_2;
+        public S7CommPlusAlarmAssociatedValue SD_3;
+        public S7CommPlusAlarmAssociatedValue SD_4;
+        public S7CommPlusAlarmAssociatedValue SD_5;
+        public S7CommPlusAlarmAssociatedValue SD_6;
+        public S7CommPlusAlarmAssociatedValue SD_7;
+        public S7CommPlusAlarmAssociatedValue SD_8;
+        public S7CommPlusAlarmAssociatedValue SD_9;
+        public S7CommPlusAlarmAssociatedValue SD_10;
 
         public override string ToString()
         {
-            string s = "<AlarmsAssociatedValues>" + Environment.NewLine;
+            string s = "<S7CommPlusAlarmAssociatedValues>" + Environment.NewLine;
             s += "<SD_1>" + (SD_1 is null ? String.Empty : SD_1.ToString()) + "</SD_1>" + Environment.NewLine;
             s += "<SD_2>" + (SD_2 is null ? String.Empty : SD_2.ToString()) + "</SD_2>" + Environment.NewLine;
             s += "<SD_3>" + (SD_3 is null ? String.Empty : SD_3.ToString()) + "</SD_3>" + Environment.NewLine;
@@ -44,13 +45,31 @@ namespace S7CommPlusDriver.Alarming
             s += "<SD_8>" + (SD_8 is null ? String.Empty : SD_8.ToString()) + "</SD_8>" + Environment.NewLine;
             s += "<SD_9>" + (SD_9 is null ? String.Empty : SD_9.ToString()) + "</SD_9>" + Environment.NewLine;
             s += "<SD_10>" + (SD_10 is null ? String.Empty : SD_10.ToString()) + "</SD_10>" + Environment.NewLine;
-            s += "</AlarmsAssociatedValues>" + Environment.NewLine;
+            s += "</S7CommPlusAlarmAssociatedValues>" + Environment.NewLine;
             return s;
         }
 
-        public static AlarmsAssociatedValues FromValueBlob(ValueBlobArray blob)
+        public S7CommPlusAlarmAssociatedValue GetValue(int sdIndex)
         {
-            var av = new AlarmsAssociatedValues();
+            switch(sdIndex)
+            {
+                case 1: return SD_1;
+                case 2: return SD_2;
+                case 3: return SD_3;
+                case 4: return SD_4;
+                case 5: return SD_5;
+                case 6: return SD_6;
+                case 7: return SD_7;
+                case 8: return SD_8;
+                case 9: return SD_9;
+                case 10: return SD_10;
+                default: return null;
+            }
+        }
+
+        internal static S7CommPlusAlarmAssociatedValues FromValueBlob(ValueBlobArray blob)
+        {
+            var av = new S7CommPlusAlarmAssociatedValues();
             var blobs = blob.GetValue();
             // Comes as Array[17], with indices:
             // 0 = Unknown Typeinformation, 4 Bytes
@@ -63,79 +82,79 @@ namespace S7CommPlusDriver.Alarming
             // UInt   Syntax
             // Byte   Aap
             int i = 0;
-            AssociatedValue pv;
+            S7CommPlusAlarmAssociatedValue pv;
             foreach(var b in blobs)
             {
                 var bytes = b.GetValue();
                 switch (b.BlobRootId)
                 {
                     case (Ids.TI_BOOL):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetBool(bytes[0] != 0);
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_BYTE):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(bytes[0]);
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_CHAR):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetString(Encoding.GetEncoding("ISO-8859-1").GetString(bytes, 0, 1));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_WORD):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetUInt16(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_INT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetInt16(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_DWORD):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetUInt32(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_DINT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetInt32(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_REAL):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetReal(Utils.GetFloat(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_LREAL):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetReal(Utils.GetDouble(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_USINT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(bytes[0]);
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_UINT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetUInt16(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_UDINT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt(Utils.GetUInt32(bytes, 0));
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_SINT):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetInt((sbyte)bytes[0]);
                         av.SetSDValue(pv, i);
                         break;
                     case (Ids.TI_WCHAR):
-                        pv = new AssociatedValue(b.BlobRootId);
+                        pv = new S7CommPlusAlarmAssociatedValue(b.BlobRootId);
                         pv.SetString(((char)Utils.GetUInt16(bytes, 0)).ToString());
                         av.SetSDValue(pv, i);
                         break;
@@ -144,7 +163,7 @@ namespace S7CommPlusDriver.Alarming
                         {
                             //byte s_maxlen = bytes[0]; // Don't need this value
                             byte s_actlen = bytes[1];
-                            pv = new AssociatedValue(Ids.TI_STRING);
+                            pv = new S7CommPlusAlarmAssociatedValue(Ids.TI_STRING);
                             pv.SetString(Encoding.GetEncoding("ISO-8859-1").GetString(bytes, 2, s_actlen));
                             av.SetSDValue(pv, i);
                         }
@@ -152,7 +171,7 @@ namespace S7CommPlusDriver.Alarming
                         {
                             //int ws_maxlen = Utils.GetUInt16(bytes, 0); // Don't need this value
                             int ws_actlen = Utils.GetUInt16(bytes, 2);
-                            pv = new AssociatedValue(Ids.TI_WSTRING);
+                            pv = new S7CommPlusAlarmAssociatedValue(Ids.TI_WSTRING);
                             pv.SetString(Encoding.BigEndianUnicode.GetString(bytes, 4, ws_actlen * 2));
                             av.SetSDValue(pv, i);
                         }
@@ -168,7 +187,7 @@ namespace S7CommPlusDriver.Alarming
             return av;
         }
 
-        private void SetSDValue(AssociatedValue v, int index)
+        private void SetSDValue(S7CommPlusAlarmAssociatedValue v, int index)
         {
             switch(index)
             {
@@ -186,7 +205,7 @@ namespace S7CommPlusDriver.Alarming
         }
     }
 
-    public class AssociatedValue
+    public class S7CommPlusAlarmAssociatedValue
     {
         bool ValueBool;
         Int64 ValueInt;
@@ -197,7 +216,7 @@ namespace S7CommPlusDriver.Alarming
         // Allowed types in plc program: Bool, Byte, Char, DInt, DWord, Int, LReal, Real, SInt, String, UDInt, UInt, WChar, Word, WString
         // Break down to .Net types which can handle all these values: Bool, Int64, double, string
 
-        public AssociatedValue(uint typeinfo)
+        public S7CommPlusAlarmAssociatedValue(uint typeinfo)
         {
             TypeInfo = typeinfo;
         }
@@ -220,6 +239,119 @@ namespace S7CommPlusDriver.Alarming
         public void SetString(string value)
         {
             ValueString = value;
+        }
+
+        public bool IsString
+        {
+            get
+            {
+                return TypeInfo == Ids.TI_CHAR
+                    || TypeInfo == Ids.TI_WCHAR
+                    || TypeInfo == Ids.TI_STRING
+                    || TypeInfo == Ids.TI_WSTRING;
+            }
+        }
+
+        public bool IsReal
+        {
+            get
+            {
+                return TypeInfo == Ids.TI_REAL || TypeInfo == Ids.TI_LREAL;
+            }
+        }
+
+        public string GetString()
+        {
+            return ValueString ?? String.Empty;
+        }
+
+        public double GetReal()
+        {
+            return IsReal ? ValueReal : GetSignedInteger();
+        }
+
+        internal int GetIntegerByElementType(char elementType)
+        {
+            switch (elementType)
+            {
+                case 'B':
+                    return (int)(ValueBool ? 1 : GetUnsignedInteger() & 0x1);
+                case 'Y':
+                case 'C':
+                    return (int)(GetUnsignedInteger() & 0xFF);
+                case 'W':
+                case 'I':
+                    return (int)(GetUnsignedInteger() & 0xFFFF);
+                case 'X':
+                case 'D':
+                case 'R':
+                    return unchecked((int)(GetUnsignedInteger() & 0xFFFFFFFF));
+                default:
+                    return unchecked((int)GetUnsignedInteger());
+            }
+        }
+
+        internal double GetRealByElementType(char elementType)
+        {
+            if (elementType == 'O' || IsReal)
+            {
+                return ValueReal;
+            }
+
+            return GetIntegerByElementType(elementType);
+        }
+
+        public Int64 GetSignedInteger()
+        {
+            switch (TypeInfo)
+            {
+                case (Ids.TI_BOOL):
+                    return ValueBool ? 1 : 0;
+                case (Ids.TI_BYTE):
+                case (Ids.TI_USINT):
+                    return unchecked((sbyte)(byte)ValueInt);
+                case (Ids.TI_WORD):
+                case (Ids.TI_UINT):
+                    return unchecked((short)(ushort)ValueInt);
+                case (Ids.TI_DWORD):
+                case (Ids.TI_UDINT):
+                    return unchecked((int)(uint)ValueInt);
+                case (Ids.TI_INT):
+                case (Ids.TI_DINT):
+                case (Ids.TI_SINT):
+                    return ValueInt;
+                case (Ids.TI_REAL):
+                case (Ids.TI_LREAL):
+                    return Convert.ToInt64(ValueReal, CultureInfo.InvariantCulture);
+                default:
+                    return ValueInt;
+            }
+        }
+
+        public UInt64 GetUnsignedInteger()
+        {
+            switch (TypeInfo)
+            {
+                case (Ids.TI_BOOL):
+                    return ValueBool ? 1u : 0u;
+                case (Ids.TI_BYTE):
+                case (Ids.TI_USINT):
+                case (Ids.TI_SINT):
+                    return (byte)ValueInt;
+                case (Ids.TI_WORD):
+                case (Ids.TI_UINT):
+                case (Ids.TI_INT):
+                    return (ushort)ValueInt;
+                case (Ids.TI_DWORD):
+                case (Ids.TI_UDINT):
+                case (Ids.TI_DINT):
+                    return (uint)ValueInt;
+                case (Ids.TI_REAL):
+                case (Ids.TI_LREAL):
+                    return Convert.ToUInt64(ValueReal, CultureInfo.InvariantCulture);
+                default:
+                    return (UInt64)Math.Max(0, ValueInt);
+            }
         }
 
         public override string ToString()

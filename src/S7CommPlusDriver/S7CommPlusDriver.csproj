@@ -9,8 +9,12 @@
     <StartupObject />
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.6.2" />
     <PackageReference Include="zlib.net-mutliplatform" Version="1.0.8" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0' Or '$(TargetFramework)' == 'net9.0'">
+    <PackageReference Include="CommunityToolkit.HighPerformance" Version="8.2.2" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="runtimes\**\*">
@@ -29,6 +33,22 @@
   <ItemGroup>
     <Folder Include="runtimes\linux-x64\" />
     <Folder Include="runtimes\osx-x64\" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="HarpoS7">
+      <Version>1.1.2</Version>
+    </PackageReference>
+    <PackageReference Include="HarpoS7.PublicKeys">
+      <Version>1.1.2</Version>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <PackageReference Include="HarpoS7">
+      <Version>1.1.2</Version>
+    </PackageReference>
+    <PackageReference Include="HarpoS7.PublicKeys">
+      <Version>1.1.2</Version>
+    </PackageReference>
   </ItemGroup>
   <PropertyGroup>
     <AssemblyTitle>S7CommPlusDriver</AssemblyTitle>

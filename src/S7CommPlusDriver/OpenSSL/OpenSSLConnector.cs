@@ -16,11 +16,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using DataBufferList = System.Collections.Generic.LinkedList<OpenSsl.OpenSSLConnector.DataBuffer>;
 
 namespace OpenSsl
 {
-    public class OpenSSLConnector
+    public class OpenSSLConnector : IDisposable
     {
         private bool m_readRequired;
         private readonly IntPtr m_pSslConnection; // SSL*
@@ -32,11 +33,14 @@ namespace OpenSsl
         private readonly byte[] m_buffer = new byte[4096];
         private readonly DataBufferList m_pendingWriteList;
         private readonly DataBufferList m_pendingReadList;
+        private bool m_fatalError;
+        private bool m_disposed;
 
         public interface IConnectorCallback
         {
             void WriteData(byte[] pData, int dataLength);
             void OnDataAvailable();
+            void OnSslError(int sslError, string sslState);
         }
 
         public class DataBuffer
@@ -53,7 +57,7 @@ namespace OpenSsl
 
             public void ConsumeAndRemove(int bytesUsed)
             {
-                Buffer.BlockCopy(data, bytesUsed, data, 0, bytesUsed);
+                Buffer.BlockCopy(data, bytesUsed, data, 0, used - bytesUsed);
                 used -= bytesUsed;
             }
         };
@@ -74,7 +78,24 @@ namespace OpenSsl
 
         ~OpenSSLConnector()
         {
+            Dispose(false);
+        }
+
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (m_disposed)
+            {
+                return;
+            }
+
             Native.SSL_free(m_pSslConnection);
+            m_disposed = true;
         }
 
         private int DataToWrite(byte[] pData, int dataLength)
@@ -83,7 +104,7 @@ namespace OpenSsl
 
             int result = Native.SSL_write(m_pSslConnection, pData, dataLength);
 
-            if (result < 0)
+            if (result <= 0)
             {
                 HandleError(result);
             }
@@ -105,6 +126,11 @@ namespace OpenSsl
             m_readRequired = false;
 
             int bytesUsed = Native.BIO_write(m_pBioIn, pData, dataLength);
+            if (bytesUsed <= 0)
+            {
+                ReportFatalError(Native.SSL_ERROR_SYSCALL);
+                return 0;
+            }
 
             byte[] pBuffer = null;
             int bufferSize = 0;
@@ -122,9 +148,13 @@ namespace OpenSsl
                     OnDataToRead(pBuffer, bytesOut);
                 }
 
-                if (bytesOut < 0)
+                if (bytesOut <= 0)
                 {
                     HandleError(bytesOut);
+                    if (m_fatalError)
+                    {
+                        break;
+                    }
                 }
             }
             while (bytesOut > 0);
@@ -134,7 +164,7 @@ namespace OpenSsl
 
         private void SendPendingData()
         {
-            while (Native.BIO_ctrl_pending(m_pBioOut) > 0)
+            while (!m_fatalError && Native.BIO_ctrl_pending(m_pBioOut) > 0)
             {
                 byte[] pBuffer = null;
                 int bufferSize = 0;
@@ -154,6 +184,10 @@ namespace OpenSsl
                     {
                         HandleError(bytesToSend);
                     }
+                    else
+                    {
+                        ReportFatalError(Native.SSL_ERROR_SYSCALL);
+                    }
                 }
             }
         }
@@ -171,18 +205,57 @@ namespace OpenSsl
 
                 switch (error)
                 {
-                    case Native.SSL_ERROR_ZERO_RETURN:
                     case Native.SSL_ERROR_NONE:
                     case Native.SSL_ERROR_WANT_READ:
+                    case Native.SSL_ERROR_WANT_WRITE:
+                    case Native.SSL_ERROR_WANT_CONNECT:
+                    case Native.SSL_ERROR_WANT_ACCEPT:
                         // States that can occur in a normal state
                         break;
+                    case Native.SSL_ERROR_ZERO_RETURN:
+                        ReportFatalError(error);
+                        break;
                     default:
-                        // TOOO: Handle all other errors which don't should occur.
-                        // 5 with SSL_ASYNC_PAUSED has been seen...
-                        Trace.WriteLine("OpenSSL HandleError: Error = " + error);
+                        ReportFatalError(error);
                         break;
                 }
             }
+        }
+
+        private void ReportFatalError(int error)
+        {
+            if (m_fatalError)
+            {
+                return;
+            }
+
+            m_fatalError = true;
+            var state = Marshal.PtrToStringAnsi(Native.SSL_state_string_long(m_pSslConnection)) ?? string.Empty;
+            var errorDetail = DrainErrorQueue();
+            if (!string.IsNullOrEmpty(errorDetail))
+            {
+                state = string.IsNullOrEmpty(state) ? errorDetail : state + "; " + errorDetail;
+            }
+            Trace.WriteLine("OpenSSL fatal error: Error = " + error + " State = " + state);
+            m_DataSink.OnSslError(error, state);
+        }
+
+        private static string DrainErrorQueue()
+        {
+            var messages = new List<string>();
+            ulong error;
+            while ((error = Native.ERR_get_error()) != 0)
+            {
+                var buffer = new byte[256];
+                Native.ERR_error_string_n(error, buffer, buffer.Length);
+                var message = Marshal.PtrToStringAnsi(Marshal.UnsafeAddrOfPinnedArrayElement(buffer, 0));
+                if (!string.IsNullOrWhiteSpace(message))
+                {
+                    messages.Add(message);
+                }
+            }
+
+            return messages.Count == 0 ? string.Empty : string.Join("; ", messages);
         }
 
         protected void RunSSL()
@@ -191,9 +264,15 @@ namespace OpenSsl
             bool dataToRead = false;
 
             GetPendingOperations(ref dataToRead, ref dataToWrite);
+            int noProgressCount = 0;
 
-            while ((!m_readRequired && dataToWrite) || dataToRead)
+            while (!m_fatalError && ((!m_readRequired && dataToWrite) || dataToRead))
             {
+                int pendingReadBefore = m_pendingReadList.Count;
+                int pendingWriteBefore = m_pendingWriteList.Count;
+                bool readRequiredBefore = m_readRequired;
+                var bioPendingBefore = Native.BIO_ctrl_pending(m_pBioOut);
+
                 if (Native.SSL_in_init(m_pSslConnection) != 0)
                 {
                     // Client waiting in connect
@@ -215,6 +294,23 @@ namespace OpenSsl
                 }
 
                 GetPendingOperations(ref dataToRead, ref dataToWrite);
+                var bioPendingAfter = Native.BIO_ctrl_pending(m_pBioOut);
+                if (pendingReadBefore == m_pendingReadList.Count &&
+                    pendingWriteBefore == m_pendingWriteList.Count &&
+                    readRequiredBefore == m_readRequired &&
+                    bioPendingBefore == bioPendingAfter)
+                {
+                    noProgressCount++;
+                    if (noProgressCount > 1)
+                    {
+                        ReportFatalError(Native.SSL_ERROR_SYSCALL);
+                        break;
+                    }
+                }
+                else
+                {
+                    noProgressCount = 0;
+                }
             }
         }
 
@@ -276,7 +372,12 @@ namespace OpenSsl
             while (m_bytesAvailable > 0)
             {
                 m_DataSink.OnDataAvailable();
-                // Sink sollte anschließend Receive aufrufen um Daten abzuholen
+                if (m_bytesAvailable == dataLength)
+                {
+                    ReportFatalError(Native.SSL_ERROR_SYSCALL);
+                    break;
+                }
+                dataLength = m_bytesAvailable;
             }
         }
 

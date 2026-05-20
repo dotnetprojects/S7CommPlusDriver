@@ -1,0 +1,511 @@
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using S7CommPlusDriver.Internal;
+using Microsoft.Extensions.Logging;
+
+#if NET8_0_OR_GREATER
+using HarpoS7;
+using HarpoS7.Auth;
+using HarpoS7.Integrity;
+using HarpoS7.PublicKeys.Exceptions;
+using HarpoS7.PublicKeys.Impl;
+using HarpoS7.Utilities.Auth;
+using HarpoS7.Utilities.Extensions;
+#endif
+
+namespace S7CommPlusDriver
+{
+    internal partial class S7CommPlusProtocolSession
+    {
+        private const int LegacyDigestLength = LegacyOmsConstants.PacketDigestLength;
+        private const int LegacyDigestFieldLength = LegacyOmsConstants.PacketDigestFieldLength;
+
+#if NET8_0_OR_GREATER
+        private int ConnectLegacyChallenge(S7CommPlusClientOptions options)
+        {
+            var usesEngineeringTsap = string.Equals(options.RemoteTsap, LegacyOmsConstants.EngineeringTsap, StringComparison.Ordinal);
+            var res = ConnectLegacyChallengeCore(options, LegacyServerSessionRole.EngineeringSystem);
+            if (res == S7Consts.errS7CommPlusLegacyAuthentication)
+            {
+                options.Logger.LogDebug("Legacy S7CommPlus ES session role was rejected by PLC {Address}:{Port}; retrying HMI session role.", options.Address, options.Port);
+                res = ConnectLegacyChallengeCore(options, LegacyServerSessionRole.Hmi);
+            }
+
+            if (res != 0 && !usesEngineeringTsap && string.Equals(options.RemoteTsap, LegacyOmsConstants.HmiTsap, StringComparison.Ordinal))
+            {
+                var engineeringOptions = options.Clone();
+                engineeringOptions.RemoteTsap = LegacyOmsConstants.EngineeringTsap;
+                options.Logger.LogDebug(
+                    "Legacy S7CommPlus connection to PLC {Address}:{Port} failed with {ErrorCode}; retrying alternate TSAP {RemoteTsap}.",
+                    options.Address,
+                    options.Port,
+                    res,
+                    engineeringOptions.RemoteTsap);
+                res = ConnectLegacyChallengeCore(engineeringOptions, LegacyServerSessionRole.EngineeringSystem);
+                if (res == S7Consts.errS7CommPlusLegacyAuthentication)
+                {
+                    options.Logger.LogDebug("Legacy S7CommPlus alternate ES session role was rejected by PLC {Address}:{Port}; retrying HMI session role on alternate TSAP.", options.Address, options.Port);
+                    res = ConnectLegacyChallengeCore(engineeringOptions, LegacyServerSessionRole.Hmi);
+                }
+            }
+
+            return res;
+        }
+
+        private int ConnectLegacyChallengeCore(S7CommPlusClientOptions options, LegacyServerSessionRole serverSessionRole)
+        {
+            if (options.ConnectTimeoutMilliseconds > 0)
+            {
+                m_ReadTimeout = Math.Min(
+                    options.RequestTimeoutMilliseconds,
+                    Math.Max(1000, options.ConnectTimeoutMilliseconds - 1000));
+            }
+
+            var elapsed = Environment.TickCount;
+            PrepareClient(options.Address, options.RequestTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes);
+            var res = m_client.Connect();
+            if (res != 0)
+            {
+                return res;
+            }
+            options.Logger.LogDebug("Legacy S7CommPlus COTP connection established to PLC {Address}:{Port}.", options.Address, options.Port);
+
+            res = SendLegacyCreateObjectRequest(serverSessionRole);
+            if (res != 0)
+            {
+                m_client.Disconnect();
+                return res;
+            }
+            options.Logger.LogDebug("Legacy S7CommPlus CreateObject request sent to PLC {Address}:{Port}.", options.Address, options.Port);
+
+            m_LastError = 0;
+            WaitForNewS7plusReceived(m_ReadTimeout);
+            if (m_LastError != 0)
+            {
+                options.Logger.LogDebug("Legacy S7CommPlus CreateObject response failed for PLC {Address}:{Port} with code {ErrorCode}.", options.Address, options.Port, m_LastError);
+                m_client.Disconnect();
+                return m_LastError;
+            }
+            options.Logger.LogDebug("Legacy S7CommPlus CreateObject response received from PLC {Address}:{Port}.", options.Address, options.Port);
+
+            res = m_client.SendEmptyDtData();
+            if (res != 0)
+            {
+                m_client.Disconnect();
+                return res;
+            }
+
+            var createObjectPdu = m_ReceivedPDU.ToArray();
+            var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
+            if (createObjRes == null || createObjRes.ObjectIds == null || createObjRes.ObjectIds.Count == 0)
+            {
+                m_client.Disconnect();
+                return S7Consts.errIsoInvalidPDU6;
+            }
+
+            m_SessionId = createObjRes.ObjectIds[0];
+            m_SessionId2 = createObjRes.ObjectIds.Count > 1 ? createObjRes.ObjectIds[1] : 0;
+
+            if (!LegacyChallengeHandshake.TryParse(createObjectPdu, createObjRes, out var challenge))
+            {
+                m_client.Disconnect();
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+            options.Logger.LogDebug(
+                "Legacy S7CommPlus CSI challenge received from PLC {Address}:{Port}: session {SessionId:X8}, Harpo family {KeyFamily}, OMS family {OmsKeyFamily}, fingerprint {Fingerprint}, auth frame {AuthenticationFrameKind}.",
+                options.Address,
+                options.Port,
+                challenge.SessionId,
+                challenge.KeyFamily,
+                challenge.OmsKeyFamily,
+                challenge.Fingerprint,
+                challenge.AuthenticationFrameKind);
+
+            if (!TryCreateLegacyAuthentication(challenge, options, out var keyBlob, out var sessionKey, out var keyFamily, out var publicKey))
+            {
+                m_client.Disconnect();
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            var serverSessionVersion = TryGetServerSession(createObjRes);
+            res = SendLegacyAuthenticationRequest(challenge.SessionId, challenge.AuthenticationFrameKind, keyFamily, keyBlob, sessionKey, publicKey, serverSessionVersion, serverSessionRole);
+            if (res != 0)
+            {
+                m_client.Disconnect();
+                return res;
+            }
+            options.Logger.LogDebug("Legacy S7CommPlus authentication request sent to PLC {Address}:{Port}.", options.Address, options.Port);
+
+            m_LastError = 0;
+            WaitForNewS7plusReceived(m_ReadTimeout);
+            if (m_LastError != 0)
+            {
+                options.Logger.LogDebug("Legacy S7CommPlus authentication response failed for PLC {Address}:{Port} with code {ErrorCode}.", options.Address, options.Port, m_LastError);
+                m_client.Disconnect();
+                return m_LastError;
+            }
+
+            var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
+            if (setMultiVarRes == null || setMultiVarRes.ReturnValue != 0)
+            {
+                m_client.Disconnect();
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+            options.Logger.LogDebug("Legacy S7CommPlus challenge authentication accepted by PLC {Address}:{Port}.", options.Address, options.Port);
+
+            m_LegacySessionKey = sessionKey;
+            m_LegacyDigestActive = true;
+            m_SequenceNumber = 2;
+            m_IntegrityId = uint.MaxValue;
+
+            options.Logger.LogDebug(
+                "Legacy S7CommPlus connection to PLC {Address}:{Port} is using conservative default communication limits.",
+                options.Address,
+                options.Port);
+            m_ReadTimeout = options.RequestTimeoutMilliseconds;
+
+            var shouldLegitimate = !string.IsNullOrEmpty(options.Password) || !string.IsNullOrEmpty(options.Username);
+            var serverSession = shouldLegitimate ? TryGetServerSession(createObjRes) : null;
+            m_ServerSessionVersion = serverSessionVersion;
+            if (serverSession != null)
+            {
+                res = legitimate(serverSession, options.Password, options.Username);
+                if (res != 0)
+                {
+                    m_client.Disconnect();
+                    return res;
+                }
+            }
+            else if (!string.IsNullOrEmpty(options.Password))
+            {
+                m_client.Disconnect();
+                return S7Consts.errCliFirmwareNotSupported;
+            }
+
+            options.Logger.LogInformation("Legacy S7CommPlus challenge connection to PLC {Address}:{Port} established in {ElapsedMilliseconds} ms.", options.Address, options.Port, Environment.TickCount - elapsed);
+            return 0;
+        }
+
+        private int SendLegacyCreateObjectRequest(LegacyServerSessionRole serverSessionRole)
+        {
+            var request = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
+            request.SetTiaServerSessionData(serverSessionRole);
+            return SendS7plusFunctionObject(request);
+        }
+
+        private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
+        {
+            try
+            {
+                return createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private bool TryCreateLegacyAuthentication(
+            LegacyChallengeHandshake challenge,
+            S7CommPlusClientOptions options,
+            out byte[] keyBlob,
+            out byte[] sessionKey,
+            out EPublicKeyFamily keyFamily,
+            out byte[] publicKey)
+        {
+            keyBlob = null;
+            sessionKey = null;
+            keyFamily = default;
+            publicKey = null;
+
+            try
+            {
+                publicKey = options.LegacyPublicKeyResolver?.Invoke(challenge.Fingerprint);
+                if (publicKey == null || publicKey.Length == 0)
+                {
+                    var store = new DefaultPublicKeyStore();
+                    publicKey = new byte[store.GetPublicKeyLength(challenge.Fingerprint)];
+                    store.ReadPublicKey(publicKey.AsSpan(), challenge.Fingerprint);
+                }
+
+                keyFamily = challenge.KeyFamily;
+                sessionKey = new byte[Constants.SessionKeyLength];
+                var blobLength = keyFamily == EPublicKeyFamily.PlcSim
+                    ? CommonConstants.EncryptedBlobLengthPlcSim
+                    : CommonConstants.EncryptedBlobLengthRealPlc;
+                keyBlob = new byte[blobLength];
+                LegacyAuthenticationScheme.Authenticate(
+                    keyBlob.AsSpan(),
+                    sessionKey.AsSpan(),
+                    challenge.Challenge.AsSpan(),
+                    publicKey.AsSpan(),
+                    keyFamily);
+                return true;
+            }
+            catch (UnknownPublicKeyException ex)
+            {
+                options.Logger.LogDebug(ex, "Legacy S7CommPlus public key {Fingerprint} is not available.", challenge.Fingerprint);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                options.Logger.LogDebug(ex, "Legacy S7CommPlus authentication blob creation failed for PLC {Address}:{Port}.", options.Address, options.Port);
+                return false;
+            }
+        }
+
+        private int SendLegacyAuthenticationRequest(
+            uint sessionId,
+            LegacyAuthenticationFrameKind authenticationFrameKind,
+            EPublicKeyFamily keyFamily,
+            byte[] keyBlob,
+            byte[] sessionKey,
+            byte[] publicKey,
+            ValueStruct serverSessionVersion,
+            LegacyServerSessionRole serverSessionRole)
+        {
+            Span<byte> publicKeyId = stackalloc byte[Constants.KeyIdLength];
+            Span<byte> sessionKeyId = stackalloc byte[Constants.KeyIdLength];
+            publicKey.AsSpan().DeriveKeyId(publicKeyId);
+            sessionKey.AsSpan().DeriveKeyId(sessionKeyId);
+
+            var request = LegacyChallengeHandshake.CreateAuthenticationRequest(
+                keyFamily,
+                sessionId,
+                publicKeyId,
+                sessionKeyId,
+                keyBlob,
+                serverSessionVersion,
+                serverSessionRole,
+                authenticationFrameKind);
+            if (request == null)
+            {
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            using var stream = new MemoryStream();
+            request.Serialize(stream);
+            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, request.ProtocolVersion);
+        }
+
+        private bool TryWriteLegacyDigest(byte[] destination, int digestOffset, byte[] data, int dataOffset, int dataLength)
+        {
+            if (!ShouldUseLegacyDigest(ProtocolVersion.V3))
+            {
+                return false;
+            }
+
+            HarpoPacketDigest.CalculateDigest(
+                destination.AsSpan(digestOffset + 1, LegacyDigestLength),
+                data.AsSpan(dataOffset, dataLength),
+                m_LegacySessionKey.AsSpan());
+            destination[digestOffset] = LegacyDigestLength;
+            return true;
+        }
+
+        private bool TryVerifyLegacyDigest(
+            byte[] digestBuffer,
+            int digestOffset,
+            byte[] data,
+            int dataOffset,
+            int dataLength)
+        {
+            if (!ShouldUseLegacyDigest(ProtocolVersion.V3))
+            {
+                return false;
+            }
+
+            if (digestBuffer[digestOffset] != LegacyDigestLength)
+            {
+                return false;
+            }
+
+            Span<byte> expected = stackalloc byte[LegacyDigestLength];
+            HarpoPacketDigest.CalculateDigest(expected, data.AsSpan(dataOffset, dataLength), m_LegacySessionKey.AsSpan());
+            return expected.SequenceEqual(digestBuffer.AsSpan(digestOffset + 1, LegacyDigestLength));
+        }
+
+        private void TraceLegacyDigestReceive(
+            byte[] pdu,
+            int pduLength,
+            int digestOffset,
+            int bodyOffset,
+            int bodyLength,
+            int previousBodyLength,
+            byte[] accumulatedData,
+            int accumulatedDataOffset,
+            int accumulatedDataLength,
+            bool verified,
+            bool matched)
+        {
+            var traceDirectory = Environment.GetEnvironmentVariable("S7COMMPLUS_LEGACY_DIGEST_TRACE_DIR");
+            if (string.IsNullOrWhiteSpace(traceDirectory) || !ShouldUseLegacyDigest(ProtocolVersion.V3))
+            {
+                return;
+            }
+
+            try
+            {
+                Directory.CreateDirectory(traceDirectory);
+                Span<byte> currentBodyDigest = stackalloc byte[LegacyDigestLength];
+                Span<byte> accumulatedDigest = stackalloc byte[LegacyDigestLength];
+                HarpoPacketDigest.CalculateDigest(currentBodyDigest, pdu.AsSpan(bodyOffset, bodyLength), m_LegacySessionKey.AsSpan());
+                HarpoPacketDigest.CalculateDigest(accumulatedDigest, accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength), m_LegacySessionKey.AsSpan());
+
+                var receivedDigest = pdu.AsSpan(digestOffset + 1, LegacyDigestLength);
+                var includeRaw = string.Equals(
+                    Environment.GetEnvironmentVariable("S7COMMPLUS_LEGACY_DIGEST_TRACE_INCLUDE_RAW"),
+                    "1",
+                    StringComparison.OrdinalIgnoreCase);
+                var sequence = Interlocked.Increment(ref m_LegacyDigestTraceSequence);
+                var path = Path.Combine(traceDirectory, $"legacy-digest-{Process.GetCurrentProcess().Id}.jsonl");
+                var json = new StringBuilder(768);
+                json.Append('{');
+                AppendJson(json, "sequence", sequence);
+                AppendJson(json, "pduLength", pduLength);
+                AppendJson(json, "bodyLength", bodyLength);
+                AppendJson(json, "previousBodyLength", previousBodyLength);
+                AppendJson(json, "accumulatedLength", accumulatedDataLength);
+                AppendJson(json, "verifiedByDriver", verified);
+                AppendJson(json, "matchedByDriver", matched);
+                AppendJson(json, "currentBodyMatches", receivedDigest.SequenceEqual(currentBodyDigest));
+                AppendJson(json, "accumulatedBodyMatches", receivedDigest.SequenceEqual(accumulatedDigest));
+                AppendJson(json, "receivedDigest", Convert.ToHexString(receivedDigest));
+                AppendJson(json, "currentBodyDigest", Convert.ToHexString(currentBodyDigest));
+                AppendJson(json, "accumulatedBodyDigest", Convert.ToHexString(accumulatedDigest));
+                AppendJson(json, "bodySha256", Convert.ToHexString(SHA256.HashData(pdu.AsSpan(bodyOffset, bodyLength))));
+                AppendJson(json, "accumulatedSha256", Convert.ToHexString(SHA256.HashData(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength))));
+                if (string.Equals(
+                    Environment.GetEnvironmentVariable("S7COMMPLUS_LEGACY_DIGEST_TRACE_BRUTE_SUFFIX"),
+                    "1",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    AppendJson(
+                        json,
+                        "currentSuffixMatchOffset",
+                        FindLegacyDigestSuffixMatch(
+                            ReadOnlySpan<byte>.Empty,
+                            pdu.AsSpan(bodyOffset, bodyLength),
+                            receivedDigest));
+                    AppendJson(
+                        json,
+                        "previousPlusSuffixMatchOffset",
+                        previousBodyLength == 0
+                            ? -1
+                            : FindLegacyDigestSuffixMatch(
+                                accumulatedData.AsSpan(accumulatedDataOffset, previousBodyLength),
+                                pdu.AsSpan(bodyOffset, bodyLength),
+                                receivedDigest));
+                }
+                if (includeRaw)
+                {
+                    AppendJson(json, "pduHex", Convert.ToHexString(pdu.AsSpan(0, pduLength)));
+                    AppendJson(json, "bodyHex", Convert.ToHexString(pdu.AsSpan(bodyOffset, bodyLength)));
+                    AppendJson(json, "accumulatedHex", Convert.ToHexString(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength)));
+                }
+
+                if (json[json.Length - 1] == ',')
+                {
+                    json.Length--;
+                }
+                json.Append('}');
+                json.AppendLine();
+                File.AppendAllText(path, json.ToString());
+            }
+            catch
+            {
+                // Diagnostics must never affect PLC communication.
+            }
+        }
+
+        private int FindLegacyDigestSuffixMatch(ReadOnlySpan<byte> prefix, ReadOnlySpan<byte> body, ReadOnlySpan<byte> receivedDigest)
+        {
+            Span<byte> expected = stackalloc byte[LegacyDigestLength];
+            if (prefix.Length == 0)
+            {
+                for (var offset = 0; offset <= body.Length; offset++)
+                {
+                    HarpoPacketDigest.CalculateDigest(expected, body[offset..], m_LegacySessionKey.AsSpan());
+                    if (expected.SequenceEqual(receivedDigest))
+                    {
+                        return offset;
+                    }
+                }
+
+                return -1;
+            }
+
+            for (var offset = 0; offset <= body.Length; offset++)
+            {
+                var candidate = new byte[prefix.Length + body.Length - offset];
+                prefix.CopyTo(candidate);
+                body[offset..].CopyTo(candidate.AsSpan(prefix.Length));
+                HarpoPacketDigest.CalculateDigest(expected, candidate, m_LegacySessionKey.AsSpan());
+                if (expected.SequenceEqual(receivedDigest))
+                {
+                    return offset;
+                }
+            }
+
+            return -1;
+        }
+#else
+        private int ConnectLegacyChallenge(S7CommPlusClientOptions options)
+        {
+            return S7Consts.errCliFunctionNotImplemented;
+        }
+
+        private bool TryWriteLegacyDigest(byte[] destination, int digestOffset, byte[] data, int dataOffset, int dataLength)
+        {
+            return false;
+        }
+
+        private bool TryVerifyLegacyDigest(byte[] digestBuffer, int digestOffset, byte[] data, int dataOffset, int dataLength)
+        {
+            return false;
+        }
+
+        private void TraceLegacyDigestReceive(
+            byte[] pdu,
+            int pduLength,
+            int digestOffset,
+            int bodyOffset,
+            int bodyLength,
+            int previousBodyLength,
+            byte[] accumulatedData,
+            int accumulatedDataOffset,
+            int accumulatedDataLength,
+            bool verified,
+            bool matched)
+        {
+        }
+#endif
+
+        private static void AppendJson(StringBuilder builder, string name, long value)
+        {
+            builder.Append('"').Append(name).Append("\":").Append(value).Append(',');
+        }
+
+        private static void AppendJson(StringBuilder builder, string name, bool value)
+        {
+            builder.Append('"').Append(name).Append("\":").Append(value ? "true" : "false").Append(',');
+        }
+
+        private static void AppendJson(StringBuilder builder, string name, string value)
+        {
+            builder.Append('"').Append(name).Append("\":\"").Append(value).Append("\",");
+        }
+
+        private bool ShouldUseLegacyDigest(byte protocolVersion)
+        {
+            return m_LegacyDigestActive
+                && protocolVersion == ProtocolVersion.V3
+                && m_LegacySessionKey != null
+                && m_LegacySessionKey.Length >= 24;
+        }
+    }
+}

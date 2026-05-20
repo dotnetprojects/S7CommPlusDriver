@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -19,7 +19,7 @@ using System.IO;
 namespace S7CommPlusDriver.Alarming
 {
     //  7813 = DAI.HmiInfo
-    public class AlarmsHmiInfo
+    public class S7CommPlusAlarmHmiInfo
     {
         public ushort SyntaxId;
         public ushort Version;
@@ -35,7 +35,7 @@ namespace S7CommPlusDriver.Alarming
 
         public override string ToString()
         {
-            string s = "<AlarmsHmiInfo>" + Environment.NewLine;
+            string s = "<S7CommPlusAlarmHmiInfo>" + Environment.NewLine;
             s += "<SyntaxId>" + SyntaxId.ToString() + "</SyntaxId>" + Environment.NewLine;
             s += "<Version>" + Version.ToString() + "</Version>" + Environment.NewLine;
             s += "<ClientAlarmId>" + ClientAlarmId.ToString() + "</ClientAlarmId>" + Environment.NewLine;
@@ -53,7 +53,7 @@ namespace S7CommPlusDriver.Alarming
                     s += "<Flags>" + Flags.ToString() + "</Flags>" + Environment.NewLine;
                 }
             }
-            s += "</AlarmsHmiInfo>" + Environment.NewLine;
+            s += "</S7CommPlusAlarmHmiInfo>" + Environment.NewLine;
             return s;
         }
 
@@ -80,9 +80,9 @@ namespace S7CommPlusDriver.Alarming
             return ret;
         }
 
-        public static AlarmsHmiInfo FromValueBlob(ValueBlob blob)
+        internal static S7CommPlusAlarmHmiInfo FromValueBlob(ValueBlob blob)
         {
-            var hmiinfo = new AlarmsHmiInfo();
+            var hmiinfo = new S7CommPlusAlarmHmiInfo();
             var barr = blob.GetValue();
             uint pos = 0;
             hmiinfo.SyntaxId = Utils.GetUInt16(barr, pos);
