@@ -1,7 +1,7 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
- * 
+ *
  * Copyright (C) 2023 Thomas Wiens, th.wiens@gmx.de
  *
  * This file is part of S7CommPlusDriver.
@@ -71,7 +71,7 @@ namespace S7CommPlusDriver
             // {1, 256, 257, 258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272}
             // Possibly 65535 is "all".
             asrefsobj.AddAttribute(Ids.AlarmSubscriptionRef_AlarmDomain2, new ValueUIntArray(new ushort[1] { 65535 }, 0x20)); // 0x20 = Adressarray
-            // OPTION: 
+            // OPTION:
             // Send text informations with the message, we don't need to browse them in advance.
             asrefsobj.AddAttribute(Ids.AlarmSubscriptionRef_AlarmTextLanguages_Rid, new ValueUDIntArray(languageIds, 0x20)); // Empty for all languanges? Otherwise e.g. 1031 for de-de or what you need.
             asrefsobj.AddAttribute(Ids.AlarmSubscriptionRef_SendAlarmTexts_Rid, new ValueBool(true));
@@ -103,7 +103,7 @@ namespace S7CommPlusDriver
             var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (createObjRes == null)
             {
-                Console.WriteLine("AlarmSubscription - Create: CreateObjectResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("AlarmSubscription - Create: CreateObjectResponse with Error!");
                 return S7Consts.errIsoInvalidPDU;
             }
 
@@ -116,7 +116,7 @@ namespace S7CommPlusDriver
             {
                 // If creating a subscription fails, the object is still created and should be deleted.
                 // At least deleting it, gives no error.
-                Console.WriteLine(String.Format("AlarmSubscription - Create: Failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue));
+                System.Diagnostics.Trace.WriteLine(String.Format("AlarmSubscription - Create: Failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue));
                 res = S7Consts.errCliInvalidParams;
             }
 
@@ -130,7 +130,7 @@ namespace S7CommPlusDriver
 
         //    for (int i = 1; i <= untilNumberOfAlarms; i++)
         //    {
-        //        Console.WriteLine(Environment.NewLine + "WaitForAlarmNotifications(): *** Loop #" + i.ToString() + " ***");
+        //        System.Diagnostics.Trace.WriteLine(Environment.NewLine + "WaitForAlarmNotifications(): *** Loop #" + i.ToString() + " ***");
         //        m_LastError = 0;
         //        WaitForNewS7plusReceived(waitTimeout);
         //        if (m_LastError != 0)
@@ -141,21 +141,21 @@ namespace S7CommPlusDriver
         //        var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
         //        if (noti == null)
         //        {
-        //            Console.WriteLine("Notification == null!");
+        //            System.Diagnostics.Trace.WriteLine("Notification == null!");
         //            return S7Consts.errIsoInvalidPDU;
         //        }
         //        else
         //        {
         //            Console.Write("Notification: CreditTick=" + noti.NotificationCreditTick + " SequenceNumber=" + noti.NotificationSequenceNumber);
-        //            Console.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond));
+        //            System.Diagnostics.Trace.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond));
 
         //            var dai = AlarmsDai.FromNotificationObject(noti.P2Objects[0], alarmTextsLanguageId);
-        //            Console.WriteLine(dai.ToString());
+        //            System.Diagnostics.Trace.WriteLine(dai.ToString());
         //            if (noti.NotificationCreditTick >= m_AlarmNextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
         //            {
         //                // CreditTick in Notification is only one byte
         //                m_AlarmNextCreditLimit = (short)((m_AlarmNextCreditLimit + creditLimitStep) % 255);
-        //                Console.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_AlarmNextCreditLimit.ToString());
+        //                System.Diagnostics.Trace.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_AlarmNextCreditLimit.ToString());
         //                SubscriptionSetCreditLimit(m_AlarmNextCreditLimit);
         //            }
         //        }
@@ -199,7 +199,7 @@ namespace S7CommPlusDriver
         {
             int res;
             m_AlarmSubscriptionObjectId = 0;
-            Console.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SessionId2={0:X8}", SessionId2));
+            System.Diagnostics.Trace.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SessionId2={0:X8}", SessionId2));
             res = DeleteObject(SessionId2);
             return res;
         }

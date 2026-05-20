@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFrameworks>net6.0;net8.0;net9.0</TargetFrameworks>
     <OutputType>Library</OutputType>
@@ -10,6 +10,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="zlib.net-mutliplatform" Version="1.0.8" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.3" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="runtimes\**\*">
@@ -22,7 +23,8 @@
     <Content Remove="runtimes\info.txt" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="build\net8.0\CopyNativeFiles.targets" Pack="true" PackagePath="build\net8.0\" />
+    <None Include="build\net8.0\CopyNativeFiles.targets" Pack="true" PackagePath="build\net8.0\DotNetProjects.S7CommPlusDriver.targets" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="runtimes\linux-x64\" />
@@ -31,7 +33,7 @@
   <PropertyGroup>
     <AssemblyTitle>S7CommPlusDriver</AssemblyTitle>
     <Product>S7CommPlusDriver</Product>
-    <Copyright>Copyright © 2025, DotNetProjects, Thomas Wiens</Copyright>
+    <Copyright>Copyright (c) 2025, DotNetProjects, Thomas Wiens</Copyright>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
@@ -40,5 +42,6 @@
     <Company>DotNetProjects</Company>
     <PackageProjectUrl>https://github.com/dotnetprojects/S7CommPlusDriver</PackageProjectUrl>
     <PackageLicenseExpression>LGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 </Project>

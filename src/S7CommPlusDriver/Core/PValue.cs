@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -3178,7 +3178,7 @@ namespace S7CommPlusDriver
                     }
                     else
                     {
-                        Console.WriteLine("ValueStruct.Serialize(): Elements[0] is not of type ValueByteArray");
+                        System.Diagnostics.Trace.WriteLine("ValueStruct.Serialize(): Elements[0] is not of type ValueByteArray");
                     }
                 }
             }

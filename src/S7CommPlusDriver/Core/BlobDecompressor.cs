@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -109,7 +109,7 @@ namespace S7CommPlusDriver
                         dict = dict_CompilerSettings_90000001;
                         break;
                     default:
-                        Console.WriteLine(String.Format("BlobDecompressor: Have no dictionary for adler: 0x{0:X}", z.adler));
+                        System.Diagnostics.Trace.WriteLine(String.Format("BlobDecompressor: Have no dictionary for adler: 0x{0:X}", z.adler));
                         break;
                 }
                 if (dict != null)
@@ -162,7 +162,7 @@ namespace S7CommPlusDriver
             {
                 retstring = System.Text.Encoding.UTF8.GetString(uncompressed_blob, 0, uncomp_length);
                 //TODO: error!!!
-                Console.WriteLine(String.Format("BlobDecompressor: Blob decompression failed! Zlib retcode={0} msg={1} ", retcode, z.msg));
+                System.Diagnostics.Trace.WriteLine(String.Format("BlobDecompressor: Blob decompression failed! Zlib retcode={0} msg={1} ", retcode, z.msg));
             }
             z.inflateEnd();
             return retstring;
@@ -933,7 +933,7 @@ namespace S7CommPlusDriver
         };
         #endregion
 
-        #region Dictionary IntRefData 98000001 
+        #region Dictionary IntRefData 98000001
         private const uint DICTID_IntRefData_98000001 = 0xb0155ff8;
         private static readonly byte[] dict_IntRefData_98000001 = new byte[]
         {

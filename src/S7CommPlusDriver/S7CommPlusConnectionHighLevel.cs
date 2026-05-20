@@ -186,6 +186,7 @@ namespace S7CommPlusDriver
                             Ids.FB_Class_Rid => BlockType.FB,
                             Ids.FC_Class_Rid => BlockType.FC,
                             Ids.OB_Class_Rid => BlockType.OB,
+                            _ => BlockType.unkown,
                         };
 
                         var lang = ((ValueUInt)ob.Attributes[Ids.Block_BlockLanguage]).GetValue();
@@ -337,6 +338,7 @@ namespace S7CommPlusDriver
                     2657 => BlockType.OB, // TimeOfDayOB
                     2658 => BlockType.OB, // UpdateEventOB
                     8440 => BlockType.OB, // LookAheadOB
+                    _ => BlockType.unkown,
                 };
 
 

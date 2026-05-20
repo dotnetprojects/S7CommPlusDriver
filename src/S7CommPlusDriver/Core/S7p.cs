@@ -21,6 +21,21 @@ namespace S7CommPlusDriver
 {
     public class S7p
     {
+        private static bool TryReadExactly(System.IO.Stream buffer, byte[] value, int length)
+        {
+            var totalRead = 0;
+            while (totalRead < length)
+            {
+                var bytesRead = buffer.Read(value, totalRead, length - totalRead);
+                if (bytesRead == 0)
+                {
+                    return false;
+                }
+                totalRead += bytesRead;
+            }
+            return true;
+        }
+
         public static int EncodeByte(System.IO.Stream buffer, byte value)
         {
             buffer.WriteByte((byte)value);
@@ -184,7 +199,11 @@ namespace S7CommPlusDriver
                 return 0;
             }
             byte[] b = new byte[8];
-            buffer.Read(b, 0, 8);
+            if (!TryReadExactly(buffer, b, 8))
+            {
+                value = 0;
+                return 0;
+            }
             Array.Reverse(b, 0, 8);
             value = BitConverter.ToUInt64(b, 0);
             return 8;
@@ -198,7 +217,11 @@ namespace S7CommPlusDriver
                 return 0;
             }
             byte[] b = new byte[8];
-            buffer.Read(b, 0, 8);
+            if (!TryReadExactly(buffer, b, 8))
+            {
+                value = 0;
+                return 0;
+            }
             Array.Reverse(b, 0, 8);
             value = BitConverter.ToInt64(b, 0);
             return 8;
@@ -606,7 +629,11 @@ namespace S7CommPlusDriver
                 return 0;
             }
             byte[] tmp = new byte[length];
-            buffer.Read(tmp, 0, length);
+            if (!TryReadExactly(buffer, tmp, length))
+            {
+                value = string.Empty;
+                return 0;
+            }
             value = Encoding.UTF8.GetString(tmp);
             return tmp.Length;
         }
@@ -626,7 +653,11 @@ namespace S7CommPlusDriver
                 return 0;
             }
             value = new byte[length];
-            buffer.Read(value, 0, length);
+            if (!TryReadExactly(buffer, value, length))
+            {
+                value = null;
+                return 0;
+            }
             return value.Length;
         }
 

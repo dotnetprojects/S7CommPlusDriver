@@ -1,4 +1,4 @@
-﻿using S7CommPlusDriver.Legitimation;
+using S7CommPlusDriver.Legitimation;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -34,15 +34,15 @@ namespace S7CommPlusDriver
             //  Starting with TIA Portal V17, PG / PC and HMI communication is secured with TLS, protecting the data exchanged between
             //  Field PGs and HMIs with SIMATIC CPUs.
             //  The CPU families that support Secure PG / HMI communication are:
-            //      • S7 - 1500 controllers as of firmware version V2.9.
-            //      • S7 - 1200 controllers as of firmware version V4.5.
-            //      • Software controllers as of firmware version V21.9.
-            //      • SIMATIC Drive controllers as of firmware version V2.9.
-            //      • PLCSim and PLCSim Advanced Version V4.0.
+            //      � S7 - 1500 controllers as of firmware version V2.9.
+            //      � S7 - 1200 controllers as of firmware version V4.5.
+            //      � Software controllers as of firmware version V21.9.
+            //      � SIMATIC Drive controllers as of firmware version V2.9.
+            //      � PLCSim and PLCSim Advanced Version V4.0.
             //  HMI components that support Secure PG/ HMI communication, as of image version V17, are:
-            //      • Panels or PCs configured with WinCC Basic, Comfort and Advanced.
-            //      • PCs with WinCC RT Professional.
-            //      • WinCC Unified PCs and Comfort Panels.
+            //      � Panels or PCs configured with WinCC Basic, Comfort and Advanced.
+            //      � PCs with WinCC RT Professional.
+            //      � WinCC Unified PCs and Comfort Panels.
             //  In addition, SINAMICS RT SW, as of version V6.1, and STARTDRIVE, as of version V17, support secure communication
             string sessionVersionPAOMString = ((ValueWString)serverSession.GetStructElement((uint)Ids.LID_SessionVersionSystemPAOMString)).GetValue();
             var reVersions = new Regex(
@@ -52,7 +52,7 @@ namespace S7CommPlusDriver
             Match m = reVersions.Match(sessionVersionPAOMString);
             if (!m.Success)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: Could not extract firmware version!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Could not extract firmware version!");
                 return S7Consts.errCliFirmwareNotSupported;
             }
             string deviceVersion = m.Groups[1].Value;   // e.g., "672"
@@ -64,7 +64,7 @@ namespace S7CommPlusDriver
                 var parts = firmwareVersion.Split('.');
                 if (parts.Length < 2 || !int.TryParse(parts[0], out var major) || !int.TryParse(parts[1], out var minor))
                 {
-                    Console.WriteLine($"S7CommPlusConnection - Legitimate: Invalid firmware format: {firmwareVersion}");
+                    System.Diagnostics.Trace.WriteLine($"S7CommPlusConnection - Legitimate: Invalid firmware format: {firmwareVersion}");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 fwVerNo = (major * 100) + minor;
@@ -76,7 +76,7 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 209)
                 {
-                    Console.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 301)
@@ -92,7 +92,7 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 403)
                 {
-                    Console.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 if (fwVerNo < 407)
@@ -104,14 +104,14 @@ namespace S7CommPlusDriver
             {
                 if (fwVerNo < 2109)
                 {
-                    Console.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
+                    System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
                 }
                 legacyLegitimation = true;
             }
             else
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: Device version is not supported!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Device version is not supported!");
                 return S7Consts.errCliDeviceNotSupported;
             }
 
@@ -137,7 +137,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes == null)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: GetVarSubstreamedResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: GetVarSubstreamedResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -159,7 +159,7 @@ namespace S7CommPlusDriver
             }
             else if (accessLevel > AccessLevel.FullAccess)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: Warning: Access level is not fullaccess but no password set!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: Warning: Access level is not fullaccess but no password set!");
             }
 
             return 0;
@@ -195,7 +195,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes_challenge == null)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -241,7 +241,7 @@ namespace S7CommPlusDriver
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setVariableResponse == null)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -249,7 +249,7 @@ namespace S7CommPlusDriver
             Int16 errorCode = (Int16)setVariableResponse.ReturnValue;
             if (errorCode < 0)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: access denied");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: access denied");
                 m_client.Disconnect();
                 return S7Consts.errCliAccessDenied;
             }
@@ -281,7 +281,7 @@ namespace S7CommPlusDriver
                 // Login with only password = legacy login
                 // Hash password
                 byte[] hashedPw;
-                using (SHA1Managed sha1 = new SHA1Managed())
+                using (SHA1 sha1 = SHA1.Create())
                 {
                     hashedPw = sha1.ComputeHash(Encoding.UTF8.GetBytes(password));
                 }
@@ -327,7 +327,7 @@ namespace S7CommPlusDriver
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (getVarSubstreamedRes_challenge == null)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: getVarSubstreamedRes_challenge with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -336,13 +336,13 @@ namespace S7CommPlusDriver
 
             // Calculate challengeResponse [sha1(password) xor challenge]
             byte[] challengeResponse;
-            using (SHA1Managed sha1 = new SHA1Managed())
+            using (SHA1 sha1 = SHA1.Create())
             {
                 challengeResponse = sha1.ComputeHash(Encoding.UTF8.GetBytes(password));
             }
             if (challengeResponse.Length != challenge.Length)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: challengeResponse.Length != challenge.Length");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: challengeResponse.Length != challenge.Length");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -374,7 +374,7 @@ namespace S7CommPlusDriver
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setVariableResponse == null)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: setVariableResponse with Error!");
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU;
             }
@@ -382,7 +382,7 @@ namespace S7CommPlusDriver
             Int16 errorCode = (Int16)setVariableResponse.ReturnValue;
             if (errorCode < 0)
             {
-                Console.WriteLine("S7CommPlusConnection - Legitimate: access denied");
+                System.Diagnostics.Trace.WriteLine("S7CommPlusConnection - Legitimate: access denied");
                 m_client.Disconnect();
                 return S7Consts.errCliAccessDenied;
             }

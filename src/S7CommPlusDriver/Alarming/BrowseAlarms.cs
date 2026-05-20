@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -33,7 +33,7 @@ namespace S7CommPlusDriver
         /// conn.ExploreASAlarms(ref Alarms, ci.LCID);
         /// foreach (var al in Alarms)
         /// {
-        ///     Console.WriteLine(al.Value.ToString());
+        ///     System.Diagnostics.Trace.WriteLine(al.Value.ToString());
         /// }
         /// </summary>
         /// <param name="Alarms">Dictionary <ulong, AlarmData> where the results are written to. Key is used as address.</param>
@@ -90,17 +90,17 @@ namespace S7CommPlusDriver
                     }
                     else
                     {
-                        Console.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
+                        System.Diagnostics.Trace.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
                     }
                 }
                 else
                 {
-                    Console.WriteLine("ExploreASAlarms(): stais = null");
+                    System.Diagnostics.Trace.WriteLine("ExploreASAlarms(): stais = null");
                 }
             }
             else
             {
-                Console.WriteLine("ExploreASAlarms(): staiclass = null");
+                System.Diagnostics.Trace.WriteLine("ExploreASAlarms(): staiclass = null");
             }
             #endregion
 
@@ -160,12 +160,12 @@ namespace S7CommPlusDriver
                         }
                         else
                         {
-                            Console.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
+                            System.Diagnostics.Trace.WriteLine("ExploreASAlarms(): stais is not ValueBlobSparseArray");
                         }
                     }
                     else
                     {
-                        Console.WriteLine("ExploreASAlarms(): stais = null");
+                        System.Diagnostics.Trace.WriteLine("ExploreASAlarms(): stais = null");
                     }
                 }
             }
@@ -342,7 +342,7 @@ namespace S7CommPlusDriver
         /// conn.GetActiveAlarms(out alarmList, ci.LCID);
         /// foreach (var a in alarmList)
         /// {
-        ///     Console.WriteLine(a.ToString());
+        ///     System.Diagnostics.Trace.WriteLine(a.ToString());
         /// }
         /// </summary>
         /// <param name="alarmList">Contains the alarms, empty if there is no active alarm</param>

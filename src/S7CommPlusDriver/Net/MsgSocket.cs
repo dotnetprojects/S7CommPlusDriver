@@ -1,7 +1,7 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
- * 
+ *
  * Based on Snap7 (Sharp7.cs) by Davide Nardella licensed under LGPL
  *
  /****************************************************************************/
@@ -9,11 +9,10 @@
 
 using System;
 using System.Net.Sockets;
-using System.Threading;
 
 namespace S7CommPlusDriver
 {
-    // 
+    //
     class MsgSocket
 	{
 		private Socket TCPSocket;
@@ -44,12 +43,14 @@ namespace S7CommPlusDriver
 		{
 			TCPSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 			TCPSocket.NoDelay = true;
+			TCPSocket.ReceiveTimeout = _ReadTimeout;
+			TCPSocket.SendTimeout = _WriteTimeout;
 		}
 
 		private void TCPPing(string Host, int Port)
 		{
 			// To Ping the PLC an Asynchronous socket is used rather then an ICMP packet.
-			// This allows the use also across Internet and Firewalls (obviously the port must be opened)           
+			// This allows the use also across Internet and Firewalls (obviously the port must be opened)
 			LastError = 0;
 			Socket PingSocket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
 			try
@@ -74,7 +75,7 @@ namespace S7CommPlusDriver
 			LastError = 0;
 			if (!Connected)
 			{
-				// TWI: TCPPing rausgenommen, stört bei Wireshark Analyse
+				// TWI: TCPPing rausgenommen, st�rt bei Wireshark Analyse
 				//TCPPing(Host, Port);
 				if (LastError == 0)
 					try
@@ -90,59 +91,40 @@ namespace S7CommPlusDriver
 			return LastError;
 		}
 
-		private int WaitForData(int Size, int Timeout)
-		{
-			bool Expired = false;
-			int SizeAvail;
-			int Elapsed = Environment.TickCount;
-			LastError = 0;
-			try
-			{
-				SizeAvail = TCPSocket.Available;
-				while ((SizeAvail < Size) && (!Expired))
-				{
-					Thread.Sleep(2);
-					SizeAvail = TCPSocket.Available;
-					Expired = Environment.TickCount - Elapsed > Timeout;
-					// If timeout we clean the buffer
-					if (Expired && (SizeAvail > 0))
-						try
-						{
-							byte[] Flush = new byte[SizeAvail];
-							TCPSocket.Receive(Flush, 0, SizeAvail, SocketFlags.None);
-						}
-						catch { }
-				}
-			}
-			catch
-			{
-				LastError = S7Consts.errTCPDataReceive;
-			}
-			if (Expired)
-			{
-				LastError = S7Consts.errTCPDataReceive;
-			}
-			return LastError;
-		}
-
 		public int Receive(byte[] Buffer, int Start, int Size)
 		{
-
-			int BytesRead = 0;
-			LastError = WaitForData(Size, _ReadTimeout);
-			if (LastError == 0)
+			int bytesReadTotal = 0;
+			LastError = 0;
+			if (!Connected)
+			{
+				LastError = S7Consts.errTCPNotConnected;
+				return LastError;
+			}
+			while (LastError == 0 && bytesReadTotal < Size)
 			{
 				try
 				{
-					BytesRead = TCPSocket.Receive(Buffer, Start, Size, SocketFlags.None);
+					var bytesRead = TCPSocket.Receive(Buffer, Start + bytesReadTotal, Size - bytesReadTotal, SocketFlags.None);
+					if (bytesRead == 0)
+					{
+						LastError = S7Consts.errTCPConnectionReset;
+						Close();
+					}
+					else
+					{
+						bytesReadTotal += bytesRead;
+					}
+				}
+				catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+				{
+					LastError = S7Consts.errTCPReceiveTimeout;
 				}
 				catch
 				{
 					LastError = S7Consts.errTCPDataReceive;
 				}
-				if (BytesRead == 0) // Connection Reset by the peer
+				if (LastError != 0)
 				{
-					LastError = S7Consts.errTCPDataReceive;
 					Close();
 				}
 			}
@@ -152,9 +134,19 @@ namespace S7CommPlusDriver
 		public int Send(byte[] Buffer, int Size)
 		{
 			LastError = 0;
+			if (!Connected)
+			{
+				LastError = S7Consts.errTCPNotConnected;
+				return LastError;
+			}
 			try
 			{
 				int BytesSent = TCPSocket.Send(Buffer, Size, SocketFlags.None);
+			}
+			catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
+			{
+				LastError = S7Consts.errTCPSendTimeout;
+				Close();
 			}
 			catch
 			{

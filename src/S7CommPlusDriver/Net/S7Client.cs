@@ -1,7 +1,7 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
- * 
+ *
  * Based on Snap7 (Sharp7.cs) by Davide Nardella licensed under LGPL
  *
  /****************************************************************************/
@@ -36,7 +36,7 @@ namespace S7CommPlusDriver
 		// ISO Connection Request telegram (contains also ISO Header and COTP Header)
 		byte[] ISO_CR = {
 			// TPKT (RFC1006 Header)
-			0x03, // RFC 1006 ID (3) 
+			0x03, // RFC 1006 ID (3)
 			0x00, // Reserved, always 0
 			0x00, // High part of packet lenght (entire frame, payload and TPDU included)
 			0x24, // Low part of packet lenght (entire frame, payload and TPDU included)
@@ -82,13 +82,13 @@ namespace S7CommPlusDriver
 		DateTime m_DateTimeStarted;
 		Native.SSL_CTX_keylog_cb_func m_keylog_cb;
 
-		// OpenSSL möchte Daten auf den Socket aussenden.
+		// OpenSSL m�chte Daten auf den Socket aussenden.
 		public void WriteData(byte[] pData, int dataLength)
 		{
 			// SSL fordert Daten zum Absenden an
-			// TODO: Was ist, wenn SSL Daten verschicken möchte, die größer als eine TPDU sind?
-			// Bei großen Zertifikaten oder ähnlichem? Fragmentierung hier?
-			// Console.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
+			// TODO: Was ist, wenn SSL Daten verschicken m�chte, die gr��er als eine TPDU sind?
+			// Bei gro�en Zertifikaten oder �hnlichem? Fragmentierung hier?
+			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
 			byte[] sendData = new byte[dataLength];
 			Array.Copy(pData, sendData, dataLength);
 			SendIsoPacket(sendData);
@@ -100,14 +100,14 @@ namespace S7CommPlusDriver
 			// Netzwerk meldet eintreffende Daten
 			byte[] buf = new byte[8192];
 			int bytesRead = m_sslconn.Receive(ref buf, buf.Length);
-			// Console.WriteLine("S7Client - OpenSSL OnDataAvailable: bytesRead=" + bytesRead);
+			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL OnDataAvailable: bytesRead=" + bytesRead);
 			byte[] readData = new byte[bytesRead];
 			Array.Copy(buf, readData, bytesRead);
 			OnDataReceived?.Invoke(readData, bytesRead);
 		}
 
-		// OpenSSL Key Callback Funktion. Gibt die ausgehandelden privaten Schlüssel aus. Kann beispielsweise
-		// in eine Wireshark Aufzeichnung eingefügt werden um dort die TLS Kommunikation zu entschlüsseln.
+		// OpenSSL Key Callback Funktion. Gibt die ausgehandelden privaten Schl�ssel aus. Kann beispielsweise
+		// in eine Wireshark Aufzeichnung eingef�gt werden um dort die TLS Kommunikation zu entschl�sseln.
 		public void SSL_CTX_keylog_cb(IntPtr ssl, string line)
 		{
 			string filename = "key_" + m_DateTimeStarted.ToString("yyyyMMdd_HHmmss") + ".log";
@@ -125,16 +125,16 @@ namespace S7CommPlusDriver
 			try
 			{
 				ret = Native.OPENSSL_init_ssl(0, IntPtr.Zero); // returns 1 on success or 0 on error
-				if (ret != 1) 
+				if (ret != 1)
 				{
 					return S7Consts.errOpenSSL;
 				}
 				m_ptr_ssl_method = Native.ExpectNonNull(Native.TLS_client_method());
 				m_ptr_ctx = Native.ExpectNonNull(Native.SSL_CTX_new(m_ptr_ssl_method));
-				// TLS 1.3 forcieren, da wegen TLS on IsoOnTCP bekannt sein muss, um wie viele Bytes sich die verschlüsselten
-				// Daten verlängern um die Pakete auf S7CommPlus-Ebene entsprechend zu fragmentieren.
-				// Die Verlängerung geschieht z.B. durch Padding und HMAC. Bei TLS 1.3 existiert mit GCM kein Padding und verlängert sich immer
-				// um 16 Bytes. Da auch TLS_CHACHA20_POLY1305_SHA256 zu den TLS 1.3  CipherSuite zählt, explizit die anderen setzen.
+				// TLS 1.3 forcieren, da wegen TLS on IsoOnTCP bekannt sein muss, um wie viele Bytes sich die verschl�sselten
+				// Daten verl�ngern um die Pakete auf S7CommPlus-Ebene entsprechend zu fragmentieren.
+				// Die Verl�ngerung geschieht z.B. durch Padding und HMAC. Bei TLS 1.3 existiert mit GCM kein Padding und verl�ngert sich immer
+				// um 16 Bytes. Da auch TLS_CHACHA20_POLY1305_SHA256 zu den TLS 1.3  CipherSuite z�hlt, explizit die anderen setzen.
 				Native.SSL_CTX_ctrl(m_ptr_ctx, Native.SSL_CTRL_SET_MIN_PROTO_VERSION, Native.TLS1_3_VERSION, IntPtr.Zero);
 				ret = Native.SSL_CTX_set_ciphersuites(m_ptr_ctx, "TLS_AES_256_GCM_SHA384:TLS_AES_128_GCM_SHA256");
 				if (ret != 1)
@@ -152,7 +152,7 @@ namespace S7CommPlusDriver
 				}
 
 				m_SslActive = true;
-			} 
+			}
 			catch
 			{
 				return S7Consts.errOpenSSL;
@@ -175,7 +175,7 @@ namespace S7CommPlusDriver
 			m_runThread.Start();
 		}
 
-		// Der Task der kontinuierlich ausgeführt wird
+		// Der Task der kontinuierlich ausgef�hrt wird
 		private void RunThread()
 		{
 			int Length;
@@ -184,7 +184,7 @@ namespace S7CommPlusDriver
 				// Versuchen zu lesen
 				_LastError = 0;
 				Length = RecvIsoPacket();
-				// TODO: Hier nur den Payload zurückgeben
+				// TODO: Hier nur den Payload zur�ckgeben
 				if (Length > 0) {
 					byte[] Buffer = new byte[Length - TPKT_ISO.Length];
 					Array.Copy(PDU, TPKT_ISO.Length, Buffer, 0, Length - TPKT_ISO.Length);
@@ -228,17 +228,15 @@ namespace S7CommPlusDriver
 		private byte[] RemoteTSAP_S;
 		private byte LastPDUType;
 		private byte[] PDU = new byte[2048];
-		private MsgSocket Socket = null;
+		private IS7Transport Socket = null;
+		private readonly Func<IS7Transport> _transportFactory;
 		private int Time_ms = 0;
 
 		private void CreateSocket()
 		{
 			try
 			{
-				Socket = new MsgSocket();
-				Socket.ConnectTimeout = _ConnTimeout;
-				Socket.ReadTimeout = _RecvTimeout;
-				Socket.WriteTimeout = _SendTimeout;
+				Socket = _transportFactory();
 			}
 			catch
 			{
@@ -250,7 +248,7 @@ namespace S7CommPlusDriver
 			if (_LastError == 0)
 				try
 				{
-					_LastError = Socket.Connect(IPAddress, _PLCPort);
+					_LastError = Socket.Connect(IPAddress, _PLCPort, _ConnTimeout, _RecvTimeout, _SendTimeout);
 				}
 				catch
 				{
@@ -340,7 +338,7 @@ namespace S7CommPlusDriver
 						RecvPacket(PDU, 4, 3); // Skip remaining 3 bytes and Done is still false
 					else
 					{
-						// TODO: Größe korrekt prüfen
+						// TODO: Gr��e korrekt pr�fen
 						//if ((Size > _PduSizeRequested + IsoHSize) || (Size < MinPduSize))
 						//	_LastError = S7Consts.errIsoInvalidPDU;
 						//else
@@ -351,8 +349,8 @@ namespace S7CommPlusDriver
 			if (_LastError == 0)
 			{
 				RecvPacket(PDU, 4, 3); // Skip remaining 3 COTP bytes
-				LastPDUType = PDU[5];   // Stores PDU Type, we need it 
-										// Receives the S7 Payload          
+				LastPDUType = PDU[5];   // Stores PDU Type, we need it
+										// Receives the S7 Payload
 				RecvPacket(PDU, 7, Size - IsoHSize);
 			}
 			if (_LastError == 0)
@@ -375,7 +373,7 @@ namespace S7CommPlusDriver
 			Array.Copy(ISO_CR, isocon, 20);
 			Array.Copy(RemoteTSAP_S, 0, isocon, 20, RemoteTSAP_S.Length);
 
-			// Sends the connection request telegram      
+			// Sends the connection request telegram
 			SendPacket(isocon);
 			if (_LastError == 0)
 			{
@@ -406,7 +404,13 @@ namespace S7CommPlusDriver
 		#region [Class Control]
 
 		public S7Client()
+			: this(() => new SocketS7Transport())
 		{
+		}
+
+		internal S7Client(Func<IS7Transport> transportFactory)
+		{
+			_transportFactory = transportFactory ?? throw new ArgumentNullException(nameof(transportFactory));
 			m_DateTimeStarted = DateTime.Now;
 			CreateSocket();
 		}
@@ -423,6 +427,8 @@ namespace S7CommPlusDriver
 			int Elapsed = Environment.TickCount;
 			if (!Connected)
 			{
+				Socket?.Close();
+				CreateSocket();
 				TCPConnect(); // First stage : TCP Connection
 				if (_LastError == 0)
 				{
@@ -457,12 +463,23 @@ namespace S7CommPlusDriver
 
 		public int Disconnect()
 		{
-			m_runThread_DoStop = true;
-			m_runThread?.Join();
+			return Disconnect(DefaultTimeout);
+		}
 
-			Socket.Close();
-			
-			return 0;
+		public int Disconnect(int timeoutMilliseconds)
+		{
+			m_runThread_DoStop = true;
+			Socket?.Close();
+			if (m_runThread != null && m_runThread.IsAlive)
+			{
+				if (!m_runThread.Join(Math.Max(1, timeoutMilliseconds)))
+				{
+					_LastError = S7Consts.errCliDestroying;
+				}
+			}
+			SslDeactivate();
+
+			return _LastError;
 		}
 
 		public int GetParam(Int32 ParamNumber, ref int Value)

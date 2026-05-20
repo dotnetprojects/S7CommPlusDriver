@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Text;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 
 namespace S7CommPlusDriver.ClientApi
 {
@@ -44,12 +45,12 @@ namespace S7CommPlusDriver.ClientApi
             int res;
             if (error != 0)
             {
-                Console.WriteLine("CheckErrorAndType(): error=" + error);
+                Trace.WriteLine("CheckErrorAndType(): error=" + error);
                 res = -1;
             }
             else if (valueObj.GetType() != checkType)
             {
-                Console.WriteLine("CheckErrorAndType(): Type of value is not as excpected. Expected: " + checkType + " Received: " + valueObj.GetType() + ".");
+                Trace.WriteLine("CheckErrorAndType(): Type of value is not as excpected. Expected: " + checkType + " Received: " + valueObj.GetType() + ".");
                 res = -1;
             }
             else
@@ -177,7 +178,7 @@ namespace S7CommPlusDriver.ClientApi
             get { return m_Value; }
             set { m_Value = value; } // TODO: check if fits in ASCII area, include the encoding?
         }
-        
+
         public PlcTagChar(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
 
         public override void ProcessReadResult(object valueObj, ulong error)
@@ -224,7 +225,7 @@ namespace S7CommPlusDriver.ClientApi
         {
             get { return m_Value; }
             set { m_Value = value; }
-        } 
+        }
 
         public PlcTagWord(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
 
@@ -261,7 +262,7 @@ namespace S7CommPlusDriver.ClientApi
         {
             get { return m_Value; }
             set { m_Value = value; }
-        } 
+        }
 
         public PlcTagInt(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
 
@@ -298,7 +299,7 @@ namespace S7CommPlusDriver.ClientApi
         {
             get { return m_Value; }
             set { m_Value = value; }
-        } 
+        }
 
         public PlcTagDWord(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
 
@@ -478,7 +479,7 @@ namespace S7CommPlusDriver.ClientApi
             }
 
             set
-            { 
+            {
                 if (value < 86400000)
                 {
                     m_Value = value;
@@ -548,7 +549,7 @@ namespace S7CommPlusDriver.ClientApi
             get { return m_Value; }
             set { m_Value = value; }
         }
-        
+
         public PlcTagTime(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
 
         public override void ProcessReadResult(object valueObj, ulong error)
@@ -630,7 +631,7 @@ namespace S7CommPlusDriver.ClientApi
         public ushort TimeValue
         {
             get
-            { 
+            {
                 return m_TimeValue;
             }
             set
@@ -954,7 +955,7 @@ namespace S7CommPlusDriver.ClientApi
         {
             get { return m_Value; }
             set { m_Value = value; }
-        } 
+        }
 
         public PlcTagAny(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype)
         {
@@ -1327,7 +1328,7 @@ namespace S7CommPlusDriver.ClientApi
             return ResultString(this, Value.ToString());
         }
     }
-  
+
     public class PlcTagWString : PlcTag
     {
         private string m_Value;
@@ -1626,7 +1627,7 @@ namespace S7CommPlusDriver.ClientApi
                 // 6: MINUTE, USInt
                 // 7: SECOND, USInt
                 // 8, 9, 10, 11: NANOSECOND, UDInt
-                
+
                 // Use the default timestamp, or refresh it from browsing the plc, or from reading dtl first
                 DTLInterfaceTimestamp = struct_val.PackedStructInterfaceTimestamp;
 
@@ -1642,8 +1643,8 @@ namespace S7CommPlusDriver.ClientApi
                         Quality = PlcTagQC.TAG_QUALITY_GOOD;
                     }
                     else
-                    { 
-                        Quality = PlcTagQC.TAG_QUALITY_BAD; 
+                    {
+                        Quality = PlcTagQC.TAG_QUALITY_BAD;
                     }
                 }
                 else

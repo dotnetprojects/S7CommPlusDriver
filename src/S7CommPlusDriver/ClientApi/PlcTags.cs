@@ -1,5 +1,7 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+
+using System.Diagnostics;
 
 namespace S7CommPlusDriver.ClientApi
 {
@@ -30,7 +32,7 @@ namespace S7CommPlusDriver.ClientApi
             }
             else
             {
-                Console.WriteLine("ReadTags: Error res=" + res);
+                Trace.WriteLine("ReadTags: Error res=" + res);
             }
             return res;
         }
@@ -61,7 +63,7 @@ namespace S7CommPlusDriver.ClientApi
             }
             else
             {
-                Console.WriteLine("WriteTags: Error res=" + res);
+                Trace.WriteLine("WriteTags: Error res=" + res);
             }
             return res;
         }
@@ -268,7 +270,7 @@ namespace S7CommPlusDriver.ClientApi
                     return new PlcTagUInt(name, address, softdatatype);
 
                 default:
-                    Console.WriteLine("ERROR: Unknown softdatatype=" + softdatatype.ToString() + " for variable= " + name);
+                    Trace.WriteLine("ERROR: Unknown softdatatype=" + softdatatype.ToString() + " for variable= " + name);
                     return null;
             }
         }

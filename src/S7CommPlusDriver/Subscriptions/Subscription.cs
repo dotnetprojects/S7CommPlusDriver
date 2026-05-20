@@ -1,4 +1,4 @@
-﻿#region License
+#region License
 /******************************************************************************
  * S7CommPlusDriver
  *
@@ -107,7 +107,7 @@ namespace S7CommPlusDriver
             var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (createObjRes == null)
             {
-                Console.WriteLine("Subscription - Create: CreateObjectResponse with Error!");
+                System.Diagnostics.Trace.WriteLine("Subscription - Create: CreateObjectResponse with Error!");
                 return S7Consts.errIsoInvalidPDU;
             }
 
@@ -120,7 +120,7 @@ namespace S7CommPlusDriver
             {
                 // If creating a subscription fails, the object is still created and should be deleted.
                 // At least deleting it, gives no error.
-                Console.WriteLine(String.Format("Subscription - Create: Failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue));
+                System.Diagnostics.Trace.WriteLine(String.Format("Subscription - Create: Failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue));
                 res = S7Consts.errCliInvalidParams;
             }
             return res;
@@ -184,7 +184,7 @@ namespace S7CommPlusDriver
 
             for (int i = 1; i <= untilNumberOfNotifications; i++)
             {
-                Console.WriteLine(Environment.NewLine + "WaitForNotifications(): *** Loop #" + i.ToString() + " ***");
+                System.Diagnostics.Trace.WriteLine(Environment.NewLine + "WaitForNotifications(): *** Loop #" + i.ToString() + " ***");
                 m_LastError = 0;
                 WaitForNewS7plusReceived(5000);
                 if (m_LastError != 0)
@@ -195,16 +195,16 @@ namespace S7CommPlusDriver
                 var noti = Notification.DeserializeFromPdu(m_ReceivedPDU);
                 if (noti == null)
                 {
-                    Console.WriteLine("Notification == null!");
+                    System.Diagnostics.Trace.WriteLine("Notification == null!");
                     return S7Consts.errIsoInvalidPDU;
                 }
                 else
                 {
                     Console.Write("Notification: CreditTick=" + noti.NotificationCreditTick + " SequenceNumber=" + noti.NotificationSequenceNumber);
-                    Console.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03} ValuesCount={2}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond, noti.Values.Count));
+                    System.Diagnostics.Trace.WriteLine(String.Format(" PLC-Timestamp={0}.{1:D03} ValuesCount={2}", noti.Add1Timestamp.ToString(), noti.Add1Timestamp.Millisecond, noti.Values.Count));
                     foreach(var v in noti.Values)
                     {
-                        Console.WriteLine("---> key=" + v.Key + " value=" + v.Value.ToString());
+                        System.Diagnostics.Trace.WriteLine("---> key=" + v.Key + " value=" + v.Value.ToString());
                         // Error value in tags expects a 64 bit value, in subscriptions it's only 1 byte (for it's not known what all values are for -> TODO)
                         m_SubscribedTags[v.Key].ProcessReadResult(v.Value, 0);
                     }
@@ -213,7 +213,7 @@ namespace S7CommPlusDriver
                     {
                         // CreditTick in Notification is only one byte
                         m_NextCreditLimit = (short)((m_NextCreditLimit + creditLimitStep) % 255);
-                        Console.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_NextCreditLimit.ToString());
+                        System.Diagnostics.Trace.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_NextCreditLimit.ToString());
                         SubscriptionSetCreditLimit(m_NextCreditLimit);
                     }
                 }
@@ -226,7 +226,7 @@ namespace S7CommPlusDriver
             int res;
             m_SubscribedTags.Clear();
             m_SubscriptionObjectId = 0;
-            Console.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SessionId2={0:X8}", SessionId2));
+            System.Diagnostics.Trace.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SessionId2={0:X8}", SessionId2));
             res = DeleteObject(SessionId2);
             return res;
         }
