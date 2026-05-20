@@ -20,6 +20,7 @@ namespace S7CommPlusDriver
         public const int None = 0;
         public const int NativeObjects_theASRoot_Rid = 1;
         public const int NativeObjects_thePLCProgram_Rid = 3;
+        public const int NativeObjects_theAlarmSubsystem_Rid = 8;
         public const int NativeObjects_theCPUProxy_Rid = 49;
         public const int NativeObjects_theCPUCommon_Rid = 50;
         public const int NativeObjects_theCPUexecUnit_Rid = 52;
@@ -125,6 +126,7 @@ namespace S7CommPlusDriver
         public const int AlarmSubscriptionRef_AlarmDomain = 2659;
         public const int AlarmSubscriptionRef_itsAlarmSubsystem = 2660;
         public const int AlarmSubscriptionRef_Class_Rid = 2662;
+        public const int AlarmSubsystem_itsUpdateRelevantDAI = 2667;
         public const int DAI_CPUAlarmID = 2670;
         public const int DAI_AllStatesInfo = 2671;
         public const int DAI_AlarmDomain = 2672;
