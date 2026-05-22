@@ -413,10 +413,10 @@ namespace S7CommPlusDriver
         {
             return ((ulong)(RelationId) << 32) | ((ulong)(MultipleStai.Alid) << 16);
         }
-        
+
         public uint RelationId;
 
-        public AlarmsMultipleStai MultipleStai;  
+        public AlarmsMultipleStai MultipleStai;
         public AlarmsAlarmTexts AlText = new AlarmsAlarmTexts();
 
         public int Deserialize(Stream buffer)
@@ -432,7 +432,7 @@ namespace S7CommPlusDriver
             string s = "";
             s += "<AlarmData>" + Environment.NewLine;
             s += "<CpuAlarmId>" + GetCpuAlarmId().ToString() + "</CpuAlarmId>" + Environment.NewLine;
-            s += "<RelationId>" + RelationId.ToString() + Environment.NewLine +"</RelationId>" + Environment.NewLine;
+            s += "<RelationId>" + RelationId.ToString() + Environment.NewLine + "</RelationId>" + Environment.NewLine;
             s += "<MultipleStai>" + Environment.NewLine + MultipleStai.ToString() + "</MultipleStai>" + Environment.NewLine;
             s += "<AlText>" + Environment.NewLine;
             s += "<Infotext>" + AlText.Infotext + "</Infotext>" + Environment.NewLine;

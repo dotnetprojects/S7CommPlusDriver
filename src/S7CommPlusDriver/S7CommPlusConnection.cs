@@ -392,7 +392,8 @@ namespace S7CommPlusDriver
         /// <returns></returns>
         public int Connect(string address, string password = "", string username = "", int timeoutMs = 5000)
         {
-            if (timeoutMs > 0) {
+            if (timeoutMs > 0)
+            {
                 m_ReadTimeout = timeoutMs;
             }
 
@@ -409,7 +410,7 @@ namespace S7CommPlusDriver
 
             #region Step 1: Unencrypted InitSSL Request / Response
 
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
+            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0, 0);
             res = SendS7plusFunctionObject(sslReq);
             if (res != 0)
             {
@@ -520,7 +521,8 @@ namespace S7CommPlusDriver
 
             #region Step 6: Password
             res = legitimate(serverSession, password, username);
-            if (res != 0) {
+            if (res != 0)
+            {
                 m_client.Disconnect();
                 return res;
             }
@@ -605,7 +607,7 @@ namespace S7CommPlusDriver
 
                 getMultiVarReq.AddressList.Clear();
                 count_perChunk = 0;
-                while (count_perChunk < m_CommRessources.TagsPerReadRequestMax  && (chunk_startIndex + count_perChunk) < addresslist.Count)
+                while (count_perChunk < m_CommRessources.TagsPerReadRequestMax && (chunk_startIndex + count_perChunk) < addresslist.Count)
                 {
                     getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + count_perChunk]);
                     count_perChunk++;
@@ -1402,9 +1404,9 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            foreach(var obj in exploreRes.Objects)
+            foreach (var obj in exploreRes.Objects)
             {
-                foreach(var att in obj.Attributes)
+                foreach (var att in obj.Attributes)
                 {
                     switch (att.Key)
                     {
