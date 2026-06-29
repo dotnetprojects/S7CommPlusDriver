@@ -27,6 +27,16 @@ namespace S7CommPlusDriver.Tests
         public int TisWatchSubscriptionDeleteCount { get; private set; }
         public int LastActiveAlarmsLanguageId { get; private set; }
         public string LastErrorDetail { get; set; } = "";
+        public List<uint> CreatedTagSubscriptionIds { get; } = new List<uint>();
+        public List<uint> CreatedAlarmSubscriptionIds { get; } = new List<uint>();
+        public List<uint> CreatedTisWatchSubscriptionIds { get; } = new List<uint>();
+        public List<uint> WaitedTagSubscriptionIds { get; } = new List<uint>();
+        public List<uint> WaitedAlarmSubscriptionIds { get; } = new List<uint>();
+        public List<uint> WaitedTisWatchSubscriptionIds { get; } = new List<uint>();
+        public List<uint> DeletedTagSubscriptionIds { get; } = new List<uint>();
+        public List<uint> DeletedAlarmSubscriptionIds { get; } = new List<uint>();
+        public List<uint> DeletedTisWatchSubscriptionIds { get; } = new List<uint>();
+        private uint _nextSubscriptionObjectId = 1;
 
         public Func<S7CommPlusClientOptions, int>? ConnectHandler { get; set; }
         public Func<int, int>? DisconnectHandler { get; set; }
@@ -44,12 +54,15 @@ namespace S7CommPlusDriver.Tests
         public Func<List<ItemAddress>, List<PValue>, (int Error, List<ulong> Errors)>? WriteHandler { get; set; }
         public Func<List<PlcTag>, ushort, short, int>? CreateTagSubscriptionHandler { get; set; }
         public Func<int, short, (int Error, List<Notification> Notifications)>? WaitForTagSubscriptionHandler { get; set; }
+        public Func<uint, int, short, (int Error, List<Notification> Notifications)>? WaitForTagSubscriptionByIdHandler { get; set; }
         public Func<int>? DeleteTagSubscriptionHandler { get; set; }
         public Func<uint[], short, int>? CreateAlarmSubscriptionHandler { get; set; }
         public Func<int, short, (int Error, List<Notification> Notifications)>? WaitForAlarmSubscriptionHandler { get; set; }
+        public Func<uint, int, short, (int Error, List<Notification> Notifications)>? WaitForAlarmSubscriptionByIdHandler { get; set; }
         public Func<int>? DeleteAlarmSubscriptionHandler { get; set; }
         public Func<S7CommPlusTisWatchRequest, int>? CreateTisWatchSubscriptionHandler { get; set; }
         public Func<int, (int Error, List<S7CommPlusTisWatchNotification> Notifications)>? WaitForTisWatchSubscriptionHandler { get; set; }
+        public Func<uint, int, (int Error, List<S7CommPlusTisWatchNotification> Notifications)>? WaitForTisWatchSubscriptionByIdHandler { get; set; }
         public Func<int>? DeleteTisWatchSubscriptionHandler { get; set; }
         public string LastTisWatchDiagnostic { get; set; } = "";
 
@@ -173,66 +186,96 @@ namespace S7CommPlusDriver.Tests
             return result.Error;
         }
 
-        public int CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit)
+        public int CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit, out uint subscriptionObjectId)
         {
+            subscriptionObjectId = 0;
             TagSubscriptionCreateCount++;
-            return CreateTagSubscriptionHandler?.Invoke(tags, cycleTimeMilliseconds, initialCreditLimit) ?? 0;
+            var result = CreateTagSubscriptionHandler?.Invoke(tags, cycleTimeMilliseconds, initialCreditLimit) ?? 0;
+            if (result == 0)
+            {
+                subscriptionObjectId = _nextSubscriptionObjectId++;
+                CreatedTagSubscriptionIds.Add(subscriptionObjectId);
+            }
+            return result;
         }
 
-        public int WaitForTagSubscriptionNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
+        public int WaitForTagSubscriptionNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
         {
             TagSubscriptionWaitCount++;
-            var result = WaitForTagSubscriptionHandler?.Invoke(timeoutMilliseconds, creditLimitStep)
+            WaitedTagSubscriptionIds.Add(subscriptionObjectId);
+            var result = WaitForTagSubscriptionByIdHandler?.Invoke(subscriptionObjectId, timeoutMilliseconds, creditLimitStep)
+                ?? WaitForTagSubscriptionHandler?.Invoke(timeoutMilliseconds, creditLimitStep)
                 ?? (S7Consts.errCliJobTimeout, new List<Notification>());
             notifications = result.Notifications;
             return result.Error;
         }
 
-        public int DeleteTagSubscription()
+        public int DeleteTagSubscription(uint subscriptionObjectId)
         {
             TagSubscriptionDeleteCount++;
+            DeletedTagSubscriptionIds.Add(subscriptionObjectId);
             return DeleteTagSubscriptionHandler?.Invoke() ?? 0;
         }
 
-        public int CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit)
+        public int CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit, out uint subscriptionObjectId)
         {
+            subscriptionObjectId = 0;
             AlarmSubscriptionCreateCount++;
-            return CreateAlarmSubscriptionHandler?.Invoke(languageIds, initialCreditLimit) ?? 0;
+            var result = CreateAlarmSubscriptionHandler?.Invoke(languageIds, initialCreditLimit) ?? 0;
+            if (result == 0)
+            {
+                subscriptionObjectId = _nextSubscriptionObjectId++;
+                CreatedAlarmSubscriptionIds.Add(subscriptionObjectId);
+            }
+            return result;
         }
 
-        public int WaitForAlarmNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
+        public int WaitForAlarmNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
         {
             AlarmSubscriptionWaitCount++;
-            var result = WaitForAlarmSubscriptionHandler?.Invoke(timeoutMilliseconds, creditLimitStep)
+            WaitedAlarmSubscriptionIds.Add(subscriptionObjectId);
+            var result = WaitForAlarmSubscriptionByIdHandler?.Invoke(subscriptionObjectId, timeoutMilliseconds, creditLimitStep)
+                ?? WaitForAlarmSubscriptionHandler?.Invoke(timeoutMilliseconds, creditLimitStep)
                 ?? (S7Consts.errCliJobTimeout, new List<Notification>());
             notifications = result.Notifications;
             return result.Error;
         }
 
-        public int DeleteAlarmSubscription()
+        public int DeleteAlarmSubscription(uint subscriptionObjectId)
         {
             AlarmSubscriptionDeleteCount++;
+            DeletedAlarmSubscriptionIds.Add(subscriptionObjectId);
             return DeleteAlarmSubscriptionHandler?.Invoke() ?? 0;
         }
 
-        public int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request)
+        public int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId)
         {
+            subscriptionObjectId = 0;
             TisWatchSubscriptionCreateCount++;
-            return CreateTisWatchSubscriptionHandler?.Invoke(request) ?? 0;
+            var result = CreateTisWatchSubscriptionHandler?.Invoke(request) ?? 0;
+            if (result == 0)
+            {
+                subscriptionObjectId = _nextSubscriptionObjectId++;
+                CreatedTisWatchSubscriptionIds.Add(subscriptionObjectId);
+            }
+            return result;
         }
 
-        public int WaitForTisWatchNotifications(int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications)
+        public int WaitForTisWatchNotifications(uint subscriptionObjectId, int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications)
         {
             TisWatchSubscriptionWaitCount++;
-            var result = WaitForTisWatchSubscriptionHandler?.Invoke(timeoutMilliseconds)
+            WaitedTisWatchSubscriptionIds.Add(subscriptionObjectId);
+            var result = WaitForTisWatchSubscriptionByIdHandler?.Invoke(subscriptionObjectId, timeoutMilliseconds)
+                ?? WaitForTisWatchSubscriptionHandler?.Invoke(timeoutMilliseconds)
                 ?? (S7Consts.errCliJobTimeout, new List<S7CommPlusTisWatchNotification>());
             notifications = result.Notifications;
             return result.Error;
         }
 
-        public int DeleteTisWatchSubscription()
+        public int DeleteTisWatchSubscription(uint subscriptionObjectId)
         {
             TisWatchSubscriptionDeleteCount++;
+            DeletedTisWatchSubscriptionIds.Add(subscriptionObjectId);
             return DeleteTisWatchSubscriptionHandler?.Invoke() ?? 0;
         }
     }

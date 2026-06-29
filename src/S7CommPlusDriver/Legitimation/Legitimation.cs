@@ -120,18 +120,11 @@ namespace S7CommPlusDriver
             getVarSubstreamedReq.InObjectId = m_SessionId;
             getVarSubstreamedReq.SessionId = m_SessionId;
             getVarSubstreamedReq.Address = Ids.EffectiveProtectionLevel;
-            int res = SendS7plusFunctionObject(getVarSubstreamedReq);
+            int res = SendS7plusFunctionObjectAndWait(getVarSubstreamedReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var getVarSubstreamedRes = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -178,18 +171,11 @@ namespace S7CommPlusDriver
             getVarSubstreamedReq_challange.InObjectId = m_SessionId;
             getVarSubstreamedReq_challange.SessionId = m_SessionId;
             getVarSubstreamedReq_challange.Address = Ids.ServerSessionRequest;
-            int res = SendS7plusFunctionObject(getVarSubstreamedReq_challange);
+            int res = SendS7plusFunctionObjectAndWait(getVarSubstreamedReq_challange, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -224,18 +210,11 @@ namespace S7CommPlusDriver
             setVariableReq.SessionId = m_SessionId;
             setVariableReq.Address = Ids.Legitimate;
             setVariableReq.Value = new ValueBlob(0, challengeResponse);
-            res = SendS7plusFunctionObject(setVariableReq);
+            res = SendS7plusFunctionObjectAndWait(setVariableReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -310,18 +289,11 @@ namespace S7CommPlusDriver
             getVarSubstreamedReq_challange.InObjectId = m_SessionId;
             getVarSubstreamedReq_challange.SessionId = m_SessionId;
             getVarSubstreamedReq_challange.Address = Ids.ServerSessionRequest;
-            int res = SendS7plusFunctionObject(getVarSubstreamedReq_challange);
+            int res = SendS7plusFunctionObjectAndWait(getVarSubstreamedReq_challange, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var getVarSubstreamedRes_challenge = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -357,18 +329,11 @@ namespace S7CommPlusDriver
             setVariableReq.SessionId = m_SessionId;
             setVariableReq.Address = Ids.ServerSessionResponse;
             setVariableReq.Value = new ValueUSIntArray(challengeResponse);
-            res = SendS7plusFunctionObject(setVariableReq);
+            res = SendS7plusFunctionObjectAndWait(setVariableReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var setVariableResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);

@@ -39,22 +39,30 @@ namespace S7CommPlusDriver
 
         uint m_AlarmSubscriptionRelationId = S7CommPlusProtocolConstants.SubscriptionRelationIdStart;
         uint m_AlarmSubscriptionRefRelationId = S7CommPlusProtocolConstants.AlarmSubscriptionRefRelationIdStart;
-        short m_AlarmNextCreditLimit;
-        uint m_AlarmSubscriptionObjectId;
+        private readonly Dictionary<uint, AlarmSubscriptionState> _subscriptions = new Dictionary<uint, AlarmSubscriptionState>();
+
+        private sealed class AlarmSubscriptionState
+        {
+            public short NextCreditLimit { get; set; }
+        }
 
         public int Create(uint[] languageIds)
         {
-            return Create(languageIds, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimit);
+            return Create(languageIds, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimit, out _);
         }
 
-        public int Create(uint[] languageIds, short initialCreditLimit)
+        public int Create(uint[] languageIds, short initialCreditLimit, out uint subscriptionObjectId)
         {
+            subscriptionObjectId = 0;
             int res;
             languageIds ??= Array.Empty<uint>();
+            var state = new AlarmSubscriptionState { NextCreditLimit = initialCreditLimit };
+            var subscriptionRelationId = m_AlarmSubscriptionRelationId++;
+            var subscriptionRefRelationId = m_AlarmSubscriptionRefRelationId++;
             PObject subsobj = new PObject();
             subsobj.ClassId = Ids.ClassSubscription;
-            subsobj.RelationId = m_AlarmSubscriptionRelationId;
-            subsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("Subscription_" + m_AlarmSubscriptionRelationId.ToString()));
+            subsobj.RelationId = subscriptionRelationId;
+            subsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("Subscription_" + subscriptionRelationId.ToString()));
             subsobj.AddAttribute(Ids.SubscriptionFunctionClassId, new ValueUSInt((byte)SubscriptionFunctionClass.Alarms));
             subsobj.AddAttribute(Ids.SubscriptionMissedSendings, new ValueUInt(0));
             subsobj.AddAttribute(Ids.SubscriptionSubsystemError, new ValueLInt(0));
@@ -65,12 +73,11 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionDelayTime, new ValueUDInt(0));
             subsobj.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
-            m_AlarmNextCreditLimit = initialCreditLimit;
-            subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(m_AlarmNextCreditLimit)); // -1=unlimited, 255 = max
+            subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(state.NextCreditLimit)); // -1=unlimited, 255 = max
             subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(S7CommPlusProtocolConstants.SubscriptionTicksUnlimited));
             PObject asrefsobj = new PObject();
             asrefsobj.ClassId = Ids.AlarmSubscriptionRef_Class_Rid;
-            asrefsobj.RelationId = m_AlarmSubscriptionRefRelationId;
+            asrefsobj.RelationId = subscriptionRefRelationId;
             asrefsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString(S7CommPlusProtocolConstants.AlarmSubscriptionName));
             asrefsobj.AddAttribute(Ids.SubscriptionReferenceMode, new ValueUSInt(S7CommPlusProtocolConstants.AlarmSubscriptionTriggerAndTransmitMode));
             asrefsobj.AddAttribute(Ids.AlarmSubSystem_AlarmDomain, new ValueUIntArray(new ushort[10] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, S7CommPlusProtocolConstants.ValueArrayFlag));
@@ -102,8 +109,8 @@ namespace S7CommPlusDriver
 
             if (createObjRes.ReturnValue == 0)
             {
-                // Save the ObjectId, to modify the existing subscription
-                m_AlarmSubscriptionObjectId = createObjRes.ObjectIds[0];
+                subscriptionObjectId = createObjRes.ObjectIds[0];
+                _subscriptions[subscriptionObjectId] = state;
             }
             else
             {
@@ -118,14 +125,18 @@ namespace S7CommPlusDriver
 
         public int WaitForNotifications(int waitTimeout, out List<Notification> notifications)
         {
-            return WaitForNotifications(waitTimeout, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimitStep, out notifications);
+            return WaitForNotifications(0, waitTimeout, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimitStep, out notifications);
         }
 
-        public int WaitForNotifications(int waitTimeout, short creditLimitStep, out List<Notification> notifications)
+        public int WaitForNotifications(uint subscriptionObjectId, int waitTimeout, short creditLimitStep, out List<Notification> notifications)
         {
             notifications = new List<Notification>();
+            if (!_subscriptions.TryGetValue(subscriptionObjectId, out var state))
+            {
+                return S7Consts.errCliInvalidParams;
+            }
 
-            var result = _requests.WaitNotification(waitTimeout, out var noti);
+            var result = _requests.WaitNotification(subscriptionObjectId, waitTimeout, out var noti);
             if (result != 0)
             {
                 return result;
@@ -133,30 +144,29 @@ namespace S7CommPlusDriver
 
             notifications.Add(noti);
 
-            if (creditLimitStep > 0 && noti.NotificationCreditTick >= m_AlarmNextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
+            if (creditLimitStep > 0 && noti.NotificationCreditTick >= state.NextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
             {
                 // CreditTick in Notification is only one byte
-                m_AlarmNextCreditLimit = (short)((m_AlarmNextCreditLimit + creditLimitStep) % 255);
-                if (m_AlarmNextCreditLimit == 0)
+                state.NextCreditLimit = (short)((state.NextCreditLimit + creditLimitStep) % 255);
+                if (state.NextCreditLimit == 0)
                 {
-                    m_AlarmNextCreditLimit = creditLimitStep;
+                    state.NextCreditLimit = creditLimitStep;
                 }
-                return _requests.SetSubscriptionCreditLimit(m_AlarmSubscriptionObjectId, m_AlarmNextCreditLimit);
+                return _requests.SetSubscriptionCreditLimit(subscriptionObjectId, state.NextCreditLimit);
             }
 
             return 0;
         }
 
-        public int Delete()
+        public int Delete(uint subscriptionObjectId)
         {
             int res;
-            var subscriptionObjectId = m_AlarmSubscriptionObjectId;
-            m_AlarmSubscriptionObjectId = 0;
             if (subscriptionObjectId == 0)
             {
                 return 0;
             }
 
+            _subscriptions.Remove(subscriptionObjectId);
             System.Diagnostics.Trace.WriteLine(String.Format("AlarmSubscriptionDelete: Calling DeleteObject for SubscriptionObjectId={0:X8}", subscriptionObjectId));
             res = _session.DeleteObject(subscriptionObjectId);
             return res;

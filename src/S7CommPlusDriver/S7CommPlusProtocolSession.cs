@@ -35,9 +35,14 @@ namespace S7CommPlusDriver
         private MemoryStream m_ReceivedPDU;
         private MemoryStream m_ReceivedTempPDU;
         private Channel<ReceivedS7PlusPdu> m_ReceivedPDUs = CreateReceiveChannel();
+        private readonly object m_RequestLock = new object();
+        private readonly object m_ReceiveDispatchLock = new object();
+        private readonly object m_NotificationQueueLock = new object();
+        private readonly Dictionary<uint, Queue<Notification>> m_NotificationQueues = new Dictionary<uint, Queue<Notification>>();
 
         private bool m_ReceivedNeedMoreDataForCompletePDU;
         private bool m_NewS7CommPlusReceived;
+        private IS7pRequest m_LastSentRequestForWait;
         private UInt32 m_SessionId;
         private UInt32 m_SessionId2;
         public UInt32 SessionId2
@@ -145,7 +150,10 @@ namespace S7CommPlusDriver
 
         private void WaitForNewS7plusReceived(int Timeout)
         {
-            m_LastError = ReceiveNextS7plusPdu(Timeout, out m_ReceivedPDU);
+            var expectedRequest = m_LastSentRequestForWait;
+            m_LastError = expectedRequest == null
+                ? ReceiveNextS7plusPdu(Timeout, out m_ReceivedPDU)
+                : WaitForExpectedResponse(expectedRequest, Timeout);
             if (m_LastError != 0)
             {
                 Trace.WriteLine("S7CommPlusProtocolSession - WaitForNewS7plusReceived: ERROR: " + S7Client.ErrorText(m_LastError));
@@ -199,10 +207,326 @@ namespace S7CommPlusDriver
             {
                 funcObj.IntegrityId = GetNextIntegrityId(funcObj.FunctionCode);
             }
+            m_LastSentRequestForWait = funcObj;
 
             MemoryStream stream = new MemoryStream();
             funcObj.Serialize(stream);
             return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, funcObj.ProtocolVersion);
+        }
+
+        private int SendS7plusFunctionObjectSerialized(IS7pRequest funcObj)
+        {
+            lock (m_RequestLock)
+            {
+                try
+                {
+                    return SendS7plusFunctionObject(funcObj);
+                }
+                finally
+                {
+                    if (ReferenceEquals(m_LastSentRequestForWait, funcObj))
+                    {
+                        m_LastSentRequestForWait = null;
+                    }
+                }
+            }
+        }
+
+        private int SendS7plusFunctionObjectAndWait(IS7pRequest funcObj, int timeout)
+        {
+            lock (m_RequestLock)
+            {
+                try
+                {
+                    var result = SendS7plusFunctionObject(funcObj);
+                    if (result != 0)
+                    {
+                        return result;
+                    }
+
+                    m_LastError = 0;
+                    return WaitForExpectedResponse(funcObj, timeout);
+                }
+                finally
+                {
+                    if (ReferenceEquals(m_LastSentRequestForWait, funcObj))
+                    {
+                        m_LastSentRequestForWait = null;
+                    }
+                }
+            }
+        }
+
+        private int SendRawS7plusPduAndWait(byte[] sendPduData, int bytesToSend, byte protoVersion, int timeout)
+        {
+            lock (m_RequestLock)
+            {
+                var result = SendS7plusPDUdata(sendPduData, bytesToSend, protoVersion);
+                if (result != 0)
+                {
+                    return result;
+                }
+
+                m_LastSentRequestForWait = null;
+                m_LastError = ReceiveNextS7plusPdu(timeout, out m_ReceivedPDU);
+                if (m_LastError != 0)
+                {
+                    Trace.WriteLine("S7CommPlusProtocolSession - SendRawS7plusPduAndWait: ERROR: " + S7Client.ErrorText(m_LastError));
+                }
+                return m_LastError;
+            }
+        }
+
+        private int WaitForExpectedResponse(IS7pRequest request, int timeout)
+        {
+            var deadline = Environment.TickCount64 + Math.Max(1, timeout);
+            while (Environment.TickCount64 < deadline)
+            {
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - Environment.TickCount64));
+                var result = DispatchOneReceivedPdu(remaining, request, 0, out var responsePdu, out _);
+                if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout)
+                {
+                    continue;
+                }
+                if (result != 0)
+                {
+                    return result;
+                }
+                if (responsePdu != null)
+                {
+                    m_ReceivedPDU = responsePdu;
+                    return 0;
+                }
+            }
+
+            return S7Consts.errCliJobTimeout;
+        }
+
+        private int WaitForNotification(uint subscriptionObjectId, int timeout, out Notification notification)
+        {
+            notification = null;
+            var deadline = Environment.TickCount64 + Math.Max(1, timeout);
+            while (Environment.TickCount64 < deadline)
+            {
+                if (TryDequeueNotification(subscriptionObjectId, out notification))
+                {
+                    return 0;
+                }
+
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - Environment.TickCount64));
+                var result = DispatchOneReceivedPdu(remaining, null, subscriptionObjectId, out _, out notification);
+                if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout)
+                {
+                    continue;
+                }
+                if (result != 0)
+                {
+                    return result;
+                }
+                if (notification != null && (subscriptionObjectId == 0 || NotificationMatches(notification, subscriptionObjectId)))
+                {
+                    return 0;
+                }
+            }
+
+            notification = null;
+            return S7Consts.errCliJobTimeout;
+        }
+
+        private int DispatchOneReceivedPdu(int timeout, IS7pRequest expectedResponse, uint notificationSubscriptionObjectId, out MemoryStream responsePdu, out Notification matchingNotification)
+        {
+            responsePdu = null;
+            matchingNotification = null;
+
+            if (!Monitor.TryEnter(m_ReceiveDispatchLock, timeout))
+            {
+                return S7Consts.errCliJobTimeout;
+            }
+
+            try
+            {
+                var result = ReceiveNextS7plusPdu(timeout, out var pdu);
+                if (result != 0)
+                {
+                    return result;
+                }
+
+                if (TryPeekS7PlusPdu(pdu, out var opcode, out var function, out var sequenceNumber))
+                {
+                    if (opcode == Opcode.Response)
+                    {
+                        if (expectedResponse != null
+                            && function == expectedResponse.FunctionCode
+                            && sequenceNumber == expectedResponse.SequenceNumber)
+                        {
+                            pdu.Position = 0;
+                            responsePdu = pdu;
+                            return 0;
+                        }
+
+                        Trace.WriteLine($"S7CommPlusProtocolSession - Dispatch: discarded unexpected response function=0x{function:X4} seq={sequenceNumber}.");
+                        return 0;
+                    }
+
+                    if (opcode == Opcode.Notification)
+                    {
+                        pdu.Position = 0;
+                        var notification = Notification.DeserializeFromPdu(pdu);
+                        if (notification == null)
+                        {
+                            return S7Consts.errIsoInvalidPDU;
+                        }
+
+                        if (expectedResponse == null
+                            && (notificationSubscriptionObjectId == 0 || NotificationMatches(notification, notificationSubscriptionObjectId)))
+                        {
+                            if (notificationSubscriptionObjectId != 0)
+                            {
+                                EnqueueNotification(notification, notificationSubscriptionObjectId);
+                            }
+                            matchingNotification = notification;
+                            return 0;
+                        }
+
+                        EnqueueNotification(notification);
+                        return 0;
+                    }
+                }
+
+                return 0;
+            }
+            finally
+            {
+                Monitor.Exit(m_ReceiveDispatchLock);
+            }
+        }
+
+        private static bool TryPeekS7PlusPdu(MemoryStream pdu, out byte opcode, out ushort function, out ushort sequenceNumber)
+        {
+            opcode = 0;
+            function = 0;
+            sequenceNumber = 0;
+            if (pdu == null)
+            {
+                return false;
+            }
+
+            var position = pdu.Position;
+            try
+            {
+                pdu.Position = 0;
+                if (pdu.Length < 2)
+                {
+                    return false;
+                }
+
+                S7p.DecodeByte(pdu, out var protocolVersion);
+                if (protocolVersion == ProtocolVersion.SystemEvent)
+                {
+                    return false;
+                }
+
+                S7p.DecodeByte(pdu, out opcode);
+                if (opcode == Opcode.Response)
+                {
+                    if (pdu.Length < 10)
+                    {
+                        return false;
+                    }
+                    S7p.DecodeUInt16(pdu, out _);
+                    S7p.DecodeUInt16(pdu, out function);
+                    S7p.DecodeUInt16(pdu, out _);
+                    S7p.DecodeUInt16(pdu, out sequenceNumber);
+                }
+
+                return opcode == Opcode.Response || opcode == Opcode.Notification;
+            }
+            finally
+            {
+                pdu.Position = position;
+            }
+        }
+
+        private void EnqueueNotification(Notification notification)
+        {
+            EnqueueNotification(notification, 0);
+        }
+
+        private void EnqueueNotification(Notification notification, uint excludedSubscriptionObjectId)
+        {
+            lock (m_NotificationQueueLock)
+            {
+                if (notification.SubscriptionObjectId != excludedSubscriptionObjectId)
+                {
+                    EnqueueNotification(notification.SubscriptionObjectId, notification);
+                }
+                if (notification.P2SubscriptionObjectId != 0 && notification.P2SubscriptionObjectId != notification.SubscriptionObjectId)
+                {
+                    if (notification.P2SubscriptionObjectId != excludedSubscriptionObjectId)
+                    {
+                        EnqueueNotification(notification.P2SubscriptionObjectId, notification);
+                    }
+                }
+                Monitor.PulseAll(m_NotificationQueueLock);
+            }
+        }
+
+        private void EnqueueNotification(uint subscriptionObjectId, Notification notification)
+        {
+            if (subscriptionObjectId == 0)
+            {
+                return;
+            }
+
+            if (!m_NotificationQueues.TryGetValue(subscriptionObjectId, out var queue))
+            {
+                queue = new Queue<Notification>();
+                m_NotificationQueues.Add(subscriptionObjectId, queue);
+            }
+            queue.Enqueue(notification);
+        }
+
+        private bool TryDequeueNotification(uint subscriptionObjectId, out Notification notification)
+        {
+            lock (m_NotificationQueueLock)
+            {
+                if (subscriptionObjectId != 0)
+                {
+                    if (m_NotificationQueues.TryGetValue(subscriptionObjectId, out var queue) && queue.Count > 0)
+                    {
+                        notification = queue.Dequeue();
+                        return true;
+                    }
+                }
+                else
+                {
+                    foreach (var queue in m_NotificationQueues.Values)
+                    {
+                        if (queue.Count > 0)
+                        {
+                            notification = queue.Dequeue();
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            notification = null;
+            return false;
+        }
+
+        private static bool NotificationMatches(Notification notification, uint subscriptionObjectId)
+        {
+            return notification.SubscriptionObjectId == subscriptionObjectId
+                || notification.P2SubscriptionObjectId == subscriptionObjectId;
+        }
+
+        private void ClearNotificationQueues()
+        {
+            lock (m_NotificationQueueLock)
+            {
+                m_NotificationQueues.Clear();
+            }
         }
 
         private int SendS7plusPDUdata(byte[] sendPduData, int bytesToSend, byte protoVersion)
@@ -512,6 +836,8 @@ namespace S7CommPlusDriver
             m_ReceivedPDU = null;
             m_ReceivedNeedMoreDataForCompletePDU = false;
             m_NewS7CommPlusReceived = false;
+            m_LastSentRequestForWait = null;
+            ClearNotificationQueues();
             m_LastError = 0;
         }
 
@@ -641,6 +967,8 @@ namespace S7CommPlusDriver
             m_ReceivedTempPDU = null;
             m_ReceivedNeedMoreDataForCompletePDU = false;
             m_NewS7CommPlusReceived = false;
+            m_LastSentRequestForWait = null;
+            ClearNotificationQueues();
             m_SessionId = 0;
             m_SessionId2 = 0;
             m_SequenceNumber = 0;
@@ -676,18 +1004,11 @@ namespace S7CommPlusDriver
             #region Step 1: Unencrypted InitSSL Request / Response
 
             InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
-            res = SendS7plusFunctionObject(sslReq);
+            res = SendS7plusFunctionObjectAndWait(sslReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
             InitSslResponse sslRes;
             sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -715,20 +1036,12 @@ namespace S7CommPlusDriver
 
             var createObjReq = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
             createObjReq.SetNullServerSessionData();
-            res = SendS7plusFunctionObject(createObjReq);
+            res = SendS7plusFunctionObjectAndWait(createObjReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_LastErrorDetail = m_client.LastErrorDetail;
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_LastErrorDetail = m_client.LastErrorDetail;
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -755,18 +1068,11 @@ namespace S7CommPlusDriver
 
             var setMultiVarReq = new SetMultiVariablesRequest(ProtocolVersion.V2);
             setMultiVarReq.SetSessionSetupData(m_SessionId, serverSession);
-            res = SendS7plusFunctionObject(setMultiVarReq);
+            res = SendS7plusFunctionObjectAndWait(setMultiVarReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -883,6 +1189,8 @@ namespace S7CommPlusDriver
                 m_ReceivedPDUs = CreateReceiveChannel();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
+                m_LastSentRequestForWait = null;
+                ClearNotificationQueues();
                 m_SessionId = 0;
                 m_SessionId2 = 0;
                 m_SequenceNumber = 0;
@@ -920,6 +1228,8 @@ namespace S7CommPlusDriver
                 m_ReceivedPDUs = CreateReceiveChannel();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
+                m_LastSentRequestForWait = null;
+                ClearNotificationQueues();
                 m_SessionId = 0;
                 m_SessionId2 = 0;
                 m_SequenceNumber = 0;
@@ -940,12 +1250,10 @@ namespace S7CommPlusDriver
             int res;
             var delObjReq = new DeleteObjectRequest(ProtocolVersion.V2);
             delObjReq.DeleteObjectId = deleteObjectId;
-            res = SendS7plusFunctionObject(delObjReq);
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
+            res = SendS7plusFunctionObjectAndWait(delObjReq, m_ReadTimeout);
+            if (res != 0)
             {
-                return m_LastError;
+                return res;
             }
             // If we delete our own session id, then there's no IntegrityId in the response.
             // And the error code gives an error, but not a fatal one.
@@ -1015,12 +1323,10 @@ namespace S7CommPlusDriver
                     count_perChunk++;
                 }
 
-                res = SendS7plusFunctionObject(getMultiVarReq);
-                m_LastError = 0;
-                WaitForNewS7plusReceived(m_ReadTimeout);
-                if (m_LastError != 0)
+                res = SendS7plusFunctionObjectAndWait(getMultiVarReq, m_ReadTimeout);
+                if (res != 0)
                 {
-                    return m_LastError;
+                    return res;
                 }
 
                 var getMultiVarRes = GetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -1090,16 +1396,10 @@ namespace S7CommPlusDriver
                     count_perChunk++;
                 }
 
-                res = SendS7plusFunctionObject(setMultiVarReq);
+                res = SendS7plusFunctionObjectAndWait(setMultiVarReq, m_ReadTimeout);
                 if (res != 0)
                 {
                     return res;
-                }
-                m_LastError = 0;
-                WaitForNewS7plusReceived(m_ReadTimeout);
-                if (m_LastError != 0)
-                {
-                    return m_LastError;
                 }
 
                 var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -1133,18 +1433,11 @@ namespace S7CommPlusDriver
             setVarReq.Address = Ids.CPUexecUnit_operatingStateReq;
             setVarReq.Value = new ValueDInt(state);
 
-            res = SendS7plusFunctionObject(setVarReq);
+            res = SendS7plusFunctionObjectAndWait(setVarReq, m_ReadTimeout);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                m_client.Disconnect();
-                return m_LastError;
             }
 
             var setVarRes = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
@@ -1181,16 +1474,10 @@ namespace S7CommPlusDriver
             exploreReq.AddressList.Add(Ids.Block_BlockNumber);
             exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
 
-            res = SendS7plusFunctionObject(exploreReq);
+            res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
             }
 
             exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
@@ -1303,16 +1590,10 @@ namespace S7CommPlusDriver
             exploreReq.ExploreChildsRecursive = 1;
             exploreReq.ExploreParents = 0;
 
-            res = SendS7plusFunctionObject(exploreReq);
+            res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
             }
             #endregion
 
@@ -1671,16 +1952,10 @@ namespace S7CommPlusDriver
 
             exploreReq.FilterData = filter;
 
-            res = SendS7plusFunctionObject(exploreReq);
+            res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
             }
 
             var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
@@ -1781,16 +2056,10 @@ namespace S7CommPlusDriver
             exploreReq.ExploreChildsRecursive = 1;
             exploreReq.ExploreParents = 0;
 
-            res = SendS7plusFunctionObject(exploreReq);
+            res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
             }
 
             var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
@@ -1840,16 +2109,10 @@ namespace S7CommPlusDriver
             exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
             exploreReq.AddressList.Add(Ids.DataInterface_LineComments);
 
-            res = SendS7plusFunctionObject(exploreReq);
+            res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
                 return res;
-            }
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                return m_LastError;
             }
 
             var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);

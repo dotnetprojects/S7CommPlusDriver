@@ -82,14 +82,6 @@ namespace S7CommPlusDriver
             }
             options.Logger.LogDebug("Legacy S7CommPlus CreateObject request sent to PLC {Address}:{Port}.", options.Address, options.Port);
 
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                options.Logger.LogDebug("Legacy S7CommPlus CreateObject response failed for PLC {Address}:{Port} with code {ErrorCode}.", options.Address, options.Port, m_LastError);
-                m_client.Disconnect();
-                return m_LastError;
-            }
             options.Logger.LogDebug("Legacy S7CommPlus CreateObject response received from PLC {Address}:{Port}.", options.Address, options.Port);
 
             res = m_client.SendEmptyDtData();
@@ -140,15 +132,6 @@ namespace S7CommPlusDriver
             }
             options.Logger.LogDebug("Legacy S7CommPlus authentication request sent to PLC {Address}:{Port}.", options.Address, options.Port);
 
-            m_LastError = 0;
-            WaitForNewS7plusReceived(m_ReadTimeout);
-            if (m_LastError != 0)
-            {
-                options.Logger.LogDebug("Legacy S7CommPlus authentication response failed for PLC {Address}:{Port} with code {ErrorCode}.", options.Address, options.Port, m_LastError);
-                m_client.Disconnect();
-                return m_LastError;
-            }
-
             var setMultiVarRes = SetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (setMultiVarRes == null || setMultiVarRes.ReturnValue != 0)
             {
@@ -194,7 +177,7 @@ namespace S7CommPlusDriver
         {
             var request = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
             request.SetTiaServerSessionData(serverSessionRole);
-            return SendS7plusFunctionObject(request);
+            return SendS7plusFunctionObjectAndWait(request, m_ReadTimeout);
         }
 
         private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
@@ -289,7 +272,7 @@ namespace S7CommPlusDriver
 
             using var stream = new MemoryStream();
             request.Serialize(stream);
-            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, request.ProtocolVersion);
+            return SendRawS7plusPduAndWait(stream.ToArray(), (int)stream.Length, request.ProtocolVersion, m_ReadTimeout);
         }
 
         private bool TryWriteLegacyDigest(byte[] destination, int digestOffset, byte[] data, int dataOffset, int dataLength)

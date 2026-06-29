@@ -705,6 +705,37 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task MultipleTisWatchSubscriptionsUseOneConnectionAndDistinctHandles()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                WaitForTisWatchSubscriptionByIdHandler = (_, _) =>
+                {
+                    Thread.Sleep(5);
+                    return (S7Consts.errCliJobTimeout, new List<S7CommPlusTisWatchNotification>());
+                }
+            };
+            var client = CreateClient(fake);
+            var options = FastSubscriptionOptions();
+
+            await using var first = await client.OpenBlockOnlineViewAsync(CreateTisWatchRequest(1), options);
+            await using var second = await client.OpenBlockOnlineViewAsync(CreateTisWatchRequest(2), options);
+            await using var third = await client.OpenBlockOnlineViewAsync(CreateTisWatchRequest(3), options);
+
+            await first.StopAsync();
+            await second.StopAsync();
+            await third.StopAsync();
+
+            Assert.Equal(1, fake.ConnectCount);
+            Assert.Equal(3, fake.TisWatchSubscriptionCreateCount);
+            Assert.Equal(3, fake.TisWatchSubscriptionDeleteCount);
+            Assert.Equal(3, fake.CreatedTisWatchSubscriptionIds.Distinct().Count());
+            Assert.Equal(
+                fake.CreatedTisWatchSubscriptionIds.OrderBy(id => id),
+                fake.DeletedTisWatchSubscriptionIds.OrderBy(id => id));
+        }
+
+        [Fact]
         public async Task TagSubscriptionPublishesPerItemErrors()
         {
             var allowNotifications = new ManualResetEventSlim(false);
@@ -766,7 +797,7 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
-        public async Task ReadWaitsUntilActiveSubscriptionStops()
+        public async Task ReadCanRunWhileSubscriptionIsActive()
         {
             var fake = new FakeS7CommPlusSession
             {
@@ -783,13 +814,82 @@ namespace S7CommPlusDriver.Tests
             var readTask = client.ReadAsync(new[] { tag });
             await Task.Delay(40);
 
-            Assert.False(readTask.IsCompleted);
-
-            await subscription.StopAsync();
             var read = await readTask.WaitAsync(TimeSpan.FromSeconds(2));
+            await subscription.StopAsync();
 
             Assert.Single(read.Items);
             Assert.Equal(1, fake.ReadCount);
+        }
+
+        [Fact]
+        public async Task AlarmAndTisSubscriptionsCanBeCreatedOnSameClientConnection()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                WaitForAlarmSubscriptionHandler = (_, _) =>
+                {
+                    Thread.Sleep(5);
+                    return (S7Consts.errCliJobTimeout, new List<Notification>());
+                },
+                WaitForTisWatchSubscriptionHandler = _ =>
+                {
+                    Thread.Sleep(5);
+                    return (S7Consts.errCliJobTimeout, new List<S7CommPlusTisWatchNotification>());
+                }
+            };
+            var client = CreateClient(fake);
+
+            await using var alarmSubscription = await client.SubscribeAlarmsAsync(
+                options: new S7CommPlusSubscriptionOptions
+                {
+                    NotificationTimeout = TimeSpan.FromMilliseconds(20)
+                });
+            await using var tisSubscription = await client.OpenBlockOnlineViewAsync(new S7CommPlusTisWatchRequest
+            {
+                RequestBlob = new byte[] { 0x40, 0x80, 0x32, 0x06 },
+                TriggerBlob = new byte[] { 0x10, 0x06 },
+            }, FastSubscriptionOptions());
+
+            await alarmSubscription.StopAsync();
+            await tisSubscription.StopAsync();
+
+            Assert.Equal(1, fake.ConnectCount);
+            Assert.Equal(1, fake.AlarmSubscriptionCreateCount);
+            Assert.Equal(1, fake.TisWatchSubscriptionCreateCount);
+            Assert.Equal(1, fake.AlarmSubscriptionDeleteCount);
+            Assert.Equal(1, fake.TisWatchSubscriptionDeleteCount);
+        }
+
+        [Fact]
+        public async Task ActiveAlarmsCanBeReadAfterAlarmSubscriptionStartsOnSameConnection()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                ActiveAlarmsHandler = () => (0, new List<S7CommPlusAlarm>()),
+                WaitForAlarmSubscriptionHandler = (_, _) =>
+                {
+                    Thread.Sleep(5);
+                    return (S7Consts.errCliJobTimeout, new List<Notification>());
+                }
+            };
+            var client = CreateClient(fake);
+
+            await using var subscription = await client.SubscribeAlarmsAsync(
+                1033,
+                new S7CommPlusSubscriptionOptions
+                {
+                    NotificationTimeout = TimeSpan.FromMilliseconds(20)
+                });
+
+            var activeAlarms = await client.GetActiveAlarmsAsync(1033);
+            await subscription.StopAsync();
+
+            Assert.Empty(activeAlarms);
+            Assert.Equal(1, fake.ConnectCount);
+            Assert.Equal(1, fake.AlarmSubscriptionCreateCount);
+            Assert.Equal(1, fake.AlarmSubscriptionDeleteCount);
+            Assert.Equal(1033, fake.LastActiveAlarmsLanguageId);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
         }
 
         [Fact]
@@ -849,8 +949,8 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(1033, subscription.AlarmTextLanguageId);
             Assert.Equal(1, fake.AlarmSubscriptionCreateCount);
             Assert.Equal(1, fake.AlarmSubscriptionDeleteCount);
-            Assert.Equal(1, fake.DisconnectCount);
-            Assert.Equal(S7CommPlusConnectionState.Disconnected, client.State);
+            Assert.Equal(0, fake.DisconnectCount);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
         }
 
         [Fact]
@@ -1006,6 +1106,15 @@ namespace S7CommPlusDriver.Tests
             {
                 CycleTimeMilliseconds = 100,
                 NotificationTimeout = TimeSpan.FromMilliseconds(20)
+            };
+        }
+
+        private static S7CommPlusTisWatchRequest CreateTisWatchRequest(byte seed)
+        {
+            return new S7CommPlusTisWatchRequest
+            {
+                RequestBlob = new byte[] { 0x40, 0x80, 0x32, seed },
+                TriggerBlob = new byte[] { 0x10, seed },
             };
         }
 

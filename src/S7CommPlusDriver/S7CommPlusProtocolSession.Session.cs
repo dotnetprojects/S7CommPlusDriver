@@ -100,51 +100,51 @@ namespace S7CommPlusDriver
             return WriteValues(addresses, values, out errors);
         }
 
-        int IS7CommPlusSession.CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit)
+        int IS7CommPlusSession.CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit, out uint subscriptionObjectId)
         {
-            return TagSubscriptions.Create(tags, cycleTimeMilliseconds, initialCreditLimit);
+            return TagSubscriptions.Create(tags, cycleTimeMilliseconds, initialCreditLimit, out subscriptionObjectId);
         }
 
-        int IS7CommPlusSession.WaitForTagSubscriptionNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
+        int IS7CommPlusSession.WaitForTagSubscriptionNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
         {
-            return TagSubscriptions.WaitForNotifications(timeoutMilliseconds, creditLimitStep, out notifications);
+            return TagSubscriptions.WaitForNotifications(subscriptionObjectId, timeoutMilliseconds, creditLimitStep, out notifications);
         }
 
-        int IS7CommPlusSession.DeleteTagSubscription()
+        int IS7CommPlusSession.DeleteTagSubscription(uint subscriptionObjectId)
         {
-            return TagSubscriptions.Delete();
+            return TagSubscriptions.Delete(subscriptionObjectId);
         }
 
-        int IS7CommPlusSession.CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit)
+        int IS7CommPlusSession.CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit, out uint subscriptionObjectId)
         {
-            return AlarmSubscriptions.Create(languageIds, initialCreditLimit);
+            return AlarmSubscriptions.Create(languageIds, initialCreditLimit, out subscriptionObjectId);
         }
 
-        int IS7CommPlusSession.WaitForAlarmNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
+        int IS7CommPlusSession.WaitForAlarmNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications)
         {
-            return AlarmSubscriptions.WaitForNotifications(timeoutMilliseconds, creditLimitStep, out notifications);
+            return AlarmSubscriptions.WaitForNotifications(subscriptionObjectId, timeoutMilliseconds, creditLimitStep, out notifications);
         }
 
-        int IS7CommPlusSession.DeleteAlarmSubscription()
+        int IS7CommPlusSession.DeleteAlarmSubscription(uint subscriptionObjectId)
         {
-            return AlarmSubscriptions.Delete();
+            return AlarmSubscriptions.Delete(subscriptionObjectId);
         }
 
-        int IS7CommPlusSession.CreateTisWatchSubscription(S7CommPlusTisWatchRequest request)
+        int IS7CommPlusSession.CreateTisWatchSubscription(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId)
         {
-            return TisWatchSubscriptions.Create(request);
+            return TisWatchSubscriptions.Create(request, out subscriptionObjectId);
         }
 
-        int IS7CommPlusSession.WaitForTisWatchNotifications(int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications)
+        int IS7CommPlusSession.WaitForTisWatchNotifications(uint subscriptionObjectId, int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications)
         {
-            return TisWatchSubscriptions.WaitForNotifications(timeoutMilliseconds, out notifications);
+            return TisWatchSubscriptions.WaitForNotifications(subscriptionObjectId, timeoutMilliseconds, out notifications);
         }
 
         string IS7CommPlusSession.LastTisWatchDiagnostic => TisWatchSubscriptions.LastDiagnostic;
 
-        int IS7CommPlusSession.DeleteTisWatchSubscription()
+        int IS7CommPlusSession.DeleteTisWatchSubscription(uint subscriptionObjectId)
         {
-            return TisWatchSubscriptions.Delete();
+            return TisWatchSubscriptions.Delete(subscriptionObjectId);
         }
 
         private sealed class ProtocolSessionAdapter : IS7CommPlusProtocolSession
@@ -169,12 +169,22 @@ namespace S7CommPlusDriver
 
             public int SendFunction(IS7pRequest request)
             {
-                return _connection.SendS7plusFunctionObject(request);
+                return _connection.SendS7plusFunctionObjectSerialized(request);
+            }
+
+            public int SendFunctionAndWait(IS7pRequest request)
+            {
+                return _connection.SendS7plusFunctionObjectAndWait(request, _connection.m_ReadTimeout);
             }
 
             public void WaitForPdu(int timeoutMilliseconds)
             {
                 _connection.WaitForNewS7plusReceived(timeoutMilliseconds);
+            }
+
+            public int WaitForNotification(uint subscriptionObjectId, int timeoutMilliseconds, out Notification notification)
+            {
+                return _connection.WaitForNotification(subscriptionObjectId, timeoutMilliseconds, out notification);
             }
 
             public int CheckResponse(IS7pRequest request, IS7pResponse response)

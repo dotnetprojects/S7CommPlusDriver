@@ -23,15 +23,15 @@ namespace S7CommPlusDriver
         int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId);
         int ReadValues(List<ItemAddress> addresses, out List<object> values, out List<ulong> errors);
         int WriteValues(List<ItemAddress> addresses, List<PValue> values, out List<ulong> errors);
-        int CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit);
-        int WaitForTagSubscriptionNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications);
-        int DeleteTagSubscription();
-        int CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit);
-        int WaitForAlarmNotifications(int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications);
-        int DeleteAlarmSubscription();
-        int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request);
-        int WaitForTisWatchNotifications(int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications);
+        int CreateTagSubscription(List<PlcTag> tags, ushort cycleTimeMilliseconds, short initialCreditLimit, out uint subscriptionObjectId);
+        int WaitForTagSubscriptionNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications);
+        int DeleteTagSubscription(uint subscriptionObjectId);
+        int CreateAlarmSubscription(uint[] languageIds, short initialCreditLimit, out uint subscriptionObjectId);
+        int WaitForAlarmNotifications(uint subscriptionObjectId, int timeoutMilliseconds, short creditLimitStep, out List<Notification> notifications);
+        int DeleteAlarmSubscription(uint subscriptionObjectId);
+        int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId);
+        int WaitForTisWatchNotifications(uint subscriptionObjectId, int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications);
         string LastTisWatchDiagnostic { get; }
-        int DeleteTisWatchSubscription();
+        int DeleteTisWatchSubscription(uint subscriptionObjectId);
     }
 }

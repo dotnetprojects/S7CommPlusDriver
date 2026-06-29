@@ -31,11 +31,15 @@ namespace S7CommPlusDriver
             _requests = new S7CommPlusProtocolRequests(session);
         }
 
-        Dictionary<UInt32, PlcTag> m_SubscribedTags; // ItemRefId
+        private readonly Dictionary<uint, TagSubscriptionState> _subscriptions = new Dictionary<uint, TagSubscriptionState>();
         byte m_SubcriptionChangeCounter = 1;
         uint m_SubscriptionRelationId = S7CommPlusProtocolConstants.SubscriptionRelationIdStart;
-        short m_NextCreditLimit;
-        uint m_SubscriptionObjectId;
+
+        private sealed class TagSubscriptionState
+        {
+            public Dictionary<uint, PlcTag> SubscribedTags { get; } = new Dictionary<uint, PlcTag>();
+            public short NextCreditLimit { get; set; }
+        }
 
         /// <summary>
         /// Creates a subscription
@@ -45,17 +49,19 @@ namespace S7CommPlusDriver
         /// <returns></returns>
         public int Create(List<PlcTag> plcTags, ushort cycleTime)
         {
-            return Create(plcTags, cycleTime, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimit);
+            return Create(plcTags, cycleTime, S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimit, out _);
         }
 
-        public int Create(List<PlcTag> plcTags, ushort cycleTime, short initialCreditLimit)
+        public int Create(List<PlcTag> plcTags, ushort cycleTime, short initialCreditLimit, out uint subscriptionObjectId)
         {
+            subscriptionObjectId = 0;
             int res;
-            m_SubscribedTags = new Dictionary<uint, PlcTag>();
+            var state = new TagSubscriptionState();
+            var relationId = m_SubscriptionRelationId++;
             PObject subsobj = new PObject();
             subsobj.ClassId = Ids.ClassSubscription;
-            subsobj.RelationId = m_SubscriptionRelationId;
-            subsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("Subscription_" + m_SubscriptionRelationId.ToString()));
+            subsobj.RelationId = relationId;
+            subsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("Subscription_" + relationId.ToString()));
             subsobj.AddAttribute(Ids.SubscriptionFunctionClassId, new ValueUSInt((byte)SubscriptionFunctionClass.Variables));
             subsobj.AddAttribute(Ids.SubscriptionMissedSendings, new ValueUInt(0));
             subsobj.AddAttribute(Ids.SubscriptionSubsystemError, new ValueLInt(0));
@@ -80,12 +86,12 @@ namespace S7CommPlusDriver
             // 0x20      | n>0         | All values on create; then values that have changed, on cycle without change no notification; stops after CreditTick reaches difference of n when not set to new value
 
             subsobj.AddAttribute(Ids.SubscriptionActive, new ValueBool(true));
-            subsobj.AddAttribute(Ids.SubscriptionReferenceList, GetSubscriptionListArray(plcTags));
+            subsobj.AddAttribute(Ids.SubscriptionReferenceList, GetSubscriptionListArray(plcTags, state.SubscribedTags));
             subsobj.AddAttribute(Ids.SubscriptionCycleTime, new ValueUDInt(cycleTime));
             subsobj.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subsobj.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
-            m_NextCreditLimit = initialCreditLimit;
-            subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(m_NextCreditLimit)); // -1=unlimited, 255 = max
+            state.NextCreditLimit = initialCreditLimit;
+            subsobj.AddAttribute(Ids.SubscriptionCreditLimit, new ValueInt(state.NextCreditLimit)); // -1=unlimited, 255 = max
             subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(S7CommPlusProtocolConstants.SubscriptionTicksUnlimited));
             subsobj.AddAttribute(S7CommPlusProtocolConstants.SubscriptionDefaultAttribute1055, new ValueUSInt(0));
 
@@ -106,8 +112,8 @@ namespace S7CommPlusDriver
 
             if (createObjRes.ReturnValue == 0)
             {
-                // Save the ObjectId, to modify the existing subscription if needed
-                m_SubscriptionObjectId = createObjRes.ObjectIds[0];
+                subscriptionObjectId = createObjRes.ObjectIds[0];
+                _subscriptions[subscriptionObjectId] = state;
             }
             else
             {
@@ -119,12 +125,12 @@ namespace S7CommPlusDriver
             return res;
         }
 
-        private int SubscriptionSetCreditLimit(short limit)
+        private int SubscriptionSetCreditLimit(uint subscriptionObjectId, short limit)
         {
-            return _requests.SetSubscriptionCreditLimit(m_SubscriptionObjectId, limit);
+            return _requests.SetSubscriptionCreditLimit(subscriptionObjectId, limit);
         }
 
-        private ValueUDIntArray GetSubscriptionListArray(List<PlcTag> plcTags)
+        private ValueUDIntArray GetSubscriptionListArray(List<PlcTag> plcTags, Dictionary<uint, PlcTag> subscribedTags)
         {
             var la = new List<uint>();
             // 0x8?ssxxxx = 8 = create/update flag, ss = subscription change counter.
@@ -138,7 +144,7 @@ namespace S7CommPlusDriver
             {
                 // Save the reference Id in the dictionary. In the notification we get this reference Id back
                 // and know to which tag the value belongs to.
-                m_SubscribedTags.Add(tagReferenceId, tag);
+                subscribedTags.Add(tagReferenceId, tag);
                 // Write the Item address
                 head = S7CommPlusProtocolConstants.SubscriptionItemAddressHeaderFlag;
                 // It's not known where 0x8004 stands for -> 4 was a guess it's for the number of fields
@@ -167,11 +173,22 @@ namespace S7CommPlusDriver
         {
             int res = 0;
             short creditLimitStep = S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimitStep;
+            var subscriptionObjectId = 0u;
+            foreach (var subscription in _subscriptions)
+            {
+                subscriptionObjectId = subscription.Key;
+                break;
+            }
+
+            if (subscriptionObjectId == 0 || !_subscriptions.TryGetValue(subscriptionObjectId, out var state))
+            {
+                return S7Consts.errCliInvalidParams;
+            }
 
             for (int i = 1; i <= untilNumberOfNotifications; i++)
             {
                 System.Diagnostics.Trace.WriteLine(Environment.NewLine + "WaitForNotifications(): *** Loop #" + i.ToString() + " ***");
-                var result = _requests.WaitNotification(5000, out var noti);
+                var result = _requests.WaitNotification(subscriptionObjectId, 5000, out var noti);
                 if (result != 0)
                 {
                     return result;
@@ -184,26 +201,30 @@ namespace S7CommPlusDriver
                     {
                         System.Diagnostics.Trace.WriteLine("---> key=" + v.Key + " value=" + v.Value.ToString());
                         // Notification item errors are one-byte return codes; tag read errors use the 64-bit PLC return value space.
-                        m_SubscribedTags[v.Key].ProcessReadResult(v.Value, 0);
+                        state.SubscribedTags[v.Key].ProcessReadResult(v.Value, 0);
                     }
 
-                    if (noti.NotificationCreditTick >= m_NextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
+                    if (noti.NotificationCreditTick >= state.NextCreditLimit - 1) // Set new limit one tick before it expires, to get a constant flow of data
                     {
                         // CreditTick in Notification is only one byte
-                        m_NextCreditLimit = (short)((m_NextCreditLimit + creditLimitStep) % 255);
-                        System.Diagnostics.Trace.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + m_NextCreditLimit.ToString());
-                        SubscriptionSetCreditLimit(m_NextCreditLimit);
+                        state.NextCreditLimit = (short)((state.NextCreditLimit + creditLimitStep) % 255);
+                        System.Diagnostics.Trace.WriteLine("--> Credit limit of " + noti.NotificationCreditTick + " reached. SetCreditLimit to " + state.NextCreditLimit.ToString());
+                        SubscriptionSetCreditLimit(subscriptionObjectId, state.NextCreditLimit);
                     }
                 }
             }
             return res;
         }
 
-        public int WaitForNotifications(int waitTimeout, short creditLimitStep, out List<Notification> notifications)
+        public int WaitForNotifications(uint subscriptionObjectId, int waitTimeout, short creditLimitStep, out List<Notification> notifications)
         {
             notifications = new List<Notification>();
+            if (!_subscriptions.TryGetValue(subscriptionObjectId, out var state))
+            {
+                return S7Consts.errCliInvalidParams;
+            }
 
-            var result = _requests.WaitNotification(waitTimeout, out var noti);
+            var result = _requests.WaitNotification(subscriptionObjectId, waitTimeout, out var noti);
             if (result != 0)
             {
                 return result;
@@ -213,7 +234,7 @@ namespace S7CommPlusDriver
 
             foreach (var value in noti.Values)
             {
-                if (m_SubscribedTags != null && m_SubscribedTags.TryGetValue(value.Key, out var tag))
+                if (state.SubscribedTags.TryGetValue(value.Key, out var tag))
                 {
                     tag.ProcessReadResult(value.Value, 0);
                 }
@@ -221,36 +242,34 @@ namespace S7CommPlusDriver
 
             foreach (var returnValue in noti.ReturnValues)
             {
-                if (m_SubscribedTags != null && m_SubscribedTags.TryGetValue(returnValue.Key, out var tag))
+                if (state.SubscribedTags.TryGetValue(returnValue.Key, out var tag))
                 {
                     tag.ProcessReadResult(null, returnValue.Value);
                 }
             }
 
-            if (creditLimitStep > 0 && noti.NotificationCreditTick >= m_NextCreditLimit - 1)
+            if (creditLimitStep > 0 && noti.NotificationCreditTick >= state.NextCreditLimit - 1)
             {
-                m_NextCreditLimit = (short)((m_NextCreditLimit + creditLimitStep) % 255);
-                if (m_NextCreditLimit == 0)
+                state.NextCreditLimit = (short)((state.NextCreditLimit + creditLimitStep) % 255);
+                if (state.NextCreditLimit == 0)
                 {
-                    m_NextCreditLimit = creditLimitStep;
+                    state.NextCreditLimit = creditLimitStep;
                 }
-                return SubscriptionSetCreditLimit(m_NextCreditLimit);
+                return SubscriptionSetCreditLimit(subscriptionObjectId, state.NextCreditLimit);
             }
 
             return 0;
         }
 
-        public int Delete()
+        public int Delete(uint subscriptionObjectId)
         {
             int res;
-            var subscriptionObjectId = m_SubscriptionObjectId;
-            m_SubscribedTags?.Clear();
-            m_SubscriptionObjectId = 0;
             if (subscriptionObjectId == 0)
             {
                 return 0;
             }
 
+            _subscriptions.Remove(subscriptionObjectId);
             System.Diagnostics.Trace.WriteLine(String.Format("SubscriptionDelete: Calling DeleteObject for SubscriptionObjectId={0:X8}", subscriptionObjectId));
             res = _session.DeleteObject(subscriptionObjectId);
             return res;

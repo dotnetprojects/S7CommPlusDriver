@@ -123,15 +123,18 @@ namespace S7CommPlusDriver.Internal
 
         public int WaitNotification(int timeoutMilliseconds, out Notification notification)
         {
+            return WaitNotification(0, timeoutMilliseconds, out notification);
+        }
+
+        public int WaitNotification(uint subscriptionObjectId, int timeoutMilliseconds, out Notification notification)
+        {
             notification = null;
-            _session.LastError = 0;
-            _session.WaitForPdu(timeoutMilliseconds);
-            if (_session.LastError != 0)
+            var result = _session.WaitForNotification(subscriptionObjectId, timeoutMilliseconds, out notification);
+            if (result != 0)
             {
-                return _session.LastError;
+                return result;
             }
 
-            notification = Notification.DeserializeFromPdu(_session.ReceivedPdu);
             return notification == null ? S7Consts.errIsoInvalidPDU : 0;
         }
 
@@ -202,15 +205,7 @@ namespace S7CommPlusDriver.Internal
 
         private int SendAndReceive(IS7pRequest request)
         {
-            var result = _session.SendFunction(request);
-            if (result != 0)
-            {
-                return result;
-            }
-
-            _session.LastError = 0;
-            _session.WaitForPdu(_session.ReadTimeout);
-            return _session.LastError;
+            return _session.SendFunctionAndWait(request);
         }
     }
 }

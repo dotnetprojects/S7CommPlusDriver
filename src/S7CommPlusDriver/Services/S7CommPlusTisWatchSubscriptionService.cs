@@ -14,11 +14,7 @@ namespace S7CommPlusDriver
 
         private readonly IS7CommPlusProtocolSession _session;
         private readonly S7CommPlusProtocolRequests _requests;
-        private S7CommPlusTisResultModel _resultModel = new S7CommPlusTisResultModel();
-        private uint _jobObjectId;
-        private uint _subscriptionObjectId;
-        private uint _subscriptionRefObjectId;
-        private uint _pollSequenceNumber;
+        private readonly Dictionary<uint, TisWatchState> _subscriptions = new Dictionary<uint, TisWatchState>();
 
         public S7CommPlusTisWatchSubscriptionService(IS7CommPlusProtocolSession session)
         {
@@ -28,15 +24,27 @@ namespace S7CommPlusDriver
 
         public string LastDiagnostic { get; private set; } = "";
 
-        public int Create(S7CommPlusTisWatchRequest request)
+        private sealed class TisWatchState
         {
+            public S7CommPlusTisResultModel ResultModel { get; set; } = new S7CommPlusTisResultModel();
+            public uint JobObjectId { get; set; }
+            public uint SubscriptionObjectId { get; set; }
+            public uint SubscriptionRefObjectId { get; set; }
+            public uint PollSequenceNumber { get; set; }
+        }
+
+        public int Create(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId)
+        {
+            subscriptionObjectId = 0;
             if (request == null)
                 return S7Consts.errCliInvalidParams;
 
             request.LastLifecycleStage = "create TIS watch job";
             LastDiagnostic = "";
-            _resultModel = request.ResultModel?.Clone() ?? new S7CommPlusTisResultModel();
-            _pollSequenceNumber = 0;
+            var state = new TisWatchState
+            {
+                ResultModel = request.ResultModel?.Clone() ?? new S7CommPlusTisResultModel()
+            };
 
             var job = new PObject
             {
@@ -68,13 +76,13 @@ namespace S7CommPlusDriver
                 return S7Consts.errCliInvalidParams;
             }
 
-            _jobObjectId = createJobResponse.ObjectIds[0];
+            state.JobObjectId = createJobResponse.ObjectIds[0];
 
             request.LastLifecycleStage = "create TIS watch subscription";
-            res = CreateSubscription(request.JobName);
+            res = CreateSubscription(request.JobName, state);
             if (res != 0)
             {
-                CleanupAfterFailedCreate();
+                CleanupAfterFailedCreate(state);
                 return res;
             }
 
@@ -83,8 +91,8 @@ namespace S7CommPlusDriver
                 0,
                 new uint[]
                 {
-                    0, _jobObjectId, 1, Ids.AbstractTisJob_TisJobEnabledConf,
-                    0, _subscriptionRefObjectId, 1, Ids.TisSubscriptionRef_IncrementNotificationCredit
+                    0, state.JobObjectId, 1, Ids.AbstractTisJob_TisJobEnabledConf,
+                    0, state.SubscriptionRefObjectId, 1, Ids.TisSubscriptionRef_IncrementNotificationCredit
                 },
                 new PValue[]
                 {
@@ -93,31 +101,33 @@ namespace S7CommPlusDriver
                 });
             if (res != 0)
             {
-                CleanupAfterFailedCreate();
+                CleanupAfterFailedCreate(state);
                 return res;
             }
 
             request.LastLifecycleStage = "started";
+            subscriptionObjectId = state.SubscriptionObjectId;
+            _subscriptions[subscriptionObjectId] = state;
             return 0;
         }
 
-        private void CleanupAfterFailedCreate()
+        private void CleanupAfterFailedCreate(TisWatchState state)
         {
-            if (_subscriptionObjectId != 0)
+            if (state.SubscriptionObjectId != 0)
             {
-                _session.DeleteObject(_subscriptionObjectId);
-                _subscriptionObjectId = 0;
-                _subscriptionRefObjectId = 0;
+                _session.DeleteObject(state.SubscriptionObjectId);
+                state.SubscriptionObjectId = 0;
+                state.SubscriptionRefObjectId = 0;
             }
 
-            if (_jobObjectId != 0)
+            if (state.JobObjectId != 0)
             {
-                _session.DeleteObject(_jobObjectId);
-                _jobObjectId = 0;
+                _session.DeleteObject(state.JobObjectId);
+                state.JobObjectId = 0;
             }
         }
 
-        private int CreateSubscription(string jobName)
+        private int CreateSubscription(string jobName, TisWatchState state)
         {
             var subscription = new PObject
             {
@@ -130,7 +140,7 @@ namespace S7CommPlusDriver
             subscription.AddAttribute(Ids.SubscriptionSubsystemError, new ValueLInt(0));
             subscription.AddAttribute(Ids.SubscriptionRouteMode, new ValueUSInt((byte)SubscriptionRouteMode.Tis));
             subscription.AddAttribute(Ids.SubscriptionActive, new ValueBool(true));
-            subscription.AddAttribute(Ids.SubscriptionReferenceList, CreateSubscriptionReferenceList());
+            subscription.AddAttribute(Ids.SubscriptionReferenceList, CreateSubscriptionReferenceList(state));
             subscription.AddAttribute(Ids.SubscriptionCycleTime, new ValueUDInt(0));
             subscription.AddAttribute(Ids.SubscriptionDisabled, new ValueUSInt(0));
             subscription.AddAttribute(Ids.SubscriptionCount, new ValueUSInt(0));
@@ -146,7 +156,7 @@ namespace S7CommPlusDriver
             subscriptionRef.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString("TisSubscriptionRef_" + jobName));
             subscriptionRef.AddAttribute(Ids.SubscriptionReferenceMode, new ValueUSInt(1));
             subscriptionRef.AddAttribute(Ids.TisSubscriptionRef_IncrementNotificationCredit, new ValueUSInt(0));
-            subscriptionRef.AddRelation(Ids.TisSubscriptionRef_itsAssumingJob, _jobObjectId);
+            subscriptionRef.AddRelation(Ids.TisSubscriptionRef_itsAssumingJob, state.JobObjectId);
             subscription.AddObject(subscriptionRef);
 
             var createSubscription = new CreateObjectRequest(ProtocolVersion.V2, 0, true)
@@ -169,38 +179,43 @@ namespace S7CommPlusDriver
                 return S7Consts.errCliInvalidParams;
             }
 
-            _subscriptionObjectId = response.ObjectIds[0];
-            _subscriptionRefObjectId = response.ObjectIds.Count > 1 ? response.ObjectIds[1] : 0;
-            return _subscriptionRefObjectId == 0 ? S7Consts.errCliInvalidParams : 0;
+            state.SubscriptionObjectId = response.ObjectIds[0];
+            state.SubscriptionRefObjectId = response.ObjectIds.Count > 1 ? response.ObjectIds[1] : 0;
+            return state.SubscriptionRefObjectId == 0 ? S7Consts.errCliInvalidParams : 0;
         }
 
-        private ValueUDIntArray CreateSubscriptionReferenceList()
+        private ValueUDIntArray CreateSubscriptionReferenceList(TisWatchState state)
         {
             var values = new[]
             {
                 0x80010000u, 0u, 3u,
-                0x80120001u, TisResultReferenceId, _session.SessionId, _jobObjectId, 0u, (uint)Ids.AbstractTisJob_Result,
-                0x80120001u, TisNotificationCreditReferenceId, _session.SessionId, _jobObjectId, 0u, (uint)Ids.AbstractTisJob_NotificationCredit,
-                0x80120001u, TisEnabledActualReferenceId, _session.SessionId, _jobObjectId, 0u, (uint)Ids.AbstractTisJob_TisJobEnabledActual,
+                0x80120001u, TisResultReferenceId, _session.SessionId, state.JobObjectId, 0u, (uint)Ids.AbstractTisJob_Result,
+                0x80120001u, TisNotificationCreditReferenceId, _session.SessionId, state.JobObjectId, 0u, (uint)Ids.AbstractTisJob_NotificationCredit,
+                0x80120001u, TisEnabledActualReferenceId, _session.SessionId, state.JobObjectId, 0u, (uint)Ids.AbstractTisJob_TisJobEnabledActual,
             };
             return new ValueUDIntArray(values, S7CommPlusProtocolConstants.ValueAddressArrayFlag);
         }
 
-        public int WaitForNotifications(int waitTimeout, out List<S7CommPlusTisWatchNotification> notifications)
+        public int WaitForNotifications(uint subscriptionObjectId, int waitTimeout, out List<S7CommPlusTisWatchNotification> notifications)
         {
             notifications = new List<S7CommPlusTisWatchNotification>();
+            if (!_subscriptions.TryGetValue(subscriptionObjectId, out var state))
+            {
+                return S7Consts.errCliInvalidParams;
+            }
+
             LastDiagnostic = $"waiting for TIS notification timeout={waitTimeout}ms";
 
-            var result = _requests.WaitNotification(waitTimeout, out var notification);
+            var result = _requests.WaitNotification(subscriptionObjectId, waitTimeout, out var notification);
             LastDiagnostic = $"WaitNotification returned {result}";
             if (result != 0)
             {
-                if (TryPollResultBuffer(out var polledNotification))
+                if (TryPollResultBuffer(state, out var polledNotification))
                 {
                     notifications.Add(polledNotification);
-                    if (_subscriptionRefObjectId != 0)
+                    if (state.SubscriptionRefObjectId != 0)
                     {
-                        _requests.SetVariable(_subscriptionRefObjectId, Ids.TisSubscriptionRef_IncrementNotificationCredit, new ValueUSInt(1));
+                        _requests.SetVariable(state.SubscriptionRefObjectId, Ids.TisSubscriptionRef_IncrementNotificationCredit, new ValueUSInt(1));
                     }
                     return 0;
                 }
@@ -208,25 +223,25 @@ namespace S7CommPlusDriver
                 return result;
             }
 
-            notifications.Add(ConvertNotification(notification));
-            return _requests.SetVariable(_subscriptionRefObjectId, Ids.TisSubscriptionRef_IncrementNotificationCredit, new ValueUSInt(1));
+            notifications.Add(ConvertNotification(notification, state));
+            return _requests.SetVariable(state.SubscriptionRefObjectId, Ids.TisSubscriptionRef_IncrementNotificationCredit, new ValueUSInt(1));
         }
 
-        private bool TryPollResultBuffer(out S7CommPlusTisWatchNotification notification)
+        private bool TryPollResultBuffer(TisWatchState state, out S7CommPlusTisWatchNotification notification)
         {
             notification = null;
-            if (_jobObjectId == 0)
+            if (state.JobObjectId == 0)
             {
                 LastDiagnostic = "poll skipped: no TIS job RID";
                 return false;
             }
 
-            LastDiagnostic = $"polling result buffer with GetVariable(job={_jobObjectId}, aid={Ids.AbstractTisJob_Result})";
-            var result = _requests.GetVariable(_jobObjectId, (uint)Ids.AbstractTisJob_Result, out var value);
+            LastDiagnostic = $"polling result buffer with GetVariable(job={state.JobObjectId}, aid={Ids.AbstractTisJob_Result})";
+            var result = _requests.GetVariable(state.JobObjectId, (uint)Ids.AbstractTisJob_Result, out var value);
             if (result != 0)
             {
-                LastDiagnostic = $"GetVariable(job={_jobObjectId}, aid={Ids.AbstractTisJob_Result}) failed with {result}";
-                result = _requests.GetVarSubstreamed(_jobObjectId, Ids.AbstractTisJob_Result, out value);
+                LastDiagnostic = $"GetVariable(job={state.JobObjectId}, aid={Ids.AbstractTisJob_Result}) failed with {result}";
+                result = _requests.GetVarSubstreamed(state.JobObjectId, Ids.AbstractTisJob_Result, out value);
             }
 
             if (result != 0)
@@ -245,23 +260,23 @@ namespace S7CommPlusDriver
             LastDiagnostic = $"poll returned {rawResult.Length} result bytes";
             notification = new S7CommPlusTisWatchNotification(
                 DateTime.UtcNow,
-                ++_pollSequenceNumber,
+                ++state.PollSequenceNumber,
                 0,
                 null,
                 null,
                 rawResult,
-                S7CommPlusTisResultParser.Parse(rawResult, _resultModel));
+                S7CommPlusTisResultParser.Parse(rawResult, state.ResultModel));
             return true;
         }
 
-        private S7CommPlusTisWatchNotification ConvertNotification(Notification notification)
+        private S7CommPlusTisWatchNotification ConvertNotification(Notification notification, TisWatchState state)
         {
             notification.Values.TryGetValue(TisEnabledActualReferenceId, out var enabledValue);
             notification.Values.TryGetValue(TisNotificationCreditReferenceId, out var creditValue);
             notification.Values.TryGetValue(TisResultReferenceId, out var resultValue);
 
             var rawResult = ExtractBlob(resultValue);
-            var watchPoints = S7CommPlusTisResultParser.Parse(rawResult, _resultModel);
+            var watchPoints = S7CommPlusTisResultParser.Parse(rawResult, state.ResultModel);
             return new S7CommPlusTisWatchNotification(
                 notification.Add1Timestamp,
                 notification.NotificationSequenceNumber,
@@ -272,25 +287,31 @@ namespace S7CommPlusDriver
                 watchPoints);
         }
 
-        public int Delete()
+        public int Delete(uint subscriptionObjectId)
         {
             var result = 0;
-            if (_subscriptionObjectId != 0)
+            if (!_subscriptions.TryGetValue(subscriptionObjectId, out var state))
             {
-                _requests.SetVariable(_subscriptionObjectId, Ids.SubscriptionDisabled, new ValueUSInt(1));
-                var deleteSubscriptionResult = _session.DeleteObject(_subscriptionObjectId);
-                if (result == 0)
-                    result = deleteSubscriptionResult;
-                _subscriptionObjectId = 0;
-                _subscriptionRefObjectId = 0;
+                return 0;
             }
 
-            if (_jobObjectId != 0)
+            _subscriptions.Remove(subscriptionObjectId);
+            if (state.SubscriptionObjectId != 0)
             {
-                var deleteJobResult = _session.DeleteObject(_jobObjectId);
+                _requests.SetVariable(state.SubscriptionObjectId, Ids.SubscriptionDisabled, new ValueUSInt(1));
+                var deleteSubscriptionResult = _session.DeleteObject(state.SubscriptionObjectId);
+                if (result == 0)
+                    result = deleteSubscriptionResult;
+                state.SubscriptionObjectId = 0;
+                state.SubscriptionRefObjectId = 0;
+            }
+
+            if (state.JobObjectId != 0)
+            {
+                var deleteJobResult = _session.DeleteObject(state.JobObjectId);
                 if (result == 0)
                     result = deleteJobResult;
-                _jobObjectId = 0;
+                state.JobObjectId = 0;
             }
 
             return result;

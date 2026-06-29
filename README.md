@@ -186,7 +186,8 @@ subscription.CommunicationError += (_, e) =>
 Alarm notifications use the same lifecycle and credit handling:
 
 ```csharp
-await using var alarmSession = await client.SubscribeAlarmsWithSnapshotAsync(languageId: 1033);
+await using var snapshotClient = new S7CommPlusClient(options);
+await using var alarmSession = await client.SubscribeAlarmsWithSnapshotAsync(snapshotClient, languageId: 1033);
 
 foreach (var activeAlarm in alarmSession.ActiveAlarms)
 {
@@ -202,19 +203,17 @@ alarmSession.Subscription.NotificationReceived += (_, e) =>
 };
 ```
 
-Do not poll or read tags on the same `S7CommPlusClient` while a subscription is
-running. S7CommPlus notification frames share the same encrypted session and the
-client intentionally serializes access to avoid overlapping sequence numbers and
-TLS record failures. Use a second client connection for independent polling.
+Subscriptions can share one `S7CommPlusClient` with reads, metadata calls, and
+other subscriptions. The client keeps one foreground request in flight per
+physical PLC connection and routes notifications by PLC subscription object id.
+Use a second client only when you explicitly want a second physical PLC
+connection, for example for true parallel large metadata transfers.
 
-`SubscribeAlarmsWithSnapshotAsync` creates that second connection automatically.
-It creates the alarm subscription first, opens a temporary second
-`S7CommPlusClient` with the same options to read active alarms, disposes the
-temporary client, and buffers early notifications so there is no
-read-then-subscribe blind spot. If you need custom connection ownership, use the
-overload that accepts a separate snapshot client. Stopping an alarm subscription
-closes the current PLC session; the next read or browse on the same client will
-reconnect automatically when `AutoReconnect` is enabled.
+Alarm snapshots require explicit connection ownership: create another
+`S7CommPlusClient` and pass it to `SubscribeAlarmsWithSnapshotAsync` when you
+want a live alarm subscription plus an initial active-alarm snapshot on a
+separate physical connection. Stopping an alarm subscription deletes only that
+subscription and keeps the client session available for later requests.
 
 Idle notification waits are not treated as failures by default. Set
 `MaxConsecutiveTimeoutsBeforeFault` when a quiet subscription should become a

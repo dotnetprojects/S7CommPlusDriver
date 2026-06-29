@@ -15,7 +15,6 @@ namespace S7CommPlusDriver
         private readonly S7CommPlusClientOptions _options;
         private readonly Func<IS7CommPlusSession> _sessionFactory;
         private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
-        private readonly bool _canCreateCompanionClient;
         private IS7CommPlusSession _session;
         private bool _disposed;
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
@@ -23,7 +22,6 @@ namespace S7CommPlusDriver
         public S7CommPlusClient(S7CommPlusClientOptions options)
             : this(options, () => new S7CommPlusProtocolSession())
         {
-            _canCreateCompanionClient = true;
         }
 
         internal S7CommPlusClient(S7CommPlusClientOptions options, Func<IS7CommPlusSession> sessionFactory)
@@ -240,20 +238,19 @@ namespace S7CommPlusDriver
             var subscription = new S7CommPlusTagSubscription(tagsByReferenceId);
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            var releaseGate = true;
             try
             {
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
+                uint subscriptionObjectId = 0;
                 var error = await RunWithTimeoutAsync(
                     "CreateTagSubscription",
-                    () => _session.CreateTagSubscription(tagList, subscriptionOptions.CycleTimeMilliseconds, subscriptionOptions.InitialCreditLimit),
+                    () => _session.CreateTagSubscription(tagList, subscriptionOptions.CycleTimeMilliseconds, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
                     _options.RequestTimeout,
                     cancellationToken).ConfigureAwait(false);
                 ThrowIfError("CreateTagSubscription", error);
 
-                subscription.Start(token => RunTagSubscriptionLoopAsync(subscription, subscriptionOptions, token));
-                releaseGate = false;
+                subscription.Start(token => RunTagSubscriptionLoopAsync(subscription, subscriptionOptions, subscriptionObjectId, token));
                 return subscription;
             }
             catch (S7CommPlusException ex)
@@ -268,10 +265,7 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                if (releaseGate)
-                {
-                    _operationGate.Release();
-                }
+                _operationGate.Release();
             }
         }
 
@@ -289,14 +283,14 @@ namespace S7CommPlusDriver
             var subscription = new S7CommPlusTisWatchSubscription(watchRequest.ResultModel);
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            var releaseGate = true;
             try
             {
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
+                uint subscriptionObjectId = 0;
                 var error = await RunWithTimeoutAsync(
                     "CreateTisWatchSubscription",
-                    () => _session.CreateTisWatchSubscription(watchRequest),
+                    () => _session.CreateTisWatchSubscription(watchRequest, out subscriptionObjectId),
                     _options.RequestTimeout,
                     cancellationToken).ConfigureAwait(false);
                 var operation = String.IsNullOrWhiteSpace(watchRequest.LastLifecycleStage)
@@ -304,8 +298,7 @@ namespace S7CommPlusDriver
                     : $"CreateTisWatchSubscription ({watchRequest.LastLifecycleStage})";
                 ThrowIfError(operation, error);
 
-                subscription.Start(token => RunTisWatchSubscriptionLoopAsync(subscription, subscriptionOptions, token));
-                releaseGate = false;
+                subscription.Start(token => RunTisWatchSubscriptionLoopAsync(subscription, subscriptionOptions, subscriptionObjectId, token));
                 return subscription;
             }
             catch (S7CommPlusException ex)
@@ -320,10 +313,7 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                if (releaseGate)
-                {
-                    _operationGate.Release();
-                }
+                _operationGate.Release();
             }
         }
 
@@ -343,39 +333,6 @@ namespace S7CommPlusDriver
         public Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(int languageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
             return SubscribeAlarmsAsync(new[] { languageId }, languageId, options, cancellationToken);
-        }
-
-        /// <summary>
-        /// Creates a live alarm subscription first, then opens an additional temporary PLC connection to read the
-        /// initially active alarms with all alarm text languages. Early live notifications are buffered by the subscription.
-        /// </summary>
-        public Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
-        {
-            return SubscribeAlarmsWithSnapshotAsync(Array.Empty<int>(), 0, options, cancellationToken);
-        }
-
-        /// <summary>
-        /// Creates a live alarm subscription first, then opens an additional temporary PLC connection to read the
-        /// initially active alarms for the requested LCID. Early live notifications are buffered by the subscription.
-        /// </summary>
-        public Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(int languageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
-        {
-            return SubscribeAlarmsWithSnapshotAsync(new[] { languageId }, languageId, options, cancellationToken);
-        }
-
-        /// <summary>
-        /// Creates a live alarm subscription first, then opens an additional temporary PLC connection to read the
-        /// initially active alarms. Pass an empty language collection to request all alarm text languages.
-        /// </summary>
-        public async Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
-        {
-            if (!_canCreateCompanionClient)
-            {
-                throw new InvalidOperationException("This S7CommPlusClient was created with a custom connection factory. Use the overload that accepts a separate snapshot client.");
-            }
-
-            await using var snapshotClient = new S7CommPlusClient(_options);
-            return await SubscribeAlarmsWithSnapshotAsync(snapshotClient, languageIds, alarmTextLanguageId, options, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -447,21 +404,20 @@ namespace S7CommPlusDriver
             var subscription = new S7CommPlusAlarmSubscription(alarmTextLanguageId);
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            var releaseGate = true;
             try
             {
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 var languageIdsUint = languageIdList.Select(languageId => checked((uint)languageId)).ToArray();
+                uint subscriptionObjectId = 0;
                 var error = await RunWithTimeoutAsync(
                     "CreateAlarmSubscription",
-                    () => _session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit),
+                    () => _session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
                     _options.RequestTimeout,
                     cancellationToken).ConfigureAwait(false);
                 ThrowIfError("CreateAlarmSubscription", error);
 
-                subscription.Start(token => RunAlarmSubscriptionLoopAsync(subscription, subscriptionOptions, token));
-                releaseGate = false;
+                subscription.Start(token => RunAlarmSubscriptionLoopAsync(subscription, subscriptionOptions, subscriptionObjectId, token));
                 return subscription;
             }
             catch (S7CommPlusException ex)
@@ -476,10 +432,7 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                if (releaseGate)
-                {
-                    _operationGate.Release();
-                }
+                _operationGate.Release();
             }
         }
 
@@ -779,7 +732,7 @@ namespace S7CommPlusDriver
             SetState(S7CommPlusConnectionState.Disconnected);
         }
 
-        private async Task RunTagSubscriptionLoopAsync(S7CommPlusTagSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, CancellationToken cancellationToken)
+        private async Task RunTagSubscriptionLoopAsync(S7CommPlusTagSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, uint subscriptionObjectId, CancellationToken cancellationToken)
         {
             try
             {
@@ -790,6 +743,7 @@ namespace S7CommPlusDriver
                     waitFunc: () =>
                     {
                         var error = _session.WaitForTagSubscriptionNotifications(
+                            subscriptionObjectId,
                             subscriptionOptions.NotificationTimeoutMilliseconds,
                             subscriptionOptions.CreditLimitStep,
                             out var notifications);
@@ -799,12 +753,11 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                await TryDeleteSubscriptionAsync("DeleteTagSubscription", subscription, subscriptionOptions, () => _session.DeleteTagSubscription()).ConfigureAwait(false);
-                _operationGate.Release();
+                await TryDeleteSubscriptionAsync("DeleteTagSubscription", subscription, subscriptionOptions, () => _session.DeleteTagSubscription(subscriptionObjectId)).ConfigureAwait(false);
             }
         }
 
-        private async Task RunAlarmSubscriptionLoopAsync(S7CommPlusAlarmSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, CancellationToken cancellationToken)
+        private async Task RunAlarmSubscriptionLoopAsync(S7CommPlusAlarmSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, uint subscriptionObjectId, CancellationToken cancellationToken)
         {
             try
             {
@@ -815,6 +768,7 @@ namespace S7CommPlusDriver
                     waitFunc: () =>
                     {
                         var error = _session.WaitForAlarmNotifications(
+                            subscriptionObjectId,
                             subscriptionOptions.NotificationTimeoutMilliseconds,
                             subscriptionOptions.CreditLimitStep,
                             out var notifications);
@@ -824,22 +778,11 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                await TryDeleteSubscriptionAsync("DeleteAlarmSubscription", subscription, subscriptionOptions, () => _session.DeleteAlarmSubscription()).ConfigureAwait(false);
-                if (subscription.FaultException == null)
-                {
-                    await RunWithTimeoutAsync(
-                        "CloseAlarmSubscriptionTransport",
-                        () => _session.CloseTransport(_options.DisconnectTimeoutMilliseconds),
-                        _options.DisconnectTimeout,
-                        CancellationToken.None).ConfigureAwait(false);
-                    _session = null;
-                    SetState(S7CommPlusConnectionState.Disconnected);
-                }
-                _operationGate.Release();
+                await TryDeleteSubscriptionAsync("DeleteAlarmSubscription", subscription, subscriptionOptions, () => _session.DeleteAlarmSubscription(subscriptionObjectId)).ConfigureAwait(false);
             }
         }
 
-        private async Task RunTisWatchSubscriptionLoopAsync(S7CommPlusTisWatchSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, CancellationToken cancellationToken)
+        private async Task RunTisWatchSubscriptionLoopAsync(S7CommPlusTisWatchSubscription subscription, S7CommPlusSubscriptionOptions subscriptionOptions, uint subscriptionObjectId, CancellationToken cancellationToken)
         {
             try
             {
@@ -850,6 +793,7 @@ namespace S7CommPlusDriver
                     waitFunc: () =>
                     {
                         var error = _session.WaitForTisWatchNotifications(
+                            subscriptionObjectId,
                             subscriptionOptions.NotificationTimeoutMilliseconds,
                             out var notifications);
                         return (error, notifications);
@@ -858,8 +802,7 @@ namespace S7CommPlusDriver
             }
             finally
             {
-                await TryDeleteSubscriptionAsync("DeleteTisWatchSubscription", subscription, subscriptionOptions, () => _session.DeleteTisWatchSubscription()).ConfigureAwait(false);
-                _operationGate.Release();
+                await TryDeleteSubscriptionAsync("DeleteTisWatchSubscription", subscription, subscriptionOptions, () => _session.DeleteTisWatchSubscription(subscriptionObjectId)).ConfigureAwait(false);
             }
         }
 
