@@ -1493,6 +1493,7 @@ namespace S7CommPlusDriver
             if (idx < 0) return null;
             PVartypeListElement varType = pObj.VartypeList.Elements[idx];
             varInfo.AccessSequence += "." + String.Format("{0:X}", varType.LID);
+            AddSymbolCrcSegment(varInfo, levelName, varType);
             bool is1Dim = false;
             if (varType.OffsetInfoType.Is1Dim())
             {
@@ -1513,7 +1514,7 @@ namespace S7CommPlusDriver
             {
                 if (symbol.Length <= 0 && varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL)
                 {
-                    return PlcTags.TagFactory(varInfo.Name, new ItemAddress(varInfo.AccessSequence), varType.Softdatatype, is1Dim);
+                    return PlcTags.TagFactory(varInfo.Name, CreateItemAddress(varInfo), varType.Softdatatype, is1Dim);
                 }
                 if (symbol.Length <= 0)
                 {
@@ -1527,8 +1528,36 @@ namespace S7CommPlusDriver
             }
             else
             {
-                return PlcTags.TagFactory(varInfo.Name, new ItemAddress(varInfo.AccessSequence), varType.Softdatatype, is1Dim);
+                return PlcTags.TagFactory(varInfo.Name, CreateItemAddress(varInfo), varType.Softdatatype, is1Dim);
             }
+        }
+
+        private static void AddSymbolCrcSegment(VarInfo varInfo, string levelName, PVartypeListElement varType)
+        {
+            if (varInfo.SymbolCrcPath == null)
+            {
+                varInfo.SymbolCrcPath = new List<S7CommPlusSymbolCrc.PathSegment>();
+            }
+
+            if (varType.OffsetInfoType.Is1Dim() || varType.OffsetInfoType.IsMDim())
+            {
+                varInfo.SymbolCrcPath.Add(S7CommPlusSymbolCrc.PathSegment.Array(
+                    levelName,
+                    varType.Softdatatype,
+                    Browser.GetArrayLowerBound(varType.OffsetInfoType)));
+            }
+            else
+            {
+                varInfo.SymbolCrcPath.Add(S7CommPlusSymbolCrc.PathSegment.Member(levelName, varType.Softdatatype));
+            }
+        }
+
+        private static ItemAddress CreateItemAddress(VarInfo varInfo)
+        {
+            var address = new ItemAddress(varInfo.AccessSequence);
+            address.SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
+            varInfo.SymbolCrc = address.SymbolCrc;
+            return address;
         }
 
         /// <summary>
@@ -1540,6 +1569,7 @@ namespace S7CommPlusDriver
         {
             VarInfo varInfo = new VarInfo();
             varInfo.Name = symbol;
+            varInfo.SymbolCrcPath = new List<S7CommPlusSymbolCrc.PathSegment>();
             // make sure we have the db list
             if (dbInfoList == null)
             {
@@ -1558,26 +1588,31 @@ namespace S7CommPlusDriver
                 symbol = varInfo.Name;
                 // Merker
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theMArea_Rid);
+                varInfo.SymbolCrcPath.Clear();
                 PlcTag tag = browsePlcTagBySymbol(0x90030000, ref symbol, varInfo);
                 if (tag != null) return tag;
                 symbol = varInfo.Name;
                 // Outputs
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theQArea_Rid);
+                varInfo.SymbolCrcPath.Clear();
                 tag = browsePlcTagBySymbol(0x90020000, ref symbol, varInfo);
                 if (tag != null) return tag;
                 symbol = varInfo.Name;
                 // Inputs
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theIArea_Rid);
+                varInfo.SymbolCrcPath.Clear();
                 tag = browsePlcTagBySymbol(0x90010000, ref symbol, varInfo);
                 if (tag != null) return tag;
                 symbol = varInfo.Name;
                 // S7 timers
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theS7Timers_Rid);
+                varInfo.SymbolCrcPath.Clear();
                 tag = browsePlcTagBySymbol(0x90050000, ref symbol, varInfo);
                 if (tag != null) return tag;
                 symbol = varInfo.Name;
                 // S7 counters
                 varInfo.AccessSequence = String.Format("{0:X}", Ids.NativeObjects_theS7Counters_Rid);
+                varInfo.SymbolCrcPath.Clear();
                 tag = browsePlcTagBySymbol(0x90060000, ref symbol, varInfo);
                 if (tag != null) return tag;
             }

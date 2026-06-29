@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using S7CommPlusDriver.Internal;
 
 namespace S7CommPlusDriver
 {
@@ -62,13 +63,14 @@ namespace S7CommPlusDriver
                 {
                     uint OptOffset = 0;                   
                     uint NonOptOffset = 0;
-                    AddFlatSubnodes(node, String.Empty, String.Empty, OptOffset, NonOptOffset);
+                    AddFlatSubnodes(node, String.Empty, String.Empty, OptOffset, NonOptOffset, new List<S7CommPlusSymbolCrc.PathSegment>());
                 }
             }
         }
 
-        private void AddFlatSubnodes(Node node, string names, string accessIds, uint OptOffset, uint NonOptOffset)
+        private void AddFlatSubnodes(Node node, string names, string accessIds, uint OptOffset, uint NonOptOffset, List<S7CommPlusSymbolCrc.PathSegment> crcPath)
         {
+            var nextCrcPath = crcPath;
             switch (node.NodeType)
             {
                 case eNodeType.Root:
@@ -78,15 +80,21 @@ namespace S7CommPlusDriver
                 case eNodeType.Array:
                     names += node.Name;
                     accessIds += "." + String.Format("{0:X}", node.AccessId);
+                    nextCrcPath = ReplaceLastCrcSegmentWithArray(node, crcPath);
                     break;
                 case eNodeType.StructArray:
                     names += node.Name;
                     // Siemens symbolic paths include a literal ".1" between the struct-array index and the member access id.
                     accessIds += "." + String.Format("{0:X}", node.AccessId) + ".1";
+                    nextCrcPath = ReplaceLastCrcSegmentWithArray(node, crcPath);
                     break;
                 default:
                     names += "." + node.Name;
                     accessIds += "." + String.Format("{0:X}", node.AccessId);
+                    nextCrcPath = new List<S7CommPlusSymbolCrc.PathSegment>(crcPath)
+                    {
+                        S7CommPlusSymbolCrc.PathSegment.Member(node.Name, node.Softdatatype)
+                    };
                     break;
             }
             
@@ -100,6 +108,8 @@ namespace S7CommPlusDriver
                         Name = names,
                         AccessSequence = accessIds,
                         Softdatatype = node.Softdatatype,
+                        SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(nextCrcPath),
+                        SymbolCrcPath = nextCrcPath,
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)
@@ -172,14 +182,43 @@ namespace S7CommPlusDriver
                 {
                     if (sub.NodeType == eNodeType.Array)
                     {
-                        AddFlatSubnodes(sub, names, accessIds, OptOffset + sub.ArrayAdrOffsetOpt, NonOptOffset + sub.ArrayAdrOffsetNonOpt);
+                        AddFlatSubnodes(sub, names, accessIds, OptOffset + sub.ArrayAdrOffsetOpt, NonOptOffset + sub.ArrayAdrOffsetNonOpt, nextCrcPath);
                     }
                     else
                     {
-                        AddFlatSubnodes(sub, names, accessIds, OptOffset, NonOptOffset);
+                        AddFlatSubnodes(sub, names, accessIds, OptOffset, NonOptOffset, nextCrcPath);
                     }
                 }
             }
+        }
+
+        private static List<S7CommPlusSymbolCrc.PathSegment> ReplaceLastCrcSegmentWithArray(Node node, List<S7CommPlusSymbolCrc.PathSegment> crcPath)
+        {
+            var nextCrcPath = new List<S7CommPlusSymbolCrc.PathSegment>(crcPath);
+            if (nextCrcPath.Count == 0)
+            {
+                return nextCrcPath;
+            }
+
+            var previous = nextCrcPath[nextCrcPath.Count - 1];
+            nextCrcPath[nextCrcPath.Count - 1] = S7CommPlusSymbolCrc.PathSegment.Array(
+                previous.MemberName,
+                node.Softdatatype,
+                GetArrayLowerBound(node.Vte?.OffsetInfoType));
+            return nextCrcPath;
+        }
+
+        internal static int GetArrayLowerBound(POffsetInfoType offsetInfoType)
+        {
+            if (offsetInfoType is IOffsetInfoType_1Dim oneDim)
+            {
+                return oneDim.GetArrayLowerBounds();
+            }
+            if (offsetInfoType is IOffsetInfoType_MDim multiDim)
+            {
+                return multiDim.GetArrayLowerBounds();
+            }
+            return 0;
         }
 
         public void BuildTree()
@@ -687,11 +726,13 @@ namespace S7CommPlusDriver
     {
         public string Name;
         public string AccessSequence;
+        public UInt32 SymbolCrc;
         public UInt32 Softdatatype;
         public UInt32 OptAddress;       // Optimized access: Byte-Offset where the value is located when reading a complete DB content.
         public int OptBitoffset;        // Optimized access: Bit-Offset where the value is located when reading a complete DB content. 
         public UInt32 NonOptAddress;    // NonOptimized access: Byte-Offset where the value is located when reading a complete DB content.
         public int NonOptBitoffset;     // NonOptimized access: Bit-Offset where the value is located when reading a complete DB content.
+        internal List<S7CommPlusSymbolCrc.PathSegment> SymbolCrcPath;
     }
 
     internal enum eNodeType
