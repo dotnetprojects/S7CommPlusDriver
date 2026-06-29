@@ -339,11 +339,18 @@ namespace S7CommPlusDriver
         private const int MaxReplayNotifications = 256;
         private readonly object _notificationLock = new object();
         private readonly Queue<S7CommPlusAlarmNotification> _notificationReplay = new Queue<S7CommPlusAlarmNotification>();
+        private readonly Func<string, long, int, string> _textListResolver;
         private EventHandler<S7CommPlusAlarmNotificationEventArgs> _notificationReceived;
 
         internal S7CommPlusAlarmSubscription(int alarmTextLanguageId)
+            : this(alarmTextLanguageId, null)
+        {
+        }
+
+        internal S7CommPlusAlarmSubscription(int alarmTextLanguageId, Func<string, long, int, string> textListResolver)
         {
             AlarmTextLanguageId = alarmTextLanguageId;
+            _textListResolver = textListResolver;
         }
 
         public event EventHandler<S7CommPlusAlarmNotificationEventArgs> NotificationReceived
@@ -390,7 +397,7 @@ namespace S7CommPlusDriver
             {
                 foreach (var alarmObject in notification.P2Objects)
                 {
-                    var alarm = S7CommPlusAlarm.FromNotificationObject(alarmObject, AlarmTextLanguageId);
+                    var alarm = S7CommPlusAlarm.FromNotificationObject(alarmObject, AlarmTextLanguageId, _textListResolver);
                     if (alarm != null)
                     {
                         alarms.Add(alarm);

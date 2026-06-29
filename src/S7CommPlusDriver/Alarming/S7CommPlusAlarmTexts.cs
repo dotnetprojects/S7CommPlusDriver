@@ -114,22 +114,32 @@ namespace S7CommPlusDriver.Alarming
 
         internal void ApplyAssociatedValues(S7CommPlusAlarmAssociatedValues associatedValues)
         {
-            Infotext = FormatText(Infotext, associatedValues);
-            AlarmText = FormatText(AlarmText, associatedValues);
-            AdditionalText1 = FormatText(AdditionalText1, associatedValues);
-            AdditionalText2 = FormatText(AdditionalText2, associatedValues);
-            AdditionalText3 = FormatText(AdditionalText3, associatedValues);
-            AdditionalText4 = FormatText(AdditionalText4, associatedValues);
-            AdditionalText5 = FormatText(AdditionalText5, associatedValues);
-            AdditionalText6 = FormatText(AdditionalText6, associatedValues);
-            AdditionalText7 = FormatText(AdditionalText7, associatedValues);
-            AdditionalText8 = FormatText(AdditionalText8, associatedValues);
-            AdditionalText9 = FormatText(AdditionalText9, associatedValues);
+            ApplyAssociatedValues(associatedValues, null);
+        }
+
+        internal void ApplyAssociatedValues(S7CommPlusAlarmAssociatedValues associatedValues, Func<string, long, int, string> textListResolver)
+        {
+            Infotext = FormatText(Infotext, associatedValues, textListResolver);
+            AlarmText = FormatText(AlarmText, associatedValues, textListResolver);
+            AdditionalText1 = FormatText(AdditionalText1, associatedValues, textListResolver);
+            AdditionalText2 = FormatText(AdditionalText2, associatedValues, textListResolver);
+            AdditionalText3 = FormatText(AdditionalText3, associatedValues, textListResolver);
+            AdditionalText4 = FormatText(AdditionalText4, associatedValues, textListResolver);
+            AdditionalText5 = FormatText(AdditionalText5, associatedValues, textListResolver);
+            AdditionalText6 = FormatText(AdditionalText6, associatedValues, textListResolver);
+            AdditionalText7 = FormatText(AdditionalText7, associatedValues, textListResolver);
+            AdditionalText8 = FormatText(AdditionalText8, associatedValues, textListResolver);
+            AdditionalText9 = FormatText(AdditionalText9, associatedValues, textListResolver);
         }
 
         private string FormatText(string text, S7CommPlusAlarmAssociatedValues associatedValues)
         {
-            return S7CommPlusAlarmTextFormatter.Format(text, associatedValues, LanguageId).Replace("\\n", Environment.NewLine);
+            return FormatText(text, associatedValues, null);
+        }
+
+        private string FormatText(string text, S7CommPlusAlarmAssociatedValues associatedValues, Func<string, long, int, string> textListResolver)
+        {
+            return S7CommPlusAlarmTextFormatter.Format(text, associatedValues, LanguageId, textListResolver).Replace("\\n", Environment.NewLine);
         }
 
         public override string ToString()

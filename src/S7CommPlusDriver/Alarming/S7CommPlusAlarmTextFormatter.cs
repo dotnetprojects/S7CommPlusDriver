@@ -21,6 +21,8 @@ namespace S7CommPlusDriver.Alarming
 {
     internal static class S7CommPlusAlarmTextFormatter
     {
+        private const int MaxTextListRecursionDepth = 8;
+
         public static string Format(string text, S7CommPlusAlarmAssociatedValues associatedValues, int languageId)
         {
             return Format(text, associatedValues, languageId, null);
@@ -31,6 +33,16 @@ namespace S7CommPlusDriver.Alarming
             S7CommPlusAlarmAssociatedValues associatedValues,
             int languageId,
             Func<string, long, int, string> textListResolver)
+        {
+            return Format(text, associatedValues, languageId, textListResolver, 0);
+        }
+
+        private static string Format(
+            string text,
+            S7CommPlusAlarmAssociatedValues associatedValues,
+            int languageId,
+            Func<string, long, int, string> textListResolver,
+            int recursionDepth)
         {
             if (String.IsNullOrEmpty(text) || associatedValues == null)
             {
@@ -57,27 +69,50 @@ namespace S7CommPlusDriver.Alarming
 
                 var originalBlock = text.Substring(start, placeholder.End - start);
                 var value = associatedValues.GetValue(placeholder.Index);
-                if (value == null)
-                {
-                    searchFrom = placeholder.End;
-                    continue;
-                }
+                var packedStandardValue = 0;
+                var hasPackedStandardValue = placeholder.ElementType.HasValue
+                    && associatedValues.TryGetPackedStandardInteger(placeholder.Index, placeholder.ElementType.Value, out packedStandardValue);
 
                 if (placeholder.IsTextList)
                 {
-                    var textListValue = textListResolver?.Invoke(
-                        placeholder.TextListName,
-                        value.GetIntegerByElementType(placeholder.ElementType.GetValueOrDefault(GetElementType(value))),
-                        languageId);
+                    string textListValue;
+                    if (hasPackedStandardValue)
+                    {
+                        textListValue = textListResolver?.Invoke(placeholder.TextListName, packedStandardValue, languageId);
+                    }
+                    else
+                    {
+                        if (value == null)
+                        {
+                            searchFrom = placeholder.End;
+                            continue;
+                        }
+
+                        textListValue = textListResolver?.Invoke(
+                            placeholder.TextListName,
+                            value.GetIntegerByElementType(placeholder.ElementType.GetValueOrDefault(GetElementType(value))),
+                            languageId);
+                    }
+
                     if (textListValue == null)
                     {
                         searchFrom = placeholder.End;
                         continue;
                     }
+                    if (recursionDepth < MaxTextListRecursionDepth)
+                    {
+                        textListValue = Format(textListValue, associatedValues, languageId, textListResolver, recursionDepth + 1);
+                    }
 
                     builder.Append(text, copiedUntil, start - copiedUntil);
                     builder.Append(textListValue);
                     copiedUntil = placeholder.End;
+                    searchFrom = placeholder.End;
+                    continue;
+                }
+
+                if (value == null && !hasPackedStandardValue)
+                {
                     searchFrom = placeholder.End;
                     continue;
                 }
@@ -88,7 +123,9 @@ namespace S7CommPlusDriver.Alarming
                 var padChar = placeholder.WidthText.StartsWith("0", StringComparison.Ordinal) ? '0' : ' ';
                 var width = ParseOptionalInt(placeholder.WidthText).GetValueOrDefault();
                 var precision = ParseOptionalInt(placeholder.PrecisionText);
-                var replacement = FormatValue(value, elementType, placeholder.Format, width, precision, padChar, culture, originalBlock);
+                var replacement = hasPackedStandardValue
+                    ? FormatPackedStandardValue(associatedValues, placeholder.Index, packedStandardValue, elementType, placeholder.Format, width, precision, padChar, culture, originalBlock)
+                    : FormatValue(value, elementType, placeholder.Format, width, precision, padChar, culture, originalBlock);
 
                 builder.Append(text, copiedUntil, start - copiedUntil);
                 builder.Append(replacement);
@@ -293,6 +330,48 @@ namespace S7CommPlusDriver.Alarming
                         return ApplyMinimumLength(value.GetString(), width, padChar);
                     }
                     return FormatAsString(value.GetIntegerByElementType(elementType), width, padChar);
+                default:
+                    return originalBlock;
+            }
+        }
+
+        private static string FormatPackedStandardValue(
+            S7CommPlusAlarmAssociatedValues associatedValues,
+            int position,
+            int value,
+            char elementType,
+            char format,
+            int width,
+            int? precision,
+            char padChar,
+            CultureInfo culture,
+            string originalBlock)
+        {
+            switch (format)
+            {
+                case 'd':
+                    return FormatDecimalSigned(MakeSigned(value, elementType), width, padChar);
+                case 'u':
+                    return FormatDecimalUnsigned((uint)value, width, padChar);
+                case 'x':
+                case 'X':
+                    return FormatHex(value, width);
+                case 'b':
+                    return FormatBinary(value, width);
+                case 'f':
+                    if (elementType != 'R' && elementType != 'X' && elementType != 'D' && elementType != 'O')
+                    {
+                        return originalBlock;
+                    }
+
+                    if (!associatedValues.TryGetPackedStandardReal(position, elementType, out var realValue))
+                    {
+                        return originalBlock;
+                    }
+
+                    return FormatFloatingPoint(realValue, precision, width, padChar, culture);
+                case 's':
+                    return FormatAsString(value, width, padChar);
                 default:
                     return originalBlock;
             }

@@ -153,6 +153,34 @@ namespace S7CommPlusDriver
             }, cancellationToken);
         }
 
+        /// <summary>
+        /// Reads PLC text lists for all CPU languages, plus language-independent system text lists.
+        /// </summary>
+        public Task<S7CommPlusTextListCatalog> GetTextListsAsync(CancellationToken cancellationToken = default)
+        {
+            return GetTextListsAsync(Array.Empty<int>(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads PLC text lists for the requested LCIDs, plus language-independent system text lists.
+        /// Pass an empty collection to request all CPU languages.
+        /// </summary>
+        public Task<S7CommPlusTextListCatalog> GetTextListsAsync(IEnumerable<int> languageIds, CancellationToken cancellationToken = default)
+        {
+            var languageIdList = languageIds?.ToList() ?? new List<int>();
+            if (languageIdList.Any(languageId => languageId < 0 || languageId > UInt16.MaxValue))
+            {
+                throw new ArgumentOutOfRangeException(nameof(languageIds), "Language ids must be positive LCID values.");
+            }
+
+            return ExecuteReadOperationAsync("GetTextLists", session =>
+            {
+                var error = session.GetTextLists(languageIdList, out var textLists);
+                ThrowIfError("GetTextLists", error);
+                return textLists ?? S7CommPlusTextListCatalog.Empty;
+            }, cancellationToken);
+        }
+
         public Task<S7CommPlusCommunicationResources> GetCommunicationResourcesAsync(CancellationToken cancellationToken = default)
         {
             return ExecuteReadOperationAsync("GetCommunicationResources", session =>
@@ -195,19 +223,40 @@ namespace S7CommPlusDriver
         /// <param name="languageId">LCID to expose through <see cref="S7CommPlusAlarm.AlarmTexts"/>, for example 1031 for de-DE.</param>
         public Task<IReadOnlyList<S7CommPlusAlarm>> GetActiveAlarmsAsync(int languageId, CancellationToken cancellationToken = default)
         {
+            return GetActiveAlarmsAsync(languageId, null, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads active PLC alarms and resolves text-list placeholders using a catalog returned by <see cref="GetTextListsAsync(CancellationToken)"/>.
+        /// </summary>
+        public Task<IReadOnlyList<S7CommPlusAlarm>> GetActiveAlarmsAsync(S7CommPlusTextListCatalog textLists, CancellationToken cancellationToken = default)
+        {
+            return GetActiveAlarmsCoreAsync(0, CreateTextListResolver(textLists), cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads active PLC alarms for one LCID and resolves text-list placeholders using a catalog returned by <see cref="GetTextListsAsync(CancellationToken)"/>.
+        /// </summary>
+        public Task<IReadOnlyList<S7CommPlusAlarm>> GetActiveAlarmsAsync(int languageId, S7CommPlusTextListCatalog textLists, CancellationToken cancellationToken = default)
+        {
             if (languageId < 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(languageId), "Language ids must be positive LCID values.");
             }
 
-            return GetActiveAlarmsCoreAsync(languageId, cancellationToken);
+            return GetActiveAlarmsCoreAsync(languageId, CreateTextListResolver(textLists), cancellationToken);
         }
 
         private Task<IReadOnlyList<S7CommPlusAlarm>> GetActiveAlarmsCoreAsync(int alarmTextLanguageId, CancellationToken cancellationToken)
         {
+            return GetActiveAlarmsCoreAsync(alarmTextLanguageId, null, cancellationToken);
+        }
+
+        private Task<IReadOnlyList<S7CommPlusAlarm>> GetActiveAlarmsCoreAsync(int alarmTextLanguageId, Func<string, long, int, string> textListResolver, CancellationToken cancellationToken)
+        {
             return ExecuteReadOperationAsync("GetActiveAlarms", session =>
             {
-                var error = session.GetActiveAlarms(out var alarmList, alarmTextLanguageId);
+                var error = session.GetActiveAlarms(out var alarmList, alarmTextLanguageId, textListResolver);
                 ThrowIfError("GetActiveAlarms", error);
                 return (IReadOnlyList<S7CommPlusAlarm>)((alarmList ?? new List<S7CommPlusAlarm>()).Where(alarm => alarm != null).ToList());
             }, cancellationToken);
@@ -336,6 +385,14 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
+        /// Creates a live alarm subscription for one LCID and resolves text-list placeholders using a catalog returned by <see cref="GetTextListsAsync(CancellationToken)"/>.
+        /// </summary>
+        public Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(int languageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
+        {
+            return SubscribeAlarmsAsync(new[] { languageId }, languageId, textLists, options, cancellationToken);
+        }
+
+        /// <summary>
         /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
         /// initially active alarms with all alarm text languages. Early live notifications are buffered by the subscription.
         /// </summary>
@@ -354,10 +411,28 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
+        /// Creates a live alarm subscription for one LCID, reads initially active alarms, and resolves text-list placeholders using a catalog returned by <see cref="GetTextListsAsync(CancellationToken)"/>.
+        /// </summary>
+        public Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, int languageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
+        {
+            return SubscribeAlarmsWithSnapshotAsync(snapshotClient, new[] { languageId }, languageId, textLists, options, cancellationToken);
+        }
+
+        /// <summary>
         /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
         /// initially active alarms. Pass an empty language collection to request all alarm text languages.
         /// </summary>
         public async Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
+        {
+            return await SubscribeAlarmsWithSnapshotAsync(snapshotClient, languageIds, alarmTextLanguageId, null, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
+        /// initially active alarms. Pass an empty language collection to request all alarm text languages.
+        /// Text-list placeholders are resolved through the supplied catalog.
+        /// </summary>
+        public async Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
             if (snapshotClient == null)
             {
@@ -368,10 +443,10 @@ namespace S7CommPlusDriver
                 throw new ArgumentException("The snapshot client must be a separate S7CommPlusClient instance.", nameof(snapshotClient));
             }
 
-            var subscription = await SubscribeAlarmsAsync(languageIds, alarmTextLanguageId, options, cancellationToken).ConfigureAwait(false);
+            var subscription = await SubscribeAlarmsAsync(languageIds, alarmTextLanguageId, textLists, options, cancellationToken).ConfigureAwait(false);
             try
             {
-                var activeAlarms = await snapshotClient.GetActiveAlarmsCoreAsync(alarmTextLanguageId, cancellationToken).ConfigureAwait(false);
+                var activeAlarms = await snapshotClient.GetActiveAlarmsCoreAsync(alarmTextLanguageId, CreateTextListResolver(textLists), cancellationToken).ConfigureAwait(false);
                 return new S7CommPlusAlarmSubscriptionWithSnapshot(activeAlarms, subscription);
             }
             catch
@@ -389,6 +464,15 @@ namespace S7CommPlusDriver
         /// </summary>
         public async Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
+            return await SubscribeAlarmsAsync(languageIds, alarmTextLanguageId, null, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Creates a live alarm subscription. Pass an empty language collection to request all alarm text languages.
+        /// Text-list placeholders are resolved through the supplied catalog.
+        /// </summary>
+        public async Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
+        {
             var languageIdList = languageIds?.ToList() ?? new List<int>();
             if (languageIdList.Any(languageId => languageId < 0))
             {
@@ -401,7 +485,7 @@ namespace S7CommPlusDriver
 
             var subscriptionOptions = (options ?? new S7CommPlusSubscriptionOptions()).Clone();
             subscriptionOptions.Validate(requireCycleTime: false);
-            var subscription = new S7CommPlusAlarmSubscription(alarmTextLanguageId);
+            var subscription = new S7CommPlusAlarmSubscription(alarmTextLanguageId, CreateTextListResolver(textLists));
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -1030,6 +1114,11 @@ namespace S7CommPlusDriver
             {
                 throw new ObjectDisposedException(nameof(S7CommPlusClient));
             }
+        }
+
+        private static Func<string, long, int, string> CreateTextListResolver(S7CommPlusTextListCatalog textLists)
+        {
+            return textLists == null ? null : new Func<string, long, int, string>(textLists.ResolveText);
         }
 
         private string Endpoint => $"{_options.Address}:{_options.Port}";

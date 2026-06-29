@@ -15,6 +15,7 @@ namespace S7CommPlusDriver
         private S7CommPlusTisWatchSubscriptionService _tisWatchSubscriptions;
         private S7CommPlusAlarmBrowseService _alarmBrowser;
         private S7CommPlusMetadataService _metadata;
+        private S7CommPlusTextListService _textLists;
 
         private IS7CommPlusProtocolSession ProtocolSession => _protocolSession ??= new ProtocolSessionAdapter(this);
         private S7CommPlusTagSubscriptionService TagSubscriptions => _tagSubscriptions ??= new S7CommPlusTagSubscriptionService(ProtocolSession);
@@ -22,6 +23,7 @@ namespace S7CommPlusDriver
         private S7CommPlusTisWatchSubscriptionService TisWatchSubscriptions => _tisWatchSubscriptions ??= new S7CommPlusTisWatchSubscriptionService(ProtocolSession);
         private S7CommPlusAlarmBrowseService AlarmBrowser => _alarmBrowser ??= new S7CommPlusAlarmBrowseService(ProtocolSession);
         private S7CommPlusMetadataService Metadata => _metadata ??= new S7CommPlusMetadataService(ProtocolSession);
+        private S7CommPlusTextListService TextLists => _textLists ??= new S7CommPlusTextListService(ProtocolSession, Metadata);
 
         int IS7CommPlusSession.Connect(S7CommPlusClientOptions options)
         {
@@ -80,14 +82,19 @@ namespace S7CommPlusDriver
             return Metadata.GetCpuCultureInfo(out cultureInfo);
         }
 
+        int IS7CommPlusSession.GetTextLists(IEnumerable<int> languageIds, out S7CommPlusTextListCatalog textLists)
+        {
+            return TextLists.GetTextLists(languageIds, out textLists);
+        }
+
         int IS7CommPlusSession.GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
         {
             return GetCommunicationResources(out resources);
         }
 
-        int IS7CommPlusSession.GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId)
+        int IS7CommPlusSession.GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId, Func<string, long, int, string> textListResolver)
         {
-            return AlarmBrowser.GetActiveAlarms(out alarmList, languageId);
+            return AlarmBrowser.GetActiveAlarms(out alarmList, languageId, textListResolver);
         }
 
         int IS7CommPlusSession.ReadValues(List<ItemAddress> addresses, out List<object> values, out List<ulong> errors)

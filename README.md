@@ -136,6 +136,53 @@ Use this call to get alarms that are already active when your application
 connects. Alarm subscriptions report new notification frames on that session;
 they should not be used as the only source for pre-existing alarms.
 
+## PLC Text Lists and Alarm Text Formatting
+
+PLC alarm texts can contain TIA-style text-list placeholders such as
+`@2%t#519K@`. Load the PLC text-list catalog once and pass it to the alarm APIs
+when you want those placeholders expanded with the same text lists that are
+stored in the CPU:
+
+```csharp
+var textLists = await client.GetTextListsAsync();
+var alarms = await client.GetActiveAlarmsAsync(languageId: 1031, textLists);
+
+foreach (var alarm in alarms)
+{
+    Console.WriteLine(alarm.AlarmTexts?.AlarmText);
+}
+```
+
+`GetTextListsAsync()` discovers the CPU languages from the PLC text container
+and loads all available localized text-list libraries, plus the
+language-independent system text-list library. To load only selected languages,
+pass LCIDs explicitly:
+
+```csharp
+var textLists = await client.GetTextListsAsync(new[] { 1031, 2057 });
+```
+
+The catalog remains a single API surface, but each `S7CommPlusTextList` exposes
+`TextListType` so callers can distinguish runtime user lists from system lists:
+
+```csharp
+var userLists = textLists.TextLists
+    .Where(list => list.TextListType == S7CommPlusTextListType.User);
+
+var systemLists = textLists.TextLists
+    .Where(list => list.TextListType == S7CommPlusTextListType.System);
+```
+
+The online PLC payload does not expose the full engineering project object
+kind, so the driver classifies text lists by Siemens runtime list-id
+conventions. The
+catalog resolver still uses all lists, because system diagnostic texts and user
+alarm texts can reference each other recursively.
+
+Associated-value placeholders are formatted as well. For example, `@2W%d@`
+uses the second associated value as a `WORD` and formats it as signed decimal,
+matching TIA's standard element-type syntax.
+
 ## Communication Limits
 
 PLC communication limits are available through the production client. This is
@@ -187,7 +234,8 @@ Alarm notifications use the same lifecycle and credit handling:
 
 ```csharp
 await using var snapshotClient = new S7CommPlusClient(options);
-await using var alarmSession = await client.SubscribeAlarmsWithSnapshotAsync(snapshotClient, languageId: 1033);
+var textLists = await client.GetTextListsAsync(new[] { 1033 });
+await using var alarmSession = await client.SubscribeAlarmsWithSnapshotAsync(snapshotClient, 1033, textLists);
 
 foreach (var activeAlarm in alarmSession.ActiveAlarms)
 {

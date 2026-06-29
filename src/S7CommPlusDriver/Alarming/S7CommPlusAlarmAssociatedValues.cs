@@ -32,6 +32,8 @@ namespace S7CommPlusDriver.Alarming
         public S7CommPlusAlarmAssociatedValue SD_9;
         public S7CommPlusAlarmAssociatedValue SD_10;
 
+        private byte[] PackedStandardAssociatedValues;
+
         public override string ToString()
         {
             string s = "<S7CommPlusAlarmAssociatedValues>" + Environment.NewLine;
@@ -67,10 +69,67 @@ namespace S7CommPlusDriver.Alarming
             }
         }
 
+        internal bool TryGetPackedStandardInteger(int position, char elementType, out int value)
+        {
+            value = 0;
+            if (PackedStandardAssociatedValues == null || position <= 0)
+            {
+                return false;
+            }
+
+            var elementTypeLength = GetElementTypeLength(elementType);
+            if (elementTypeLength <= 0)
+            {
+                return false;
+            }
+
+            var end = (position * elementTypeLength) - 1;
+            var start = end - elementTypeLength + 1;
+            if (end >= PackedStandardAssociatedValues.Length)
+            {
+                return false;
+            }
+
+            for (var i = start; i <= end; i++)
+            {
+                value = (value << 8) | PackedStandardAssociatedValues[i];
+            }
+            return true;
+        }
+
+        internal bool TryGetPackedStandardReal(int position, char elementType, out double value)
+        {
+            value = 0.0;
+            if (PackedStandardAssociatedValues == null || position <= 0)
+            {
+                return false;
+            }
+
+            var elementTypeLength = GetElementTypeLength(elementType);
+            if (elementTypeLength != 4 && elementTypeLength != 8)
+            {
+                return false;
+            }
+
+            var end = (position * elementTypeLength) - 1;
+            var start = end - elementTypeLength + 1;
+            if (end >= PackedStandardAssociatedValues.Length)
+            {
+                return false;
+            }
+
+            value = elementTypeLength == 8
+                ? Utils.GetDouble(PackedStandardAssociatedValues, (uint)start)
+                : Utils.GetFloat(PackedStandardAssociatedValues, (uint)start);
+            return true;
+        }
+
         internal static S7CommPlusAlarmAssociatedValues FromValueBlob(ValueBlobArray blob)
         {
             var av = new S7CommPlusAlarmAssociatedValues();
             var blobs = blob.GetValue();
+            av.TrySetPackedStandardAssociatedValues(blobs);
+
             // Comes as Array[17], with indices:
             // 0 = Unknown Typeinformation, 4 Bytes
             // 1..10 = SD_1..SD_10
@@ -187,6 +246,38 @@ namespace S7CommPlusDriver.Alarming
             return av;
         }
 
+        private void TrySetPackedStandardAssociatedValues(ValueBlob[] blobs)
+        {
+            if (blobs == null || blobs.Length < 2)
+            {
+                return;
+            }
+
+            // TIA SupplyDataFormatterImpl.FormatPlusAlarmTexts uses this shape
+            // for standard element-type placeholders such as @2W%d@.
+            if (blobs[0].BlobRootId != 0 || blobs[1].BlobRootId != 0)
+            {
+                return;
+            }
+
+            for (var i = 2; i < blobs.Length; i++)
+            {
+                if (blobs[i].BlobRootId != 0)
+                {
+                    return;
+                }
+            }
+
+            var bytes = blobs[1].GetValue();
+            if (bytes == null || bytes.Length == 0)
+            {
+                return;
+            }
+
+            PackedStandardAssociatedValues = new byte[bytes.Length];
+            Array.Copy(bytes, PackedStandardAssociatedValues, bytes.Length);
+        }
+
         private void SetSDValue(S7CommPlusAlarmAssociatedValue v, int index)
         {
             switch(index)
@@ -201,6 +292,28 @@ namespace S7CommPlusDriver.Alarming
                 case 8: SD_8 = v; break;
                 case 9: SD_9 = v; break;
                 case 10: SD_10 = v; break;
+            }
+        }
+
+        private static int GetElementTypeLength(char elementType)
+        {
+            switch (elementType)
+            {
+                case 'B':
+                case 'Y':
+                case 'C':
+                    return 1;
+                case 'W':
+                case 'I':
+                    return 2;
+                case 'X':
+                case 'D':
+                case 'R':
+                    return 4;
+                case 'O':
+                    return 8;
+                default:
+                    return 0;
             }
         }
     }

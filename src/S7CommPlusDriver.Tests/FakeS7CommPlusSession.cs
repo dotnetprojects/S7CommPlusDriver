@@ -49,6 +49,7 @@ namespace S7CommPlusDriver.Tests
         public Func<string, PlcTag>? GetTagHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuInfo CpuInfo)>? CpuInfoHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuCultureInfo CultureInfo)>? CpuCultureInfoHandler { get; set; }
+        public Func<IEnumerable<int>, (int Error, S7CommPlusTextListCatalog TextLists)>? TextListsHandler { get; set; }
         public Func<(int Error, S7CommPlusCommunicationResourceSnapshot Resources)>? CommunicationResourcesHandler { get; set; }
         public Func<List<ItemAddress>, (int Error, List<object?> Values, List<ulong> Errors)>? ReadHandler { get; set; }
         public Func<List<ItemAddress>, List<PValue>, (int Error, List<ulong> Errors)>? WriteHandler { get; set; }
@@ -121,7 +122,7 @@ namespace S7CommPlusDriver.Tests
             return result.Error;
         }
 
-        public int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId)
+        public int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId, Func<string, long, int, string>? textListResolver)
         {
             LastActiveAlarmsLanguageId = languageId;
             var result = ActiveAlarmsHandler?.Invoke() ?? (0, new List<S7CommPlusAlarm>());
@@ -145,6 +146,13 @@ namespace S7CommPlusDriver.Tests
         {
             var result = CpuCultureInfoHandler?.Invoke() ?? (0, new S7CommPlusCpuCultureInfo(new[] { 1033 }));
             cultureInfo = result.CultureInfo;
+            return result.Error;
+        }
+
+        public int GetTextLists(IEnumerable<int> languageIds, out S7CommPlusTextListCatalog textLists)
+        {
+            var result = TextListsHandler?.Invoke(languageIds) ?? (0, S7CommPlusTextListCatalog.Empty);
+            textLists = result.TextLists;
             return result.Error;
         }
 

@@ -61,6 +61,11 @@ namespace S7CommPlusDriver.Alarming
 
         internal static S7CommPlusAlarm FromNotificationObject(PObject pobj, int alarmtextsLanguageId)
         {
+            return FromNotificationObject(pobj, alarmtextsLanguageId, null);
+        }
+
+        internal static S7CommPlusAlarm FromNotificationObject(PObject pobj, int alarmtextsLanguageId, Func<string, long, int, string> textListResolver)
+        {
             var dai = new S7CommPlusAlarm();
             dai.ObjectVariableTypeName = ((ValueWString)pobj.GetAttribute(Ids.ObjectVariableTypeName)).GetValue();
             dai.CpuAlarmId = ((ValueLWord)pobj.GetAttribute(Ids.DAI_CPUAlarmID)).GetValue();
@@ -91,7 +96,7 @@ namespace S7CommPlusDriver.Alarming
             var alarmTextsByLanguage = S7CommPlusAlarmTexts.FromNotificationBlobAllLanguages((ValueBlobSparseArray)pobj.GetAttribute(Ids.DAI_AlarmTexts_Rid));
             foreach (var alarmTexts in alarmTextsByLanguage.Values)
             {
-                alarmTexts.ApplyAssociatedValues(dai.StateChange.AssociatedValues);
+                alarmTexts.ApplyAssociatedValues(dai.StateChange.AssociatedValues, textListResolver);
             }
 
             dai.AlarmTextsByLanguage = alarmTextsByLanguage;

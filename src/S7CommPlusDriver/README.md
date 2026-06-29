@@ -49,4 +49,19 @@ subscription.NotificationReceived += (_, e) =>
 
 Subscriptions share the client connection with normal request/response calls. The driver serializes foreground requests on that physical connection and routes subscription notifications by PLC subscription object id, so reads and metadata requests can run while subscriptions are active without creating another PLC connection. Alarm subscriptions use `SubscribeAlarmsAsync(languageId)` and expose `NotificationReceived`, `CommunicationError`, `StateChanged`, and `Completion` in the same way. Use `SubscribeAlarmsAsync()` or `GetActiveAlarmsAsync()` without a language id to request every alarm text language returned by the PLC; the legacy `AlarmTexts` property contains the first returned language, and `AlarmTextsByLanguage` contains the full set. The library does not silently open a second PLC connection for alarm snapshots. If you need a live alarm subscription plus an initial active-alarm snapshot on a separate physical connection, create a second `S7CommPlusClient` yourself and pass it to the `SubscribeAlarmsWithSnapshotAsync(snapshotClient, ...)` overload.
 
+## PLC Text Lists for Alarms
+
+Alarm text payloads can contain TIA-style text-list placeholders such as `@2%t#519K@`. Load the PLC text-list catalog and pass it to the alarm APIs to resolve those placeholders, including nested system-diagnostic text-list references:
+
+```csharp
+var textLists = await client.GetTextListsAsync(); // all CPU LCIDs + language-independent system lists
+var alarms = await client.GetActiveAlarmsAsync(1031, textLists);
+
+await using var alarmSubscription = await client.SubscribeAlarmsAsync(1031, textLists);
+```
+
+Use `GetTextListsAsync(new[] { 1031, 2057 })` when only selected LCIDs are needed. The catalog remains one API, but each `S7CommPlusTextList` has `TextListType` (`User`, `System`, or `Unknown`) so applications can filter or display the same distinction shown by engineering tools. The online PLC payload does not carry the exact engineering project object kind, so classification follows Siemens runtime list-id conventions; placeholder resolution still uses both user and system lists.
+
+Associated-value placeholders are formatted too. `@2W%d@` means the second associated value, read as a `WORD`, displayed as signed decimal.
+
 Communication limits are exposed through `GetCommunicationResourcesAsync()`, including max read/write batch sizes, available PLC subscription slots, and subscription memory.

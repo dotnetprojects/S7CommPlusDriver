@@ -304,7 +304,7 @@ namespace S7CommPlusDriver
         /// <param name="alarmList">Contains the alarms, empty if there is no active alarm</param>
         /// <param name="languageId">Language id for retrieving the text entries, use language code e.g. 1031 for german</param>
         /// <returns>0 on success</returns>
-        public int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId)
+        public int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId, Func<string, long, int, string> textListResolver)
         {
             int res;
 
@@ -338,7 +338,7 @@ namespace S7CommPlusDriver
 
             foreach (var obj in exploreRes.Objects)
             {
-                alarmList.Add(S7CommPlusAlarm.FromNotificationObject(obj, languageId));
+                alarmList.Add(S7CommPlusAlarm.FromNotificationObject(obj, languageId, textListResolver));
             }
 
             return 0;

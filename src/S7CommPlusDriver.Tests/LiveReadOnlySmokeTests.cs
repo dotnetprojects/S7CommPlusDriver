@@ -41,12 +41,15 @@ namespace S7CommPlusDriver.Tests
             await client.ConnectAsync();
             var cpuInfo = await client.GetCpuInfoAsync();
             var cultureInfo = await client.GetCpuCultureInfoAsync();
+            var textLists = await client.GetTextListsAsync();
             var vars = await client.BrowseAsync();
 
             Assert.NotNull(cpuInfo);
             Assert.NotNull(cultureInfo);
             Assert.NotNull(cultureInfo.LanguageIds);
             Assert.NotEmpty(cultureInfo.LanguageIds);
+            Assert.NotNull(textLists);
+            Assert.NotEmpty(textLists.TextLists);
             Assert.NotNull(vars);
 
             var tagNames = Environment.GetEnvironmentVariable("S7COMMPLUS_LIVE_TAGS");

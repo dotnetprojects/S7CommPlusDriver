@@ -1,3 +1,4 @@
+using System;
 using S7CommPlusDriver.Alarming;
 using Xunit;
 
@@ -37,6 +38,25 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void FormatUsesPackedStandardAssociatedValuesForExplicitElementTypes()
+        {
+            var values = S7CommPlusAlarmAssociatedValues.FromValueBlob(
+                new ValueBlobArray(new[]
+                {
+                    new ValueBlob(0, new byte[] { 1, 1, 0 }),
+                    new ValueBlob(0, new byte[] { 1, 2, 3, 4, 5, 6 }),
+                    new ValueBlob(0, Array.Empty<byte>())
+                }));
+
+            var formatted = S7CommPlusAlarmTextFormatter.Format(
+                "B3=@3B%d@ W2=@2W%d@ W3=@3W%d@",
+                values,
+                1031);
+
+            Assert.Equal("B3=3 W2=772 W3=1286", formatted);
+        }
+
+        [Fact]
         public void FormatLeavesUnsupportedTextListPlaceholdersUnchanged()
         {
             var values = new S7CommPlusAlarmAssociatedValues();
@@ -66,6 +86,50 @@ namespace S7CommPlusDriver.Tests
                         : null);
 
             Assert.Equal("State Running", formatted);
+        }
+
+        [Fact]
+        public void FormatRecursivelyFormatsResolvedTextListEntries()
+        {
+            var values = new S7CommPlusAlarmAssociatedValues();
+            values.SD_1 = CreateInt(17);
+            values.SD_2 = CreateInt(32769);
+            var catalog = new S7CommPlusTextListCatalog(
+                new[] { 1033 },
+                new[]
+                {
+                    new S7CommPlusTextList(
+                        519,
+                        1033,
+                        S7CommPlusTextListScope.LanguageSpecific,
+                        new[] { new S7CommPlusTextListEntry(32769, 32769, "Status @1%d@") })
+                });
+
+            var formatted = S7CommPlusAlarmTextFormatter.Format(
+                "Alarm @2%t#519K@",
+                values,
+                1033,
+                catalog.ResolveText);
+
+            Assert.Equal("Alarm Status 17", formatted);
+        }
+
+        [Fact]
+        public void TextListCatalogFallsBackForSystemWListNames()
+        {
+            var catalog = new S7CommPlusTextListCatalog(
+                new[] { 1033 },
+                new[]
+                {
+                    new S7CommPlusTextList(
+                        6,
+                        1033,
+                        S7CommPlusTextListScope.LanguageSpecific,
+                        new[] { new S7CommPlusTextListEntry(2, 2, "Input channel") })
+                });
+
+            Assert.True(catalog.TryResolve("7W", 2, 1033, out var text));
+            Assert.Equal("Input channel", text);
         }
 
         [Fact]
