@@ -143,6 +143,26 @@ namespace S7CommPlusDriver
             }, cancellationToken);
         }
 
+        public Task<S7CommPlusCpuState> GetCpuStateAsync(CancellationToken cancellationToken = default)
+        {
+            return ExecuteReadOperationAsync("GetCpuState", session =>
+            {
+                var error = session.GetCpuState(out var cpuState);
+                ThrowIfError("GetCpuState", error);
+                return cpuState;
+            }, cancellationToken);
+        }
+
+        public Task<S7CommPlusCpuCycleTime> GetCpuCycleTimeAsync(CancellationToken cancellationToken = default)
+        {
+            return ExecuteReadOperationAsync("GetCpuCycleTime", session =>
+            {
+                var error = session.GetCpuCycleTime(out var cycleTime);
+                ThrowIfError("GetCpuCycleTime", error);
+                return cycleTime;
+            }, cancellationToken);
+        }
+
         public Task<S7CommPlusCpuCultureInfo> GetCpuCultureInfoAsync(CancellationToken cancellationToken = default)
         {
             return ExecuteReadOperationAsync("GetCpuCultureInfo", session =>

@@ -48,6 +48,8 @@ namespace S7CommPlusDriver.Tests
         public Func<(int Error, List<S7CommPlusAlarm> Alarms)>? ActiveAlarmsHandler { get; set; }
         public Func<string, PlcTag>? GetTagHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuInfo CpuInfo)>? CpuInfoHandler { get; set; }
+        public Func<(int Error, S7CommPlusCpuState CpuState)>? CpuStateHandler { get; set; }
+        public Func<(int Error, S7CommPlusCpuCycleTime CycleTime)>? CpuCycleTimeHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuCultureInfo CultureInfo)>? CpuCultureInfoHandler { get; set; }
         public Func<IEnumerable<int>, (int Error, S7CommPlusTextListCatalog TextLists)>? TextListsHandler { get; set; }
         public Func<(int Error, S7CommPlusCommunicationResourceSnapshot Resources)>? CommunicationResourcesHandler { get; set; }
@@ -139,6 +141,20 @@ namespace S7CommPlusDriver.Tests
         {
             var result = CpuInfoHandler?.Invoke() ?? (0, new S7CommPlusCpuInfo { PlcName = "TestCpu" });
             cpuInfo = result.CpuInfo;
+            return result.Error;
+        }
+
+        public int GetCpuState(out S7CommPlusCpuState cpuState)
+        {
+            var result = CpuStateHandler?.Invoke() ?? (0, new S7CommPlusCpuState(8, S7CommPlusCpuOperatingState.Run));
+            cpuState = result.CpuState;
+            return result.Error;
+        }
+
+        public int GetCpuCycleTime(out S7CommPlusCpuCycleTime cycleTime)
+        {
+            var result = CpuCycleTimeHandler?.Invoke() ?? (0, new S7CommPlusCpuCycleTime(0, 150, 50.007, 50.012, 50.654));
+            cycleTime = result.CycleTime;
             return result.Error;
         }
 

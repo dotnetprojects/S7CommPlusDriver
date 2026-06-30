@@ -430,6 +430,43 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task GetCpuStateUsesReadPipeline()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                CpuStateHandler = () => (0, new S7CommPlusCpuState(5, S7CommPlusCpuOperatingState.Run))
+            };
+            var client = CreateClient(fake);
+
+            var cpuState = await client.GetCpuStateAsync();
+
+            Assert.Equal(5, cpuState.RawOperatingState);
+            Assert.Equal(S7CommPlusCpuOperatingState.Run, cpuState.OperatingState);
+            Assert.True(cpuState.IsRun);
+            Assert.False(cpuState.IsStop);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
+        }
+
+        [Fact]
+        public async Task GetCpuCycleTimeUsesReadPipeline()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                CpuCycleTimeHandler = () => (0, new S7CommPlusCpuCycleTime(0, 150, 50.007, 50.012, 50.654))
+            };
+            var client = CreateClient(fake);
+
+            var cycleTime = await client.GetCpuCycleTimeAsync();
+
+            Assert.Equal(0, cycleTime.ConfiguredMinimumMilliseconds);
+            Assert.Equal(150, cycleTime.ConfiguredMaximumMilliseconds);
+            Assert.Equal(50.007, cycleTime.ShortestMilliseconds);
+            Assert.Equal(50.012, cycleTime.CurrentMilliseconds);
+            Assert.Equal(50.654, cycleTime.LongestMilliseconds);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
+        }
+
+        [Fact]
         public async Task GetCpuCultureInfoUsesReadPipeline()
         {
             var fake = new FakeS7CommPlusSession

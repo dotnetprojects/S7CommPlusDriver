@@ -19,6 +19,8 @@ namespace S7CommPlusDriver
         int GetBlockContent(uint relationId, out S7CommPlusClientBlockContent blockContent);
         PlcTag GetPlcTagBySymbol(string symbol);
         int GetCpuInfo(out S7CommPlusCpuInfo cpuInfo);
+        int GetCpuState(out S7CommPlusCpuState cpuState);
+        int GetCpuCycleTime(out S7CommPlusCpuCycleTime cycleTime);
         int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo);
         int GetTextLists(IEnumerable<int> languageIds, out S7CommPlusTextListCatalog textLists);
         int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources);

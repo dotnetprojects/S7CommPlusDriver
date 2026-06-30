@@ -77,6 +77,16 @@ namespace S7CommPlusDriver
             return Metadata.GetCpuInfo(out cpuInfo);
         }
 
+        int IS7CommPlusSession.GetCpuState(out S7CommPlusCpuState cpuState)
+        {
+            return Metadata.GetCpuState(out cpuState);
+        }
+
+        int IS7CommPlusSession.GetCpuCycleTime(out S7CommPlusCpuCycleTime cycleTime)
+        {
+            return Metadata.GetCpuCycleTime(out cycleTime);
+        }
+
         int IS7CommPlusSession.GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo)
         {
             return Metadata.GetCpuCultureInfo(out cultureInfo);

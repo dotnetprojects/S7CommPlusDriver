@@ -138,6 +138,9 @@ namespace S7CommPlusDriver
         public const int CPUexecUnit_LongestScanCycle = 2173;
         public const int CPUexecUnit_ShortestScanCycle = 2174;
         public const int CPUexecUnit_CurrentScanCycle = 2175;
+        public const int HWObject_DIS = 2237;
+        public const int AS_DIS_OperatingState = 3486;
+        public const int CPUCommon_OperatingState = 3451;
         public const int ASRoot_ItsFolders = 2468;
         public const int PLCProgram_Class_Rid = 2520;
         public const int Block_BlockNumber = 2521;

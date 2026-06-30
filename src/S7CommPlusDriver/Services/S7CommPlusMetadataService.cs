@@ -600,6 +600,207 @@ namespace S7CommPlusDriver
             return _requests.GetVarSubstreamed(objectId, address, out value);
         }
 
+        public int GetCpuState(out S7CommPlusCpuState cpuState)
+        {
+            cpuState = null;
+
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUexecUnit_Rid, Ids.HWObject_DIS, out var value);
+            if (res == 0 &&
+                TryGetStructElement(value, Ids.AS_DIS_OperatingState, out var operatingStateValue) &&
+                TryGetInt32(operatingStateValue, out var operatingState))
+            {
+                cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState));
+                return 0;
+            }
+
+            res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, Ids.CPUCommon_OperatingState, out value);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            if (!TryGetInt32(value, out operatingState))
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
+
+            cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState));
+            return 0;
+        }
+
+        public int GetCpuCycleTime(out S7CommPlusCpuCycleTime cycleTime)
+        {
+            cycleTime = null;
+
+            var configuredMinimum = ReadOptionalCycleTime(Ids.CPUexecUnit_ConfiguredMinScanCycle);
+            var configuredMaximum = ReadOptionalCycleTime(Ids.CPUexecUnit_ConfiguredMaxScanCycle);
+
+            var res = ReadRequiredCycleTime(Ids.CPUexecUnit_ShortestScanCycle, out var shortest);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            res = ReadRequiredCycleTime(Ids.CPUexecUnit_CurrentScanCycle, out var current);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            res = ReadRequiredCycleTime(Ids.CPUexecUnit_LongestScanCycle, out var longest);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            cycleTime = new S7CommPlusCpuCycleTime(configuredMinimum, configuredMaximum, shortest, current, longest);
+            return 0;
+        }
+
+        private int ReadRequiredCycleTime(int address, out double milliseconds)
+        {
+            milliseconds = 0;
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUexecUnit_Rid, (ushort)address, out var value);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            return TryGetMilliseconds(value, out milliseconds)
+                ? 0
+                : S7Consts.errIsoInvalidPDU;
+        }
+
+        private double? ReadOptionalCycleTime(int address)
+        {
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUexecUnit_Rid, (ushort)address, out var value);
+            if (res != 0)
+            {
+                return null;
+            }
+
+            return TryGetMilliseconds(value, out var milliseconds) ? milliseconds : (double?)null;
+        }
+
+        private static bool TryGetStructElement(PValue value, int elementId, out PValue element)
+        {
+            element = null;
+            if (value is not ValueStruct valueStruct)
+            {
+                return false;
+            }
+
+            try
+            {
+                element = valueStruct.GetStructElement((uint)elementId);
+                return true;
+            }
+            catch (KeyNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        private static bool TryGetMilliseconds(PValue value, out double milliseconds)
+        {
+            milliseconds = 0;
+            if (!TryGetDouble(value, out var rawValue))
+            {
+                return false;
+            }
+
+            milliseconds = IsFloatingPoint(value) ? rawValue : rawValue / 1000.0;
+            return true;
+        }
+
+        private static bool TryGetInt32(PValue value, out int result)
+        {
+            result = 0;
+            if (!TryGetDouble(value, out var doubleValue))
+            {
+                return false;
+            }
+
+            if (doubleValue < Int32.MinValue || doubleValue > Int32.MaxValue)
+            {
+                return false;
+            }
+
+            result = Convert.ToInt32(doubleValue);
+            return true;
+        }
+
+        private static bool TryGetDouble(PValue value, out double result)
+        {
+            switch (value)
+            {
+                case ValueUSInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueUInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueUDInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueULInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueSInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueDInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueLInt v:
+                    result = v.GetValue();
+                    return true;
+                case ValueByte v:
+                    result = v.GetValue();
+                    return true;
+                case ValueWord v:
+                    result = v.GetValue();
+                    return true;
+                case ValueDWord v:
+                    result = v.GetValue();
+                    return true;
+                case ValueLWord v:
+                    result = v.GetValue();
+                    return true;
+                case ValueReal v:
+                    result = v.GetValue();
+                    return true;
+                case ValueLReal v:
+                    result = v.GetValue();
+                    return true;
+                default:
+                    result = 0;
+                    return false;
+            }
+        }
+
+        private static bool IsFloatingPoint(PValue value)
+        {
+            return value is ValueReal or ValueLReal;
+        }
+
+        private static S7CommPlusCpuOperatingState MapCpuOperatingState(int value)
+        {
+            return value switch
+            {
+                0 => S7CommPlusCpuOperatingState.NotSupported,
+                1 or 3 or 4 or 17 or 33 => S7CommPlusCpuOperatingState.Stop,
+                5 or 8 or 9 or 18 or 20 or 37 or 40 => S7CommPlusCpuOperatingState.Run,
+                6 or 35 or 38 => S7CommPlusCpuOperatingState.Startup,
+                10 or 34 => S7CommPlusCpuOperatingState.Halt,
+                13 => S7CommPlusCpuOperatingState.Defective,
+                _ => S7CommPlusCpuOperatingState.Unknown
+            };
+        }
+
 
         public int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo)
         {
