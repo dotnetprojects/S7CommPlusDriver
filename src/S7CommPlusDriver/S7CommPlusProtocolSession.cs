@@ -1448,6 +1448,17 @@ namespace S7CommPlusDriver
                 return S7Consts.errIsoInvalidPDU12;
             }
 
+            res = checkResponseWithIntegrity(setVarReq, setVarRes);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            if (setVarRes.ReturnValue != 0)
+            {
+                return S7Consts.errCliInvalidParams;
+            }
+
             return 0;
         }
 

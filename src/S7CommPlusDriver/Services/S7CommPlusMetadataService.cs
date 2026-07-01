@@ -609,7 +609,8 @@ namespace S7CommPlusDriver
                 TryGetStructElement(value, Ids.AS_DIS_OperatingState, out var operatingStateValue) &&
                 TryGetInt32(operatingStateValue, out var operatingState))
             {
-                cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState));
+                var displayStateSwitch = ReadOptionalCpuStateSwitch();
+                cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState), displayStateSwitch, MapCpuStateSwitch(displayStateSwitch));
                 return 0;
             }
 
@@ -624,8 +625,20 @@ namespace S7CommPlusDriver
                 return S7Consts.errIsoInvalidPDU;
             }
 
-            cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState));
+            var stateSwitch = ReadOptionalCpuStateSwitch();
+            cpuState = new S7CommPlusCpuState(operatingState, MapCpuOperatingState(operatingState), stateSwitch, MapCpuStateSwitch(stateSwitch));
             return 0;
+        }
+
+        private int? ReadOptionalCpuStateSwitch()
+        {
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, Ids.CPUCommon_StateSwitch2, out var value);
+            if (res != 0)
+            {
+                return null;
+            }
+
+            return TryGetInt32(value, out var stateSwitch) ? stateSwitch : (int?)null;
         }
 
         public int GetCpuCycleTime(out S7CommPlusCpuCycleTime cycleTime)
@@ -654,6 +667,96 @@ namespace S7CommPlusDriver
             }
 
             cycleTime = new S7CommPlusCpuCycleTime(configuredMinimum, configuredMaximum, shortest, current, longest);
+            return 0;
+        }
+
+        public int GetCpuMemoryUsage(out S7CommPlusCpuMemoryUsage memoryUsage)
+        {
+            memoryUsage = null;
+            var firstError = 0;
+            var areas = new List<S7CommPlusCpuMemoryArea>();
+
+            ReadMemoryArea(
+                areas,
+                ref firstError,
+                "load",
+                "Load memory",
+                Ids.CPUCommon_LoadMemoryTotal,
+                Ids.CPUCommon_LoadMemoryUsed);
+            ReadMemoryArea(
+                areas,
+                ref firstError,
+                "work",
+                "Work memory",
+                Ids.CPUCommon_WorkMemoryTotal,
+                Ids.CPUCommon_WorkMemoryUsed);
+            ReadMemoryArea(
+                areas,
+                ref firstError,
+                "work-code",
+                "Work memory code",
+                Ids.CPUCommon_WorkMemoryCodeTotal,
+                Ids.CPUCommon_WorkMemoryCodeUsed);
+            ReadMemoryArea(
+                areas,
+                ref firstError,
+                "work-data",
+                "Work memory data",
+                Ids.CPUCommon_WorkMemoryDataTotal,
+                Ids.CPUCommon_WorkMemoryDataUsed);
+            ReadMemoryArea(
+                areas,
+                ref firstError,
+                "retain",
+                "Retain memory",
+                Ids.CPUCommon_RetainMemoryTotal,
+                Ids.CPUCommon_RetainMemoryUsed);
+
+            if (areas.Count == 0)
+            {
+                return firstError == 0 ? S7Consts.errIsoInvalidPDU : firstError;
+            }
+
+            memoryUsage = new S7CommPlusCpuMemoryUsage(areas);
+            return 0;
+        }
+
+        private void ReadMemoryArea(
+            ICollection<S7CommPlusCpuMemoryArea> areas,
+            ref int firstError,
+            string key,
+            string name,
+            int totalAddress,
+            int usedAddress)
+        {
+            var totalResult = ReadOptionalMemorySize(totalAddress, out var totalBytes);
+            var usedResult = ReadOptionalMemorySize(usedAddress, out var usedBytes);
+            if (totalResult != 0 || usedResult != 0 || totalBytes <= 0)
+            {
+                if (firstError == 0)
+                {
+                    firstError = totalResult != 0 ? totalResult : usedResult;
+                }
+                return;
+            }
+
+            areas.Add(new S7CommPlusCpuMemoryArea(key, name, totalBytes, usedBytes));
+        }
+
+        private int ReadOptionalMemorySize(int address, out long bytes)
+        {
+            bytes = 0;
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, (ushort)address, out var value);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            if (!TryGetInt64(value, out bytes))
+            {
+                return S7Consts.errIsoInvalidPDU;
+            }
+
             return 0;
         }
 
@@ -730,6 +833,23 @@ namespace S7CommPlusDriver
             return true;
         }
 
+        private static bool TryGetInt64(PValue value, out long result)
+        {
+            result = 0;
+            if (!TryGetDouble(value, out var doubleValue))
+            {
+                return false;
+            }
+
+            if (doubleValue < Int64.MinValue || doubleValue > Int64.MaxValue)
+            {
+                return false;
+            }
+
+            result = Convert.ToInt64(doubleValue);
+            return true;
+        }
+
         private static bool TryGetDouble(PValue value, out double result)
         {
             switch (value)
@@ -776,6 +896,9 @@ namespace S7CommPlusDriver
                 case ValueLReal v:
                     result = v.GetValue();
                     return true;
+                case ValueTimespan v:
+                    result = v.GetValue() / 1_000_000.0;
+                    return true;
                 default:
                     result = 0;
                     return false;
@@ -784,7 +907,7 @@ namespace S7CommPlusDriver
 
         private static bool IsFloatingPoint(PValue value)
         {
-            return value is ValueReal or ValueLReal;
+            return value is ValueReal or ValueLReal or ValueTimespan;
         }
 
         private static S7CommPlusCpuOperatingState MapCpuOperatingState(int value)
@@ -798,6 +921,17 @@ namespace S7CommPlusDriver
                 10 or 34 => S7CommPlusCpuOperatingState.Halt,
                 13 => S7CommPlusCpuOperatingState.Defective,
                 _ => S7CommPlusCpuOperatingState.Unknown
+            };
+        }
+
+        private static string MapCpuStateSwitch(int? value)
+        {
+            return value switch
+            {
+                1 => "Stop",
+                2 => "Run",
+                3 => "MRes",
+                _ => null
             };
         }
 

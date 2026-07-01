@@ -304,6 +304,31 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task CpuStartStopAreBlockedByDefault()
+        {
+            var fake = new FakeS7CommPlusSession();
+            var client = CreateClient(fake);
+
+            await Assert.ThrowsAsync<S7CommPlusWriteDisabledException>(() => client.StopCpuAsync());
+            await Assert.ThrowsAsync<S7CommPlusWriteDisabledException>(() => client.StartCpuAsync());
+
+            Assert.Equal(0, fake.CpuOperatingStateWriteCount);
+        }
+
+        [Fact]
+        public async Task CpuStartStopUseOperatingStateRequests()
+        {
+            var fake = new FakeS7CommPlusSession();
+            var client = CreateClient(fake, writeEnabled: true);
+
+            await client.StopCpuAsync();
+            await client.StartCpuAsync();
+
+            Assert.Equal(new[] { 1, 3 }, fake.CpuOperatingStateRequests);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
+        }
+
+        [Fact]
         public async Task SecurityModeIsPassedToConnectionAndNegotiatedModeIsExposed()
         {
             var fake = new FakeS7CommPlusSession
@@ -434,7 +459,7 @@ namespace S7CommPlusDriver.Tests
         {
             var fake = new FakeS7CommPlusSession
             {
-                CpuStateHandler = () => (0, new S7CommPlusCpuState(5, S7CommPlusCpuOperatingState.Run))
+                CpuStateHandler = () => (0, new S7CommPlusCpuState(5, S7CommPlusCpuOperatingState.Run, 2, "Run"))
             };
             var client = CreateClient(fake);
 
@@ -442,6 +467,8 @@ namespace S7CommPlusDriver.Tests
 
             Assert.Equal(5, cpuState.RawOperatingState);
             Assert.Equal(S7CommPlusCpuOperatingState.Run, cpuState.OperatingState);
+            Assert.Equal(2, cpuState.RawStateSwitch);
+            Assert.Equal("Run", cpuState.StateSwitch);
             Assert.True(cpuState.IsRun);
             Assert.False(cpuState.IsStop);
             Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
@@ -463,6 +490,42 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(50.007, cycleTime.ShortestMilliseconds);
             Assert.Equal(50.012, cycleTime.CurrentMilliseconds);
             Assert.Equal(50.654, cycleTime.LongestMilliseconds);
+            Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
+        }
+
+        [Fact]
+        public async Task GetCpuMemoryUsageUsesReadPipeline()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                CpuMemoryUsageHandler = () => (0, new S7CommPlusCpuMemoryUsage(new[]
+                {
+                    new S7CommPlusCpuMemoryArea("load", "Load memory", 1000, 120),
+                    new S7CommPlusCpuMemoryArea("retain", "Retain memory", 500, 25)
+                }))
+            };
+            var client = CreateClient(fake);
+
+            var memoryUsage = await client.GetCpuMemoryUsageAsync();
+
+            Assert.Collection(
+                memoryUsage.Areas,
+                area =>
+                {
+                    Assert.Equal("load", area.Key);
+                    Assert.Equal("Load memory", area.Name);
+                    Assert.Equal(1000, area.TotalBytes);
+                    Assert.Equal(120, area.UsedBytes);
+                    Assert.Equal(880, area.FreeBytes);
+                    Assert.Equal(12, area.UsedPercent);
+                    Assert.Equal(88, area.FreePercent);
+                },
+                area =>
+                {
+                    Assert.Equal("retain", area.Key);
+                    Assert.Equal(500, area.TotalBytes);
+                    Assert.Equal(25, area.UsedBytes);
+                });
             Assert.Equal(S7CommPlusConnectionState.Connected, client.State);
         }
 
@@ -522,6 +585,18 @@ namespace S7CommPlusDriver.Tests
 
             Assert.Empty(alarms);
             Assert.Equal(0, fake.LastActiveAlarmsLanguageId);
+        }
+
+        [Fact]
+        public void AlarmExposesSourceRelationAndAlarmIds()
+        {
+            var alarm = new S7CommPlusAlarm
+            {
+                CpuAlarmId = ((ulong)0x12345678 << 32) | ((ulong)0x9abc << 16)
+            };
+
+            Assert.Equal((uint)0x12345678, alarm.SourceRelationId);
+            Assert.Equal((ushort)0x9abc, alarm.SourceAlarmId);
         }
 
         [Fact]
@@ -1124,12 +1199,13 @@ namespace S7CommPlusDriver.Tests
             Assert.True(result.Subscription.ReceivesAllAlarmTextLanguages);
         }
 
-        private static S7CommPlusClient CreateClient(FakeS7CommPlusSession fake, int requestTimeoutMs = 5000)
+        private static S7CommPlusClient CreateClient(FakeS7CommPlusSession fake, int requestTimeoutMs = 5000, bool writeEnabled = false)
         {
             return new S7CommPlusClient(
                 new S7CommPlusClientOptions
                 {
                     Address = "127.0.0.1",
+                    WriteEnabled = writeEnabled,
                     RequestTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
                     ConnectTimeout = TimeSpan.FromMilliseconds(500),
                     DisconnectTimeout = TimeSpan.FromMilliseconds(100)

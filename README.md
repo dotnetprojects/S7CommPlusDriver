@@ -136,6 +136,11 @@ Use this call to get alarms that are already active when your application
 connects. Alarm subscriptions report new notification frames on that session;
 they should not be used as the only source for pre-existing alarms.
 
+Each `S7CommPlusAlarm` exposes the decoded identity parts from `CpuAlarmId`:
+`SourceRelationId` and `SourceAlarmId`. For PLC program alarms,
+`SourceRelationId` is the PLC object relation id encoded into the alarm id; a
+higher-level project/catalog API can map it to a block name or call path.
+
 ## PLC Text Lists and Alarm Text Formatting
 
 PLC alarm texts can contain TIA-style text-list placeholders such as

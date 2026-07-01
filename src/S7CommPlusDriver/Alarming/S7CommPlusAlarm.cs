@@ -23,6 +23,8 @@ namespace S7CommPlusDriver.Alarming
         public string ObjectVariableTypeName;
 
         public ulong CpuAlarmId;
+        public uint SourceRelationId => (uint)(CpuAlarmId >> 32);
+        public ushort SourceAlarmId => (ushort)((CpuAlarmId >> 16) & 0xffff);
         public byte AllStatesInfo;
         public ushort AlarmDomain;
         public int MessageType;
@@ -40,6 +42,8 @@ namespace S7CommPlusDriver.Alarming
             string s = "<S7CommPlusAlarm>" + Environment.NewLine;
             s += "<ObjectVariableTypeName>" + ObjectVariableTypeName.ToString() + "</ObjectVariableTypeName>" + Environment.NewLine;
             s += "<CpuAlarmId>" + CpuAlarmId.ToString() + "</CpuAlarmId>" + Environment.NewLine;
+            s += "<SourceRelationId>" + SourceRelationId.ToString() + "</SourceRelationId>" + Environment.NewLine;
+            s += "<SourceAlarmId>" + SourceAlarmId.ToString() + "</SourceAlarmId>" + Environment.NewLine;
             s += "<AllStatesInfo>" + AllStatesInfo.ToString() + "</AllStatesInfo>" + Environment.NewLine;
             s += "<AlarmDomain>" + AlarmDomain.ToString() + "</AlarmDomain>" + Environment.NewLine;
             s += "<MessageType>" + MessageType.ToString() + "</MessageType>" + Environment.NewLine;

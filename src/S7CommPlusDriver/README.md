@@ -64,4 +64,6 @@ Use `GetTextListsAsync(new[] { 1031, 2057 })` when only selected LCIDs are neede
 
 Associated-value placeholders are formatted too. `@2W%d@` means the second associated value, read as a `WORD`, displayed as signed decimal.
 
+Each `S7CommPlusAlarm` exposes `SourceRelationId` and `SourceAlarmId`, decoded from `CpuAlarmId`. For PLC program alarms, `SourceRelationId` can be matched with a separately built online block/catalog model to find the source block.
+
 Communication limits are exposed through `GetCommunicationResourcesAsync()`, including max read/write batch sizes, available PLC subscription slots, and subscription memory.

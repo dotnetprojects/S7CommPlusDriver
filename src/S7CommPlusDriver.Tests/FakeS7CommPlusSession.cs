@@ -16,6 +16,9 @@ namespace S7CommPlusDriver.Tests
         public int ReadCount { get; private set; }
         public int MaxConcurrentReads { get; private set; }
         public int ActiveReads;
+        public int CpuOperatingStateWriteCount { get; private set; }
+        public int? LastCpuOperatingStateRequest { get; private set; }
+        public List<int> CpuOperatingStateRequests { get; } = new List<int>();
         public int TagSubscriptionCreateCount { get; private set; }
         public int TagSubscriptionWaitCount { get; private set; }
         public int TagSubscriptionDeleteCount { get; private set; }
@@ -50,6 +53,8 @@ namespace S7CommPlusDriver.Tests
         public Func<(int Error, S7CommPlusCpuInfo CpuInfo)>? CpuInfoHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuState CpuState)>? CpuStateHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuCycleTime CycleTime)>? CpuCycleTimeHandler { get; set; }
+        public Func<(int Error, S7CommPlusCpuMemoryUsage MemoryUsage)>? CpuMemoryUsageHandler { get; set; }
+        public Func<int, int>? SetCpuOperatingStateHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuCultureInfo CultureInfo)>? CpuCultureInfoHandler { get; set; }
         public Func<IEnumerable<int>, (int Error, S7CommPlusTextListCatalog TextLists)>? TextListsHandler { get; set; }
         public Func<(int Error, S7CommPlusCommunicationResourceSnapshot Resources)>? CommunicationResourcesHandler { get; set; }
@@ -156,6 +161,25 @@ namespace S7CommPlusDriver.Tests
             var result = CpuCycleTimeHandler?.Invoke() ?? (0, new S7CommPlusCpuCycleTime(0, 150, 50.007, 50.012, 50.654));
             cycleTime = result.CycleTime;
             return result.Error;
+        }
+
+        public int GetCpuMemoryUsage(out S7CommPlusCpuMemoryUsage memoryUsage)
+        {
+            var result = CpuMemoryUsageHandler?.Invoke() ?? (0, new S7CommPlusCpuMemoryUsage(new[]
+            {
+                new S7CommPlusCpuMemoryArea("load", "Load memory", 1000, 120),
+                new S7CommPlusCpuMemoryArea("work-code", "Work memory code", 2000, 400)
+            }));
+            memoryUsage = result.MemoryUsage;
+            return result.Error;
+        }
+
+        public int SetCpuOperatingState(int operatingStateRequest)
+        {
+            CpuOperatingStateWriteCount++;
+            LastCpuOperatingStateRequest = operatingStateRequest;
+            CpuOperatingStateRequests.Add(operatingStateRequest);
+            return SetCpuOperatingStateHandler?.Invoke(operatingStateRequest) ?? 0;
         }
 
         public int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo)

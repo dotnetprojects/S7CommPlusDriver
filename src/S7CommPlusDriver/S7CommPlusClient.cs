@@ -18,6 +18,8 @@ namespace S7CommPlusDriver
         private IS7CommPlusSession _session;
         private bool _disposed;
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
+        private const int CpuStopRequest = 1;
+        private const int CpuRunRequest = 3;
 
         public S7CommPlusClient(S7CommPlusClientOptions options)
             : this(options, () => new S7CommPlusProtocolSession())
@@ -161,6 +163,26 @@ namespace S7CommPlusDriver
                 ThrowIfError("GetCpuCycleTime", error);
                 return cycleTime;
             }, cancellationToken);
+        }
+
+        public Task<S7CommPlusCpuMemoryUsage> GetCpuMemoryUsageAsync(CancellationToken cancellationToken = default)
+        {
+            return ExecuteReadOperationAsync("GetCpuMemoryUsage", session =>
+            {
+                var error = session.GetCpuMemoryUsage(out var memoryUsage);
+                ThrowIfError("GetCpuMemoryUsage", error);
+                return memoryUsage;
+            }, cancellationToken);
+        }
+
+        public Task StopCpuAsync(CancellationToken cancellationToken = default)
+        {
+            return SetCpuOperatingStateAsync("StopCpu", CpuStopRequest, cancellationToken);
+        }
+
+        public Task StartCpuAsync(CancellationToken cancellationToken = default)
+        {
+            return SetCpuOperatingStateAsync("StartCpu", CpuRunRequest, cancellationToken);
         }
 
         public Task<S7CommPlusCpuCultureInfo> GetCpuCultureInfoAsync(CancellationToken cancellationToken = default)
@@ -720,6 +742,16 @@ namespace S7CommPlusDriver
         private Task<T> ExecuteSessionOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
         {
             return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, cancellationToken);
+        }
+
+        private async Task SetCpuOperatingStateAsync(string operation, int operatingStateRequest, CancellationToken cancellationToken)
+        {
+            await ExecuteWriteOperationAsync(operation, session =>
+            {
+                var error = session.SetCpuOperatingState(operatingStateRequest);
+                ThrowIfError(operation, error);
+                return true;
+            }, cancellationToken).ConfigureAwait(false);
         }
 
         private Task<T> ExecuteWriteOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
