@@ -1,20 +1,23 @@
-﻿<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Target Name="CopyNativeFiles" AfterTargets="Build">
-    <Copy 
-      SourceFiles="$(PackageRoot)\runtimes\osx-arm64\*.dylib"
-      DestinationFolder="$(OutDir)\runtimes\osx-arm64\"
-      SkipUnchangedFiles="true" />
-    <Copy 
-      SourceFiles="$(PackageRoot)\runtimes\win-arm64\native\*.dll"
-      DestinationFolder="$(OutDir)\runtimes\win-arm64\native\"
-      SkipUnchangedFiles="true" />
-    <Copy 
-      SourceFiles="$(PackageRoot)\runtimes\win-x64\native\*.dll"
-      DestinationFolder="$(OutDir)\runtimes\win-x64\native\"
-      SkipUnchangedFiles="true" />
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <S7CommPlusNativeRuntime Include="$(MSBuildThisFileDirectory)../../runtimes/osx-arm64/native/*.dylib" Condition="Exists('$(MSBuildThisFileDirectory)../../runtimes/osx-arm64/native')">
+      <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    </S7CommPlusNativeRuntime>
+    <S7CommPlusNativeRuntime Include="$(MSBuildThisFileDirectory)../../runtimes/win-arm64/native/*.dll" Condition="Exists('$(MSBuildThisFileDirectory)../../runtimes/win-arm64/native')">
+      <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    </S7CommPlusNativeRuntime>
+    <S7CommPlusNativeRuntime Include="$(MSBuildThisFileDirectory)../../runtimes/win-x64/native/*.dll" Condition="Exists('$(MSBuildThisFileDirectory)../../runtimes/win-x64/native')">
+      <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    </S7CommPlusNativeRuntime>
+    <S7CommPlusNativeRuntime Include="$(MSBuildThisFileDirectory)../../runtimes/win-x86/native/*.dll" Condition="Exists('$(MSBuildThisFileDirectory)../../runtimes/win-x86/native')">
+      <RuntimeIdentifier>win-x86</RuntimeIdentifier>
+    </S7CommPlusNativeRuntime>
+  </ItemGroup>
+
+  <Target Name="CopyNativeFiles" AfterTargets="Build" Condition="'@(S7CommPlusNativeRuntime)' != ''">
     <Copy
-      SourceFiles="$(PackageRoot)\runtimes\win-x86\native\*.dll"
-      DestinationFolder="$(OutDir)\runtimes\win-x86\native\"
+      SourceFiles="@(S7CommPlusNativeRuntime)"
+      DestinationFiles="@(S7CommPlusNativeRuntime->'$(OutDir)runtimes/%(RuntimeIdentifier)/native/%(Filename)%(Extension)')"
       SkipUnchangedFiles="true" />
   </Target>
 </Project>
