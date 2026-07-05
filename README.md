@@ -1,12 +1,18 @@
 # S7CommPlusDriver
 
+[![NuGet](https://img.shields.io/nuget/v/DotNetProjects.S7CommPlusDriver.svg)](https://www.nuget.org/packages/DotNetProjects.S7CommPlusDriver)
+[![NuGet downloads](https://img.shields.io/nuget/dt/DotNetProjects.S7CommPlusDriver.svg)](https://www.nuget.org/packages/DotNetProjects.S7CommPlusDriver)
+[![Build](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/dotnet.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/dotnet.yml)
+[![Release](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml)
+[![License](https://img.shields.io/github/license/dotnetprojects/S7CommPlusDriver.svg)](LICENSE)
+
 Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with optional legacy challenge authentication for pre-V17/pre-TLS CPUs on `net8.0` and later.
 
 The public API for new applications is `S7CommPlusClient`. Low-level protocol/session types are internal implementation details; production code should use the client surface.
 
 ## What The Production Client Provides
 
-- Async connect, disconnect, browse, read, write, active-alarm, subscription, and legitimation methods
+- Async connect, disconnect, browse, read, write, active-alarm, subscription, block metadata, CPU metadata/control, online block-view, and legitimation methods
 - Serialized request execution for safe concurrent callers
 - Typed exceptions with PLC endpoint, operation, error code, and transient/non-transient classification
 - Connection-state and communication-error events
@@ -41,6 +47,14 @@ Windows runtime files include:
 - `libcrypto-3.dll` / `libssl-3.dll` for x86
 - `libcrypto-3-x64.dll` / `libssl-3-x64.dll` for x64
 - `libcrypto-3-arm64.dll` / `libssl-3-arm64.dll` plus `vcruntime140.dll` for ARM64
+
+## Installation
+
+Install the package from [NuGet](https://www.nuget.org/packages/DotNetProjects.S7CommPlusDriver):
+
+```powershell
+dotnet add package DotNetProjects.S7CommPlusDriver
+```
 
 ## Quick Start
 
@@ -200,6 +214,23 @@ Console.WriteLine(resources.TagsPerReadRequestMax);
 Console.WriteLine(resources.PlcSubscriptionsFree);
 ```
 
+## Block Metadata and Online View
+
+The production client can browse block metadata, parse the PLC structure XML
+into a block tree, read block content, and open TIA-style block online-view
+subscriptions:
+
+```csharp
+var blocks = await client.BrowseBlocksAsync();
+var structure = await client.BrowseBlockStructureAsync();
+var content = await client.GetBlockContentAsync(blocks[0].RelationId);
+```
+
+`OpenBlockOnlineViewAsync` creates a disposable `S7CommPlusTisWatchSubscription`
+for advanced block-watch scenarios. This API is lower level than tag reads and
+requires a caller-provided `S7CommPlusTisWatchRequest` that matches the block
+watch points and result model.
+
 ## Subscriptions
 
 Subscriptions are exposed as long-running, disposable objects. They own the
@@ -262,6 +293,11 @@ physical PLC connection and routes notifications by PLC subscription object id.
 Use a second client only when you explicitly want a second physical PLC
 connection, for example for true parallel large metadata transfers.
 
+Use `SubscribeAlarmsAsync()` or `GetActiveAlarmsAsync()` without a language id
+to request every alarm text language returned by the PLC. The compatibility
+`AlarmTexts` property contains the selected or first returned language, while
+`AlarmTextsByLanguage` contains the full set.
+
 Alarm snapshots require explicit connection ownership: create another
 `S7CommPlusClient` and pass it to `SubscribeAlarmsWithSnapshotAsync` when you
 want a live alarm subscription plus an initial active-alarm snapshot on a
@@ -291,7 +327,9 @@ Console.WriteLine(client.Options.NegotiatedSecurityMode);
 
 `S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy challenge authentication. Reconnect and write safety behave the same in all modes: read/browse may reconnect once, writes are never retried automatically, and writes still require `WriteEnabled = true`.
 
-The HarpoS7 `1.1.0` NuGet package currently declares unpublished dependency package IDs, so this repository references the required HarpoS7 source projects directly under `src/HarpoS7`. HarpoS7 source is MIT licensed; this project remains LGPL-3.0-or-later unless noted otherwise.
+Legacy challenge support references the `HarpoS7` and `HarpoS7.PublicKeys`
+NuGet packages on `net8.0` and `net9.0`. HarpoS7 is MIT licensed; this project
+remains LGPL-3.0-or-later unless noted otherwise.
 
 Legacy packet-capture notes, auth frame variants, and live PLC observations are tracked in `docs/legacy-s7commplus-memory.md`.
 

@@ -2,7 +2,13 @@
 
 Production-oriented S7CommPlus communication library for Siemens S7-1200/1500 PLCs.
 
-Use `S7CommPlusClient` for new applications. It provides async connect, browse, read, write, alarm, and subscription operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
+Install from [NuGet](https://www.nuget.org/packages/DotNetProjects.S7CommPlusDriver):
+
+```powershell
+dotnet add package DotNetProjects.S7CommPlusDriver
+```
+
+Use `S7CommPlusClient` for new applications. It provides async connect, browse, read, write, alarm, subscription, CPU metadata/control, block metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
 
 TLS is the default security mode, using the managed BouncyCastle TLS backend unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net8.0` and later, older S7-1200/1500 CPUs can use `S7CommPlusSecurityMode.LegacyChallenge` or `Auto` for HarpoS7-derived legacy challenge authentication. `net6.0` remains TLS-only.
 
@@ -25,7 +31,7 @@ var cpuInfo = await client.GetCpuInfoAsync();
 await client.DisconnectAsync();
 ```
 
-Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation uses HarpoS7 for challenge/key/digest primitives while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.
+Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation references the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages for challenge/key/digest primitives on `net8.0` and `net9.0`, while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.
 
 ## Subscriptions
 
@@ -67,3 +73,9 @@ Associated-value placeholders are formatted too. `@2W%d@` means the second assoc
 Each `S7CommPlusAlarm` exposes `SourceRelationId` and `SourceAlarmId`, decoded from `CpuAlarmId`. For PLC program alarms, `SourceRelationId` can be matched with a separately built online block/catalog model to find the source block.
 
 Communication limits are exposed through `GetCommunicationResourcesAsync()`, including max read/write batch sizes, available PLC subscription slots, and subscription memory.
+
+## Block Metadata and Online View
+
+Block metadata is available through `BrowseBlocksAsync()`, `GetPlcStructureXmlAsync()`, `BrowseBlockStructureAsync()`, and `GetBlockContentAsync(relid)`.
+
+Advanced block-watch scenarios can use `OpenBlockOnlineViewAsync()` with a caller-provided `S7CommPlusTisWatchRequest`; the returned `S7CommPlusTisWatchSubscription` exposes parsed watch notifications and follows the same disposable subscription lifecycle.
