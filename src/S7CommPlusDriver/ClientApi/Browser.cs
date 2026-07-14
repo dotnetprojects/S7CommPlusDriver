@@ -78,6 +78,7 @@ namespace S7CommPlusDriver
                         OptOffset,
                         NonOptOffset,
                         new List<S7CommPlusSymbolCrc.PathSegment>(),
+                        containsIndexedArray: false,
                         parentHmiVisible: true,
                         parentHmiAccessible: true);
                 }
@@ -94,6 +95,7 @@ namespace S7CommPlusDriver
         /// <param name="OptOffset">The optimized storage offset accumulated above <paramref name="node"/>.</param>
         /// <param name="NonOptOffset">The non-optimized storage offset accumulated above <paramref name="node"/>.</param>
         /// <param name="crcPath">The CRC path segments accumulated above <paramref name="node"/>.</param>
+        /// <param name="containsIndexedArray">Whether the path contains an array element selected by an index.</param>
         /// <param name="parentHmiVisible">Whether every containing member is visible to HMI engineering.</param>
         /// <param name="parentHmiAccessible">Whether every containing member permits HMI access.</param>
         private void AddFlatSubnodes(
@@ -103,11 +105,13 @@ namespace S7CommPlusDriver
             uint OptOffset,
             uint NonOptOffset,
             List<S7CommPlusSymbolCrc.PathSegment> crcPath,
+            bool containsIndexedArray,
             bool parentHmiVisible,
             bool parentHmiAccessible)
         {
             var hmiVisible = parentHmiVisible && (node.Vte?.GetAttributeFlagHmiVisible() ?? true);
             var hmiAccessible = parentHmiAccessible && (node.Vte?.GetAttributeFlagHmiAccessible() ?? true);
+            containsIndexedArray = containsIndexedArray || node.NodeType == eNodeType.Array || node.NodeType == eNodeType.StructArray;
             var nextCrcPath = crcPath;
             switch (node.NodeType)
             {
@@ -157,7 +161,7 @@ namespace S7CommPlusDriver
                         Name = names,
                         AccessSequence = accessIds,
                         Softdatatype = node.Softdatatype,
-                        SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(nextCrcPath),
+                        SymbolCrc = containsIndexedArray ? 0 : S7CommPlusSymbolCrc.ComputeFromSegments(nextCrcPath),
                         SymbolCrcPath = nextCrcPath,
                         // For array elements the Vte comes from the parent array base element. The effective
                         // flags also include every containing structure/array, matching TIA and AGLink behavior.
@@ -244,6 +248,7 @@ namespace S7CommPlusDriver
                             OptOffset + sub.ArrayAdrOffsetOpt,
                             NonOptOffset + sub.ArrayAdrOffsetNonOpt,
                             nextCrcPath,
+                            containsIndexedArray,
                             hmiVisible,
                             hmiAccessible);
                     }
@@ -256,6 +261,7 @@ namespace S7CommPlusDriver
                             OptOffset,
                             NonOptOffset,
                             nextCrcPath,
+                            containsIndexedArray,
                             hmiVisible,
                             hmiAccessible);
                     }
@@ -920,6 +926,12 @@ namespace S7CommPlusDriver
 
         /// <summary>Retains the parsed symbol path so tag creation can reuse the exact CRC inputs.</summary>
         internal List<S7CommPlusSymbolCrc.PathSegment> SymbolCrcPath;
+
+        /// <summary>
+        /// Records that symbolic resolution selected an indexed array element. Such synthetic element access sequences must be sent
+        /// without the CRC of the containing array declaration because the PLC rejects that CRC/address combination.
+        /// </summary>
+        internal bool ContainsIndexedArray;
     }
 
     internal enum eNodeType

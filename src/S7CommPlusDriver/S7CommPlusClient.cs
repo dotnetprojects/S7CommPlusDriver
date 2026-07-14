@@ -12,14 +12,17 @@ namespace S7CommPlusDriver
 {
     public sealed class S7CommPlusClient : IAsyncDisposable
     {
+        private const int DefaultTagsPerRequest = 20;
+        private const int CpuStopRequest = 1;
+        private const int CpuRunRequest = 3;
         private readonly S7CommPlusClientOptions _options;
         private readonly Func<IS7CommPlusSession> _sessionFactory;
         private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
         private IS7CommPlusSession _session;
         private bool _disposed;
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
-        private const int CpuStopRequest = 1;
-        private const int CpuRunRequest = 3;
+        private int _tagsPerReadRequestMax = DefaultTagsPerRequest;
+        private int _tagsPerWriteRequestMax = DefaultTagsPerRequest;
 
         public S7CommPlusClient(S7CommPlusClientOptions options)
             : this(options, () => new S7CommPlusProtocolSession())
@@ -254,7 +257,10 @@ namespace S7CommPlusDriver
             {
                 var error = session.GetCommunicationResources(out var resources);
                 ThrowIfError("GetCommunicationResources", error);
-                return new S7CommPlusCommunicationResources(resources);
+                var result = new S7CommPlusCommunicationResources(resources);
+                _tagsPerReadRequestMax = Math.Max(1, result.TagsPerReadRequestMax);
+                _tagsPerWriteRequestMax = Math.Max(1, result.TagsPerWriteRequestMax);
+                return result;
             }, cancellationToken);
         }
 
@@ -596,7 +602,35 @@ namespace S7CommPlusDriver
 
             return ExecuteReadOperationAsync("GetTagBySymbol", session =>
             {
-                var tag = session.GetPlcTagBySymbol(symbol);
+                PlcTag tag;
+                try
+                {
+                    tag = session.GetPlcTagBySymbol(symbol);
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetTagBySymbol",
+                        Endpoint,
+                        S7Consts.errCliItemNotAvailable,
+                        false,
+                        $"PLC tag '{symbol}' has invalid symbolic array syntax: {exception.Message}",
+                        exception);
+                }
+                catch (S7CommPlusException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetTagBySymbol",
+                        Endpoint,
+                        S7Consts.errCliFunctionRefused,
+                        true,
+                        $"Unexpected failure while resolving PLC tag '{symbol}': {exception.Message}",
+                        exception);
+                }
                 if (tag == null)
                 {
                     throw new S7CommPlusConnectionException("GetTagBySymbol", Endpoint, S7Consts.errCliItemNotAvailable, false, $"PLC tag '{symbol}' could not be resolved.");
@@ -652,16 +686,32 @@ namespace S7CommPlusDriver
 
             return ExecuteReadOperationAsync("ReadTags", session =>
             {
-                var addresses = tagList.Select(tag => tag.Address).ToList();
-                var error = session.ReadValues(addresses, out var values, out var itemErrors);
-                ThrowIfError("ReadTags", error);
+                var requestTags = tagList
+                    .SelectMany(tag => tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag })
+                    .ToList();
+                var (values, itemErrors) = ReadTagValuesInBatches(session, requestTags);
                 var items = new List<S7CommPlusTagReadResult>(tagList.Count);
-                for (var i = 0; i < tagList.Count; i++)
+                var requestIndex = 0;
+                foreach (var tag in tagList)
                 {
-                    var value = i < values.Count ? values[i] : null;
-                    var itemError = i < itemErrors.Count ? itemErrors[i] : ulong.MaxValue;
-                    tagList[i].ProcessReadResult(value, itemError);
-                    items.Add(new S7CommPlusTagReadResult(tagList[i], itemError));
+                    var elementTags = tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag };
+                    var aggregateError = 0UL;
+                    foreach (var elementTag in elementTags)
+                    {
+                        var value = requestIndex < values.Count ? values[requestIndex] : null;
+                        var itemError = requestIndex < itemErrors.Count ? itemErrors[requestIndex] : ulong.MaxValue;
+                        elementTag.ProcessReadResult(value, itemError);
+                        if (aggregateError == 0 && itemError != 0)
+                        {
+                            aggregateError = itemError;
+                        }
+                        requestIndex++;
+                    }
+                    if (tag.AggregateElements.Count > 0)
+                    {
+                        tag.CompleteAggregateRead(aggregateError);
+                    }
+                    items.Add(new S7CommPlusTagReadResult(tag, aggregateError));
                 }
                 return new S7CommPlusBatchResult<S7CommPlusTagReadResult>(items);
             }, cancellationToken);
@@ -722,19 +772,86 @@ namespace S7CommPlusDriver
 
             return ExecuteWriteOperationAsync("WriteTags", session =>
             {
-                var addresses = tagList.Select(tag => tag.Address).ToList();
-                var values = tagList.Select(tag => tag.GetWriteValue()).ToList();
-                var error = session.WriteValues(addresses, values, out var itemErrors);
-                ThrowIfError("WriteTags", error);
-                var items = new List<S7CommPlusWriteResult>(tagList.Count);
-                for (var i = 0; i < tagList.Count; i++)
+                foreach (var tag in tagList)
                 {
-                    var itemError = i < itemErrors.Count ? itemErrors[i] : ulong.MaxValue;
-                    tagList[i].ProcessWriteResult(itemError);
-                    items.Add(new S7CommPlusWriteResult(addresses[i], itemError));
+                    tag.PrepareAggregateWrite();
+                }
+                var requestTags = tagList
+                    .SelectMany(tag => tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag })
+                    .ToList();
+                var itemErrors = WriteTagValuesInBatches(session, requestTags);
+                var items = new List<S7CommPlusWriteResult>(tagList.Count);
+                var requestIndex = 0;
+                foreach (var tag in tagList)
+                {
+                    var elementTags = tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag };
+                    var aggregateError = 0UL;
+                    foreach (var elementTag in elementTags)
+                    {
+                        var itemError = requestIndex < itemErrors.Count ? itemErrors[requestIndex] : ulong.MaxValue;
+                        elementTag.ProcessWriteResult(itemError);
+                        if (aggregateError == 0 && itemError != 0)
+                        {
+                            aggregateError = itemError;
+                        }
+                        requestIndex++;
+                    }
+                    tag.ProcessWriteResult(aggregateError);
+                    items.Add(new S7CommPlusWriteResult(tag.Address, aggregateError));
                 }
                 return new S7CommPlusBatchResult<S7CommPlusWriteResult>(items);
             }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads resolved tags in PLC-supported item counts and concatenates the per-item values and errors in request order.
+        /// </summary>
+        /// <param name="session">The connected protocol session that owns the resolved addresses.</param>
+        /// <param name="requestTags">Scalar tags after aggregate arrays have been expanded into their elements.</param>
+        /// <returns>All values and item errors in the same order as <paramref name="requestTags"/>.</returns>
+        private (List<object> Values, List<ulong> ItemErrors) ReadTagValuesInBatches(
+            IS7CommPlusSession session,
+            IReadOnlyCollection<PlcTag> requestTags)
+        {
+            var values = new List<object>(requestTags.Count);
+            var itemErrors = new List<ulong>(requestTags.Count);
+            foreach (var batch in requestTags.Chunk(_tagsPerReadRequestMax))
+            {
+                var error = session.ReadValues(batch.Select(tag => tag.Address).ToList(), out var batchValues, out var batchErrors);
+                ThrowIfError("ReadTags", error);
+                for (var index = 0; index < batch.Length; index++)
+                {
+                    values.Add(index < batchValues.Count ? batchValues[index] : null);
+                    itemErrors.Add(index < batchErrors.Count ? batchErrors[index] : ulong.MaxValue);
+                }
+            }
+            return (values, itemErrors);
+        }
+
+        /// <summary>
+        /// Writes resolved tags in PLC-supported item counts and concatenates item errors in request order.
+        /// </summary>
+        /// <param name="session">The connected protocol session that owns the resolved addresses.</param>
+        /// <param name="requestTags">Scalar tags after aggregate arrays have been expanded and populated.</param>
+        /// <returns>All item errors in the same order as <paramref name="requestTags"/>.</returns>
+        private List<ulong> WriteTagValuesInBatches(
+            IS7CommPlusSession session,
+            IReadOnlyCollection<PlcTag> requestTags)
+        {
+            var itemErrors = new List<ulong>(requestTags.Count);
+            foreach (var batch in requestTags.Chunk(_tagsPerWriteRequestMax))
+            {
+                var error = session.WriteValues(
+                    batch.Select(tag => tag.Address).ToList(),
+                    batch.Select(tag => tag.GetWriteValue()).ToList(),
+                    out var batchErrors);
+                ThrowIfError("WriteTags", error);
+                for (var index = 0; index < batch.Length; index++)
+                {
+                    itemErrors.Add(index < batchErrors.Count ? batchErrors[index] : ulong.MaxValue);
+                }
+            }
+            return itemErrors;
         }
 
         public async ValueTask DisposeAsync()
@@ -857,6 +974,8 @@ namespace S7CommPlusDriver
             }
 
             SetState(S7CommPlusConnectionState.Connected);
+            _tagsPerReadRequestMax = DefaultTagsPerRequest;
+            _tagsPerWriteRequestMax = DefaultTagsPerRequest;
             _options.Logger.LogInformation("Connected to PLC {Endpoint}.", Endpoint);
         }
 

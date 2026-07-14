@@ -35,6 +35,120 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task AggregateReadUsesElementAddressesAndPublishesOneArrayResult()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                ReadHandler = addresses =>
+                {
+                    Assert.Equal(new[] { "8A0E0001.F.0", "8A0E0001.F.1" }, addresses.Select(address => address.GetAccessString()));
+                    return (0, new List<object?> { new ValueUDInt(11), new ValueUDInt(22) }, new List<ulong> { 0, 0 });
+                },
+            };
+            var aggregate = new PlcTagUDIntArray(
+                "DB.Values",
+                new ItemAddress("8A0E0001.F"),
+                Softdatatype.S7COMMP_SOFTDATATYPE_UDINT);
+            aggregate.SetAggregateElements(new PlcTag[]
+            {
+                new PlcTagUDInt("DB.Values[1]", new ItemAddress("8A0E0001.F.0"), Softdatatype.S7COMMP_SOFTDATATYPE_UDINT),
+                new PlcTagUDInt("DB.Values[2]", new ItemAddress("8A0E0001.F.1"), Softdatatype.S7COMMP_SOFTDATATYPE_UDINT),
+            });
+            var client = CreateClient(fake);
+
+            var result = await client.ReadAsync(new[] { aggregate });
+
+            Assert.Single(result.Items);
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(new uint[] { 11, 22 }, aggregate.Value);
+            Assert.Equal(new uint[] { 11, 22 }, Assert.IsType<uint[]>(aggregate.AggregateValue));
+        }
+
+        [Fact]
+        public async Task AggregateReadSplitsExpandedElementsAtDefaultPlcLimit()
+        {
+            var nextValue = 0U;
+            var fake = new FakeS7CommPlusSession
+            {
+                ReadHandler = addresses =>
+                {
+                    Assert.InRange(addresses.Count, 1, 20);
+                    var values = addresses.Select(_ => (object?)new ValueUDInt(nextValue++)).ToList();
+                    return (0, values, new List<ulong>(new ulong[addresses.Count]));
+                },
+            };
+            var aggregate = CreateAggregateUnsignedIntegerTag(25);
+            var client = CreateClient(fake);
+
+            var result = await client.ReadAsync(new[] { aggregate });
+
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(2, fake.ReadCount);
+            Assert.Equal(Enumerable.Range(0, 25).Select(value => (uint)value), aggregate.Value);
+        }
+
+        [Fact]
+        public async Task AggregateWriteCopiesParentArrayAndSplitsExpandedElements()
+        {
+            var writtenValues = new List<uint>();
+            var fake = new FakeS7CommPlusSession
+            {
+                WriteHandler = (addresses, values) =>
+                {
+                    Assert.InRange(addresses.Count, 1, 20);
+                    writtenValues.AddRange(values.Cast<ValueUDInt>().Select(value => value.GetValue()));
+                    return (0, new List<ulong>(new ulong[addresses.Count]));
+                },
+            };
+            var aggregate = CreateAggregateUnsignedIntegerTag(25);
+            aggregate.Value = Enumerable.Range(1, 25).Select(value => (uint)value).ToArray();
+            var client = CreateClient(fake, writeEnabled: true);
+
+            var result = await client.WriteAsync(new[] { aggregate });
+
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(aggregate.Value, writtenValues);
+        }
+
+        [Fact]
+        public async Task InvalidSymbolSyntaxPreservesSymbolAndDoesNotReconnect()
+        {
+            var syntaxException = new ArgumentException("Expected an array index.", "symbol");
+            var fake = new FakeS7CommPlusSession
+            {
+                GetTagHandler = _ => throw syntaxException,
+            };
+            var client = CreateClient(fake);
+
+            var exception = await Assert.ThrowsAsync<S7CommPlusConnectionException>(() => client.GetTagBySymbolAsync("DB.Values"));
+
+            Assert.Contains("DB.Values", exception.Message);
+            Assert.Same(syntaxException, exception.InnerException);
+            Assert.False(exception.IsTransient);
+            Assert.Equal(S7Consts.errCliItemNotAvailable, exception.ErrorCode);
+            Assert.Equal(1, fake.ConnectCount);
+            Assert.Equal(0, fake.DisconnectCount);
+        }
+
+        [Fact]
+        public async Task UnexpectedSymbolFailurePreservesSymbolAndInnerException()
+        {
+            var innerException = new InvalidOperationException("Broken type metadata.");
+            var fake = new FakeS7CommPlusSession
+            {
+                GetTagHandler = _ => throw innerException,
+            };
+            var client = CreateClient(fake);
+
+            var exception = await Assert.ThrowsAsync<S7CommPlusConnectionException>(() => client.GetTagBySymbolAsync("DB.Broken"));
+
+            Assert.Contains("DB.Broken", exception.Message);
+            Assert.Same(innerException, exception.InnerException);
+            Assert.True(exception.IsTransient);
+            Assert.Equal(S7Consts.errCliFunctionRefused, exception.ErrorCode);
+        }
+
+        [Fact]
         public async Task BrowseUsesAggregatePrimitiveArraysByDefaultAndSupportsLegacyExpansion()
         {
             var fake = new FakeS7CommPlusSession();
@@ -1228,6 +1342,26 @@ namespace S7CommPlusDriver.Tests
                     DisconnectTimeout = TimeSpan.FromMilliseconds(100)
                 },
                 () => fake);
+        }
+
+        /// <summary>
+        /// Creates one synthetic aggregate UDINT tag with sequential element access IDs.
+        /// </summary>
+        /// <param name="elementCount">Number of scalar element tags to attach.</param>
+        /// <returns>A parent array tag ready for aggregate read or write tests.</returns>
+        private static PlcTagUDIntArray CreateAggregateUnsignedIntegerTag(int elementCount)
+        {
+            var aggregate = new PlcTagUDIntArray(
+                "DB.Values",
+                new ItemAddress("8A0E0001.F"),
+                Softdatatype.S7COMMP_SOFTDATATYPE_UDINT);
+            aggregate.SetAggregateElements(Enumerable.Range(0, elementCount)
+                .Select(index => (PlcTag)new PlcTagUDInt(
+                    $"DB.Values[{index}]",
+                    new ItemAddress($"8A0E0001.F.{index:X}"),
+                    Softdatatype.S7COMMP_SOFTDATATYPE_UDINT))
+                .ToArray());
+            return aggregate;
         }
 
         private static S7CommPlusSubscriptionOptions FastSubscriptionOptions()

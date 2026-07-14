@@ -1715,17 +1715,24 @@ namespace S7CommPlusDriver
         {
             Regex re = new Regex(@"^\[(-?\d+)\]");
             Match m = re.Match(symbol);
-            if (!m.Success) throw new Exception("Symbol syntax error");
+            if (!m.Success) throw new ArgumentException("Expected a one-dimensional array index such as '[1]'.", nameof(symbol));
             parseSymbolLevel(ref symbol); // remove index from symbol string
-            int arrayIndex = int.Parse(m.Groups[1].Value);
+            if (!int.TryParse(m.Groups[1].Value, out var arrayIndex))
+            {
+                throw new ArgumentException("The array index is outside the supported integer range.", nameof(symbol));
+            }
 
             var ioit = (IOffsetInfoType_1Dim)varType.OffsetInfoType;
             uint arrayElementCount = ioit.GetArrayElementCount();
             int arrayLowerBounds = ioit.GetArrayLowerBounds();
 
-            if (arrayIndex - arrayLowerBounds > arrayElementCount) throw new Exception("Out of bounds");
-            if (arrayIndex < arrayLowerBounds) throw new Exception("Out of bounds");
+            var normalizedIndex = (long)arrayIndex - arrayLowerBounds;
+            if (normalizedIndex < 0 || normalizedIndex >= arrayElementCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(symbol), arrayIndex, "The array index is outside the PLC declaration bounds.");
+            }
             varInfo.AccessSequence += "." + String.Format("{0:X}", arrayIndex - arrayLowerBounds);
+            varInfo.ContainsIndexedArray = true;
             if (varType.OffsetInfoType.HasRelation()) varInfo.AccessSequence += ".1"; // additional ".1" for array of struct
         }
 
@@ -1740,30 +1747,47 @@ namespace S7CommPlusDriver
         {
             Regex re = new Regex(@"^\[( ?-?\d+ ?(, ?-?\d+ ?)+)\]");
             Match m = re.Match(symbol);
-            if (!m.Success) throw new Exception("Symbol syntax error");
+            if (!m.Success) throw new ArgumentException("Expected a multidimensional array index such as '[1,2]'.", nameof(symbol));
             parseSymbolLevel(ref symbol); // remove index from symbol string
             string idxs = m.Groups[1].Value.Replace(" ", "");
 
-            int[] indexes = Array.ConvertAll(idxs.Split(','), e => int.Parse(e));
+            var indexTexts = idxs.Split(',');
+            var indexes = new int[indexTexts.Length];
+            for (var index = 0; index < indexTexts.Length; index++)
+            {
+                if (!int.TryParse(indexTexts[index], out indexes[index]))
+                {
+                    throw new ArgumentException("An array index is outside the supported integer range.", nameof(symbol));
+                }
+            }
             var ioit = (IOffsetInfoType_MDim)varType.OffsetInfoType;
             uint[] MdimArrayElementCount = (uint[])ioit.GetMdimArrayElementCount().Clone();
             int[] MdimArrayLowerBounds = ioit.GetMdimArrayLowerBounds();
 
             // check dim count
             int dimCount = MdimArrayElementCount.Aggregate(0, (acc, act) => acc += (act > 0) ? 1 : 0);
-            if (dimCount != indexes.Count()) throw new Exception("Out of bounds");
+            if (dimCount != indexes.Length)
+            {
+                throw new ArgumentException($"The PLC array has {dimCount} dimensions, but {indexes.Length} indices were supplied.", nameof(symbol));
+            }
             // check bounds
             for (int i = 0; i < dimCount; ++i)
             {
                 indexes[i] = (indexes[i] - MdimArrayLowerBounds[dimCount - i - 1]);
-                if (indexes[i] > MdimArrayElementCount[dimCount - i - 1]) throw new Exception("Out of bounds");
-                if (indexes[i] < 0) throw new Exception("Out of bounds");
+                if (indexes[i] < 0 || indexes[i] >= MdimArrayElementCount[dimCount - i - 1])
+                {
+                    throw new ArgumentOutOfRangeException(nameof(symbol), "An array index is outside the PLC declaration bounds.");
+                }
             }
 
             // calc dim size
             if (varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL)
             {
-                MdimArrayElementCount[0] += 8 - MdimArrayElementCount[0] % 8; // for bool must be a mutiple of 8!
+                var remainder = MdimArrayElementCount[0] % 8;
+                if (remainder != 0)
+                {
+                    MdimArrayElementCount[0] += 8 - remainder; // for bool must be a multiple of 8!
+                }
             }
             uint[] dimSize = new uint[dimCount];
             uint g = 1;
@@ -1782,6 +1806,7 @@ namespace S7CommPlusDriver
             }
 
             varInfo.AccessSequence += "." + String.Format("{0:X}", arrayIndex);
+            varInfo.ContainsIndexedArray = true;
             if (varType.OffsetInfoType.HasRelation()) varInfo.AccessSequence += ".1"; // additional ".1" for array of struct
         }
 
@@ -1804,27 +1829,26 @@ namespace S7CommPlusDriver
             PVartypeListElement varType = pObj.VartypeList.Elements[idx];
             varInfo.AccessSequence += "." + String.Format("{0:X}", varType.LID);
             AddSymbolCrcSegment(varInfo, levelName, varType);
-            bool is1Dim = false;
+            var isAggregateArray = IsAggregatePrimitiveArray(varType, symbol);
             if (varType.OffsetInfoType.Is1Dim())
             {
-                if (symbol == "")
-                {
-                    is1Dim = true;
-                }
-                else
+                if (!isAggregateArray)
                 {
                     calcAccessSeqFor1DimArray(ref symbol, varType, varInfo);
                 }
             }
             if (varType.OffsetInfoType.IsMDim())
             {
-                calcAccessSeqForMDimArray(ref symbol, varType, varInfo);
+                if (!isAggregateArray)
+                {
+                    calcAccessSeqForMDimArray(ref symbol, varType, varInfo);
+                }
             }
             if (varType.OffsetInfoType.HasRelation())
             {
                 if (symbol.Length <= 0 && varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL)
                 {
-                    return PlcTags.TagFactory(varInfo.Name, CreateItemAddress(varInfo), varType.Softdatatype, is1Dim);
+                    return CreateResolvedPlcTag(varInfo, varType, isAggregateArray);
                 }
                 if (symbol.Length <= 0)
                 {
@@ -1838,7 +1862,144 @@ namespace S7CommPlusDriver
             }
             else
             {
-                return PlcTags.TagFactory(varInfo.Name, CreateItemAddress(varInfo), varType.Softdatatype, is1Dim);
+                return CreateResolvedPlcTag(varInfo, varType, isAggregateArray);
+            }
+        }
+
+        /// <summary>
+        /// Determines whether a complete primitive array was requested without an element index.
+        /// Arrays of structures still require a member path and are rejected by the relation handling that follows.
+        /// </summary>
+        /// <param name="varType">The PLC member metadata containing scalar or array dimension information.</param>
+        /// <param name="remainingSymbol">The unconsumed symbolic path after the current member name.</param>
+        /// <returns><see langword="true"/> when the current member is an aggregate one- or multidimensional array request.</returns>
+        internal static bool IsAggregatePrimitiveArray(PVartypeListElement varType, string remainingSymbol)
+        {
+            if (varType == null) throw new ArgumentNullException(nameof(varType));
+
+            return string.IsNullOrEmpty(remainingSymbol)
+                && (varType.OffsetInfoType.Is1Dim() || varType.OffsetInfoType.IsMDim());
+        }
+
+        /// <summary>
+        /// Creates a resolved scalar or aggregate tag and expands aggregate arrays into PLC-readable element addresses.
+        /// </summary>
+        /// <param name="varInfo">The accumulated symbolic name, access sequence, and CRC path.</param>
+        /// <param name="varType">The resolved member datatype and dimension metadata.</param>
+        /// <param name="isAggregateArray">Whether the symbol requested the complete primitive array.</param>
+        /// <returns>The concrete tag used by the public client API.</returns>
+        private static PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
+        {
+            var address = CreateItemAddress(varInfo);
+            var tag = PlcTags.TagFactory(varInfo.Name, address, varType.Softdatatype, isAggregateArray);
+            if (!isAggregateArray || tag == null)
+            {
+                return tag;
+            }
+
+            var elementTags = GetAggregateArrayElementAccessIds(varType)
+                .Select(accessId =>
+                {
+                    var elementAddress = CreateAggregateArrayElementAddress(varInfo.AccessSequence, accessId);
+                    return PlcTags.TagFactory($"{varInfo.Name}[#{accessId}]", elementAddress, varType.Softdatatype);
+                })
+                .Where(elementTag => elementTag != null)
+                .ToList();
+            tag.SetAggregateElements(elementTags);
+            return tag;
+        }
+
+        /// <summary>
+        /// Enumerates linear S7 access IDs for every declared array element in PLC storage order.
+        /// </summary>
+        /// <param name="varType">The primitive array member metadata.</param>
+        /// <returns>Element access IDs, excluding alignment-only gaps used by packed multidimensional booleans.</returns>
+        internal static IReadOnlyList<uint> GetAggregateArrayElementAccessIds(PVartypeListElement varType)
+        {
+            if (varType == null) throw new ArgumentNullException(nameof(varType));
+
+            if (varType.OffsetInfoType is IOffsetInfoType_1Dim oneDimensional)
+            {
+                return Enumerable.Range(0, checked((int)oneDimensional.GetArrayElementCount()))
+                    .Select(index => (uint)index)
+                    .ToArray();
+            }
+            if (varType.OffsetInfoType is not IOffsetInfoType_MDim multiDimensional)
+            {
+                return Array.Empty<uint>();
+            }
+
+            var logicalCounts = multiDimensional.GetMdimArrayElementCount()
+                .TakeWhile(count => count > 0)
+                .ToArray();
+            if (logicalCounts.Length == 0)
+            {
+                return Array.Empty<uint>();
+            }
+
+            var physicalCounts = (uint[])logicalCounts.Clone();
+            if (varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL)
+            {
+                var remainder = physicalCounts[0] % 8;
+                if (remainder != 0)
+                {
+                    physicalCounts[0] += 8 - remainder;
+                }
+            }
+
+            var strides = new uint[logicalCounts.Length];
+            strides[0] = 1;
+            for (var dimension = 1; dimension < strides.Length; dimension++)
+            {
+                strides[dimension] = checked(strides[dimension - 1] * physicalCounts[dimension - 1]);
+            }
+
+            List<uint> accessIds = new(checked((int)multiDimensional.GetArrayElementCount()));
+            AddAggregateArrayAccessIds(logicalCounts, strides, logicalCounts.Length - 1, 0, accessIds);
+            return accessIds;
+        }
+
+        /// <summary>
+        /// Creates an address for an element derived from an aggregate array access sequence.
+        /// The aggregate symbol CRC is deliberately omitted because it describes the array declaration, not the synthetic
+        /// element address, and S7-1500 PLCs reject that combination with an item-level protocol error.
+        /// </summary>
+        /// <param name="aggregateAccessSequence">Resolved low-level access sequence of the aggregate array.</param>
+        /// <param name="accessId">Linear element access ID in PLC storage order.</param>
+        /// <returns>An element address with a zero symbol CRC.</returns>
+        internal static ItemAddress CreateAggregateArrayElementAddress(string aggregateAccessSequence, uint accessId)
+        {
+            if (string.IsNullOrWhiteSpace(aggregateAccessSequence)) throw new ArgumentException("An aggregate access sequence is required.", nameof(aggregateAccessSequence));
+
+            return new ItemAddress($"{aggregateAccessSequence}.{accessId:X}");
+        }
+
+        /// <summary>
+        /// Recursively emits row-major array access IDs while preserving physical strides and omitting padding cells.
+        /// </summary>
+        /// <param name="logicalCounts">Declared element counts in the protocol's innermost-first order.</param>
+        /// <param name="strides">Physical access-ID stride for each dimension.</param>
+        /// <param name="dimension">The dimension currently being enumerated.</param>
+        /// <param name="baseAccessId">The access ID accumulated by outer dimensions.</param>
+        /// <param name="accessIds">Destination list in PLC declaration order.</param>
+        private static void AddAggregateArrayAccessIds(
+            IReadOnlyList<uint> logicalCounts,
+            IReadOnlyList<uint> strides,
+            int dimension,
+            uint baseAccessId,
+            ICollection<uint> accessIds)
+        {
+            for (uint index = 0; index < logicalCounts[dimension]; index++)
+            {
+                var accessId = checked(baseAccessId + index * strides[dimension]);
+                if (dimension == 0)
+                {
+                    accessIds.Add(accessId);
+                }
+                else
+                {
+                    AddAggregateArrayAccessIds(logicalCounts, strides, dimension - 1, accessId, accessIds);
+                }
             }
         }
 
@@ -1865,7 +2026,7 @@ namespace S7CommPlusDriver
         private static ItemAddress CreateItemAddress(VarInfo varInfo)
         {
             var address = new ItemAddress(varInfo.AccessSequence);
-            address.SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
+            address.SymbolCrc = varInfo.ContainsIndexedArray ? 0 : S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
             varInfo.SymbolCrc = address.SymbolCrc;
             return address;
         }

@@ -65,6 +65,7 @@ namespace S7CommPlusDriver.Tests
             {
                 Assert.Equal(0U, variable.ArrayElementCount);
                 Assert.Empty(variable.ArrayDimensions);
+                Assert.Equal(0U, variable.SymbolCrc);
             });
         }
 
@@ -131,7 +132,11 @@ namespace S7CommPlusDriver.Tests
 
             var variables = browser.GetVarInfoList();
             Assert.Equal(new[] { "Data.Entries[1].Value", "Data.Entries[2].Value" }, variables.Select(variable => variable.Name));
-            Assert.All(variables, variable => Assert.Equal(0U, variable.ArrayElementCount));
+            Assert.All(variables, variable =>
+            {
+                Assert.Equal(0U, variable.ArrayElementCount);
+                Assert.Equal(0U, variable.SymbolCrc);
+            });
         }
 
         [Fact]

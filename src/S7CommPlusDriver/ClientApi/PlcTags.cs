@@ -68,6 +68,17 @@ namespace S7CommPlusDriver.ClientApi
             return res;
         }
 
+        /// <summary>
+        /// Creates the concrete mutable tag used to encode and decode one scalar or complete primitive-array value.
+        /// </summary>
+        /// <param name="name">The fully qualified symbolic PLC name.</param>
+        /// <param name="address">The resolved S7CommPlus item address and symbol CRC.</param>
+        /// <param name="softdatatype">The Siemens soft-datatype identifier.</param>
+        /// <param name="Is1Dim">
+        /// Whether the address represents a complete primitive array. The legacy parameter name is retained for source compatibility,
+        /// but the flag also applies to multidimensional arrays because their wire value uses the same flattened array tag type.
+        /// </param>
+        /// <returns>The matching concrete tag implementation, or <see langword="null"/> for an unsupported datatype.</returns>
         public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim = false)
         {
             switch (softdatatype)
