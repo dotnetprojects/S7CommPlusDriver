@@ -1910,6 +1910,84 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
+        /// Creates a typed tag directly from one aggregate browse result, avoiding a second walk through the PLC type catalog.
+        /// </summary>
+        /// <param name="varInfo">Browse metadata containing the exact symbol, access sequence, CRC, datatype, and array bounds.</param>
+        /// <returns>A ready-to-read scalar or aggregate tag, or <see langword="null"/> for an unsupported datatype.</returns>
+        /// <remarks>
+        /// Aggregate primitive arrays are expanded into their individually addressable wire elements because the PLC does not accept
+        /// every complete array type at its declaration address. The parent tag still exposes the assembled typed array to callers.
+        /// </remarks>
+        internal static PlcTag CreateResolvedPlcTag(VarInfo varInfo)
+        {
+            if (varInfo == null) throw new ArgumentNullException(nameof(varInfo));
+            if (string.IsNullOrWhiteSpace(varInfo.Name)) throw new ArgumentException("Browse metadata must contain a symbol name.", nameof(varInfo));
+            if (string.IsNullOrWhiteSpace(varInfo.AccessSequence)) throw new ArgumentException("Browse metadata must contain an access sequence.", nameof(varInfo));
+
+            var address = CreateItemAddress(varInfo);
+            var isAggregateArray = varInfo.ArrayElementCount > 0;
+            var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray);
+            if (!isAggregateArray || tag == null)
+            {
+                return tag;
+            }
+
+            var elementTags = GetAggregateArrayElementAccessIds(varInfo)
+                .Select(accessId => PlcTags.TagFactory(
+                    $"{varInfo.Name}[#{accessId}]",
+                    CreateAggregateArrayElementAddress(varInfo.AccessSequence, accessId),
+                    varInfo.Softdatatype))
+                .Where(elementTag => elementTag != null)
+                .ToList();
+            tag.SetAggregateElements(elementTags);
+            return tag;
+        }
+
+        /// <summary>
+        /// Enumerates the physical PLC access IDs represented by caller-facing browse dimensions.
+        /// </summary>
+        /// <param name="varInfo">Aggregate browse metadata whose dimensions are ordered as written in a symbolic PLC name.</param>
+        /// <returns>Element access IDs in declaration order, excluding multidimensional packed-boolean alignment cells.</returns>
+        private static IReadOnlyList<uint> GetAggregateArrayElementAccessIds(VarInfo varInfo)
+        {
+            if (varInfo.ArrayElementCount == 0)
+            {
+                return Array.Empty<uint>();
+            }
+
+            var dimensions = varInfo.ArrayDimensions ?? Array.Empty<S7CommPlusArrayDimension>();
+            if (dimensions.Count <= 1)
+            {
+                return Enumerable.Range(0, checked((int)varInfo.ArrayElementCount))
+                    .Select(index => (uint)index)
+                    .ToArray();
+            }
+
+            // Browse dimensions are printed left-to-right, while the protocol calculates linear access IDs innermost-first.
+            var logicalCounts = dimensions.Reverse().Select(dimension => dimension.ElementCount).ToArray();
+            var physicalCounts = (uint[])logicalCounts.Clone();
+            if (varInfo.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL)
+            {
+                var remainder = physicalCounts[0] % 8;
+                if (remainder != 0)
+                {
+                    physicalCounts[0] += 8 - remainder;
+                }
+            }
+
+            var strides = new uint[logicalCounts.Length];
+            strides[0] = 1;
+            for (var dimension = 1; dimension < strides.Length; dimension++)
+            {
+                strides[dimension] = checked(strides[dimension - 1] * physicalCounts[dimension - 1]);
+            }
+
+            List<uint> accessIds = new(checked((int)varInfo.ArrayElementCount));
+            AddAggregateArrayAccessIds(logicalCounts, strides, logicalCounts.Length - 1, 0, accessIds);
+            return accessIds;
+        }
+
+        /// <summary>
         /// Enumerates linear S7 access IDs for every declared array element in PLC storage order.
         /// </summary>
         /// <param name="varType">The primitive array member metadata.</param>
@@ -2026,7 +2104,11 @@ namespace S7CommPlusDriver
         private static ItemAddress CreateItemAddress(VarInfo varInfo)
         {
             var address = new ItemAddress(varInfo.AccessSequence);
-            address.SymbolCrc = varInfo.ContainsIndexedArray ? 0 : S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
+            address.SymbolCrc = varInfo.ContainsIndexedArray
+                ? 0
+                : varInfo.SymbolCrcPath == null
+                    ? varInfo.SymbolCrc
+                    : S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
             varInfo.SymbolCrc = address.SymbolCrc;
             return address;
         }

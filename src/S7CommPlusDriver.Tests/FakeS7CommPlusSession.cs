@@ -14,6 +14,7 @@ namespace S7CommPlusDriver.Tests
         public int ConnectCount { get; private set; }
         public int DisconnectCount { get; private set; }
         public int ReadCount { get; private set; }
+        public int BrowseVariablesCount { get; private set; }
         public int MaxConcurrentReads { get; private set; }
         public int ActiveReads;
         public int CpuOperatingStateWriteCount { get; private set; }
@@ -105,6 +106,7 @@ namespace S7CommPlusDriver.Tests
 
         public int BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables)
         {
+            BrowseVariablesCount++;
             LastBrowseExpandedPrimitiveArrayElements = expandPrimitiveArrayElements;
             var result = BrowseVariablesHandler?.Invoke() ?? (0, new List<VarInfo>());
             variables = result.Variables;

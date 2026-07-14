@@ -165,6 +165,88 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task BulkSymbolResolutionUsesOneBrowseAndOmitsMissingSymbols()
+        {
+            var getTagCalls = 0;
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Temperature",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_REAL,
+                    },
+                    new VarInfo
+                    {
+                        Name = "DB.Counter",
+                        AccessSequence = "8A0E0001.10",
+                        SymbolCrc = 0x87654321,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_DINT,
+                    },
+                }),
+                GetTagHandler = symbol =>
+                {
+                    getTagCalls++;
+                    return PlcTags.TagFactory(symbol, new ItemAddress("8A0E0001.F"), Softdatatype.S7COMMP_SOFTDATATYPE_INT);
+                },
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[]
+            {
+                "DB.Temperature",
+                "DB.Counter",
+                "DB.Missing",
+                "DB.Temperature",
+            });
+
+            Assert.Equal(2, tags.Count);
+            var temperature = Assert.IsType<PlcTagReal>(tags["DB.Temperature"]);
+            Assert.Equal("8A0E0001.F", temperature.Address.GetAccessString());
+            Assert.Equal(0x12345678U, temperature.Address.SymbolCrc);
+            Assert.IsType<PlcTagDInt>(tags["DB.Counter"]);
+            Assert.False(tags.ContainsKey("DB.Missing"));
+            Assert.Equal(1, fake.BrowseVariablesCount);
+            Assert.Equal(0, getTagCalls);
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionBuildsPackedMultidimensionalBooleanElements()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Flags",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL,
+                        ArrayElementCount = 6,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 3),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[] { "DB.Flags" });
+
+            var aggregate = Assert.IsType<PlcTagBoolArray>(tags["DB.Flags"]);
+            Assert.Equal(
+                new[] { "8A0E0001.F.0", "8A0E0001.F.1", "8A0E0001.F.2", "8A0E0001.F.8", "8A0E0001.F.9", "8A0E0001.F.A" },
+                aggregate.AggregateElements.Select(element => element.Address.GetAccessString()));
+            Assert.All(aggregate.AggregateElements, element => Assert.Equal(0U, element.Address.SymbolCrc));
+        }
+
+        [Fact]
         public async Task DisconnectIsIdempotent()
         {
             var fake = new FakeS7CommPlusSession();

@@ -110,6 +110,69 @@ namespace S7CommPlusDriver
             }, _options.BrowseTimeout, cancellationToken);
         }
 
+        /// <summary>
+        /// Resolves many exact symbolic PLC names from one type-catalog browse instead of issuing one metadata request per symbol.
+        /// </summary>
+        /// <param name="symbols">Fully qualified PLC symbols to resolve. Duplicate names are resolved only once.</param>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>
+        /// A case-sensitive mapping from every requested symbol found in the current PLC program to a typed, ready-to-read
+        /// <see cref="PlcTag"/>. Names absent from the PLC catalog are omitted so callers can handle stale configuration per item.
+        /// </returns>
+        /// <remarks>
+        /// This method is intended for initializing large tag caches after connecting or after the PLC program changes. It preserves
+        /// the access sequence, symbol CRC, datatype, and aggregate-array element addresses produced by normal symbolic resolution,
+        /// while requiring only one PLC browse operation for the complete requested set.
+        /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="symbols"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException">The collection contains a null, empty, or whitespace-only symbol.</exception>
+        public Task<IReadOnlyDictionary<string, PlcTag>> GetTagsBySymbolsAsync(
+            IEnumerable<string> symbols,
+            CancellationToken cancellationToken = default)
+        {
+            if (symbols == null)
+            {
+                throw new ArgumentNullException(nameof(symbols));
+            }
+
+            var requestedSymbols = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var symbol in symbols)
+            {
+                if (string.IsNullOrWhiteSpace(symbol))
+                {
+                    throw new ArgumentException("Symbol collection cannot contain null, empty, or whitespace-only entries.", nameof(symbols));
+                }
+                requestedSymbols.Add(symbol);
+            }
+            if (requestedSymbols.Count == 0)
+            {
+                return Task.FromResult<IReadOnlyDictionary<string, PlcTag>>(
+                    new Dictionary<string, PlcTag>(StringComparer.Ordinal));
+            }
+
+            return ExecuteReadOperationAsync("GetTagsBySymbols", session =>
+            {
+                var error = session.BrowseVariables(false, out var variables);
+                ThrowIfError("GetTagsBySymbols", error);
+
+                var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
+                foreach (var variable in variables ?? Enumerable.Empty<VarInfo>())
+                {
+                    if (variable == null || !requestedSymbols.Contains(variable.Name) || resolvedTags.ContainsKey(variable.Name))
+                    {
+                        continue;
+                    }
+
+                    var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+                    if (tag != null)
+                    {
+                        resolvedTags.Add(variable.Name, tag);
+                    }
+                }
+                return (IReadOnlyDictionary<string, PlcTag>)resolvedTags;
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
         public Task<IReadOnlyList<S7CommPlusBlockInfo>> BrowseBlocksAsync(CancellationToken cancellationToken = default)
         {
             return ExecuteReadOperationAsync("BrowseBlocks", session =>
