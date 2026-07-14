@@ -134,6 +134,36 @@ namespace S7CommPlusDriver.Tests
             Assert.All(variables, variable => Assert.Equal(0U, variable.ArrayElementCount));
         }
 
+        [Fact]
+        public void NestedLeafInheritsDisabledHmiFlagsFromContainingMember()
+        {
+            const uint rootTypeRelationId = 100;
+            const uint nestedTypeRelationId = 200;
+            var rootType = CreateTypeObject(
+                rootTypeRelationId,
+                "State",
+                Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT,
+                new POffsetInfoType_Struct { RelationId = nestedTypeRelationId },
+                attributeFlags: 0x0000);
+            var nestedType = CreateTypeObject(
+                nestedTypeRelationId,
+                "DdiAvailable",
+                Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL,
+                new POffsetInfoType_Std(),
+                attributeFlags: 0x0A00);
+
+            var browser = new Browser(expandPrimitiveArrayElements: false);
+            browser.AddBlockNode(eNodeType.Root, "Axes", 0x8A0E0001, rootTypeRelationId);
+            browser.SetTypeInfoContainerObjects(new List<PObject> { rootType, nestedType });
+            browser.BuildTree();
+            browser.BuildFlatList();
+
+            var variable = Assert.Single(browser.GetVarInfoList());
+            Assert.Equal("Axes.State.DdiAvailable", variable.Name);
+            Assert.False(variable.HmiVisible);
+            Assert.False(variable.HmiAccessible);
+        }
+
         /// <summary>
         /// Builds and executes a browser over one synthetic primitive PLC member.
         /// </summary>
@@ -165,8 +195,14 @@ namespace S7CommPlusDriver.Tests
         /// <param name="memberName">The single member name stored in the type information.</param>
         /// <param name="softdatatype">The member's S7 soft datatype.</param>
         /// <param name="offsetInfo">The member's scalar, array, or relation offset metadata.</param>
+        /// <param name="attributeFlags">The raw TIA member attributes, including HMI visibility and accessibility bits.</param>
         /// <returns>A synthetic protocol type-information object.</returns>
-        private static PObject CreateTypeObject(uint relationId, string memberName, uint softdatatype, POffsetInfoType offsetInfo)
+        private static PObject CreateTypeObject(
+            uint relationId,
+            string memberName,
+            uint softdatatype,
+            POffsetInfoType offsetInfo,
+            ushort attributeFlags = 0x0A00)
         {
             return new PObject
             {
@@ -180,7 +216,7 @@ namespace S7CommPlusDriver.Tests
                         {
                             LID = 0x2A,
                             Softdatatype = softdatatype,
-                            AttributeFlags = 0x0A00,
+                            AttributeFlags = attributeFlags,
                             OffsetInfoType = offsetInfo,
                         },
                     },

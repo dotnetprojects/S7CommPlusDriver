@@ -71,13 +71,43 @@ namespace S7CommPlusDriver
                 {
                     uint OptOffset = 0;                   
                     uint NonOptOffset = 0;
-                    AddFlatSubnodes(node, String.Empty, String.Empty, OptOffset, NonOptOffset, new List<S7CommPlusSymbolCrc.PathSegment>());
+                    AddFlatSubnodes(
+                        node,
+                        String.Empty,
+                        String.Empty,
+                        OptOffset,
+                        NonOptOffset,
+                        new List<S7CommPlusSymbolCrc.PathSegment>(),
+                        parentHmiVisible: true,
+                        parentHmiAccessible: true);
                 }
             }
         }
 
-        private void AddFlatSubnodes(Node node, string names, string accessIds, uint OptOffset, uint NonOptOffset, List<S7CommPlusSymbolCrc.PathSegment> crcPath)
+        /// <summary>
+        /// Flattens one symbol-tree branch and carries effective HMI permissions from every containing member to its leaves.
+        /// A leaf cannot be visible or accessible when any structure or array on its PLC path disables that capability.
+        /// </summary>
+        /// <param name="node">The current symbol-tree node.</param>
+        /// <param name="names">The symbolic name accumulated above <paramref name="node"/>.</param>
+        /// <param name="accessIds">The protocol access sequence accumulated above <paramref name="node"/>.</param>
+        /// <param name="OptOffset">The optimized storage offset accumulated above <paramref name="node"/>.</param>
+        /// <param name="NonOptOffset">The non-optimized storage offset accumulated above <paramref name="node"/>.</param>
+        /// <param name="crcPath">The CRC path segments accumulated above <paramref name="node"/>.</param>
+        /// <param name="parentHmiVisible">Whether every containing member is visible to HMI engineering.</param>
+        /// <param name="parentHmiAccessible">Whether every containing member permits HMI access.</param>
+        private void AddFlatSubnodes(
+            Node node,
+            string names,
+            string accessIds,
+            uint OptOffset,
+            uint NonOptOffset,
+            List<S7CommPlusSymbolCrc.PathSegment> crcPath,
+            bool parentHmiVisible,
+            bool parentHmiAccessible)
         {
+            var hmiVisible = parentHmiVisible && (node.Vte?.GetAttributeFlagHmiVisible() ?? true);
+            var hmiAccessible = parentHmiAccessible && (node.Vte?.GetAttributeFlagHmiAccessible() ?? true);
             var nextCrcPath = crcPath;
             switch (node.NodeType)
             {
@@ -129,10 +159,10 @@ namespace S7CommPlusDriver
                         Softdatatype = node.Softdatatype,
                         SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(nextCrcPath),
                         SymbolCrcPath = nextCrcPath,
-                        // For array elements the Vte comes from the parent array base element, so its
-                        // HMI attributes still apply. Default to true when unknown so nothing is dropped.
-                        HmiVisible = node.Vte?.GetAttributeFlagHmiVisible() ?? true,
-                        HmiAccessible = node.Vte?.GetAttributeFlagHmiAccessible() ?? true,
+                        // For array elements the Vte comes from the parent array base element. The effective
+                        // flags also include every containing structure/array, matching TIA and AGLink behavior.
+                        HmiVisible = hmiVisible,
+                        HmiAccessible = hmiAccessible,
                         ArrayElementCount = GetArrayElementCount(node),
                         ArrayDimensions = GetArrayDimensions(node),
                     };
@@ -207,11 +237,27 @@ namespace S7CommPlusDriver
                 {
                     if (sub.NodeType == eNodeType.Array)
                     {
-                        AddFlatSubnodes(sub, names, accessIds, OptOffset + sub.ArrayAdrOffsetOpt, NonOptOffset + sub.ArrayAdrOffsetNonOpt, nextCrcPath);
+                        AddFlatSubnodes(
+                            sub,
+                            names,
+                            accessIds,
+                            OptOffset + sub.ArrayAdrOffsetOpt,
+                            NonOptOffset + sub.ArrayAdrOffsetNonOpt,
+                            nextCrcPath,
+                            hmiVisible,
+                            hmiAccessible);
                     }
                     else
                     {
-                        AddFlatSubnodes(sub, names, accessIds, OptOffset, NonOptOffset, nextCrcPath);
+                        AddFlatSubnodes(
+                            sub,
+                            names,
+                            accessIds,
+                            OptOffset,
+                            NonOptOffset,
+                            nextCrcPath,
+                            hmiVisible,
+                            hmiAccessible);
                     }
                 }
             }
