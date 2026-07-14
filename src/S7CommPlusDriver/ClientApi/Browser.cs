@@ -110,6 +110,10 @@ namespace S7CommPlusDriver
                         Softdatatype = node.Softdatatype,
                         SymbolCrc = S7CommPlusSymbolCrc.ComputeFromSegments(nextCrcPath),
                         SymbolCrcPath = nextCrcPath,
+                        // For array elements the Vte comes from the parent array base element, so its
+                        // HMI attributes still apply. Default to true when unknown so nothing is dropped.
+                        HmiVisible = node.Vte?.GetAttributeFlagHmiVisible() ?? true,
+                        HmiAccessible = node.Vte?.GetAttributeFlagHmiAccessible() ?? true,
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)
@@ -732,6 +736,8 @@ namespace S7CommPlusDriver
         public int OptBitoffset;        // Optimized access: Bit-Offset where the value is located when reading a complete DB content. 
         public UInt32 NonOptAddress;    // NonOptimized access: Byte-Offset where the value is located when reading a complete DB content.
         public int NonOptBitoffset;     // NonOptimized access: Bit-Offset where the value is located when reading a complete DB content.
+        public bool HmiVisible = true;    // TIA "Visible in HMI engineering" attribute.
+        public bool HmiAccessible = true; // TIA "Accessible from HMI/OPC UA/Web server" attribute.
         internal List<S7CommPlusSymbolCrc.PathSegment> SymbolCrcPath;
     }
 

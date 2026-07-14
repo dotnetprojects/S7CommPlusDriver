@@ -79,7 +79,7 @@ namespace S7CommPlusDriver
                 var error = session.BrowseVariables(out var vars);
                 ThrowIfError("Browse", error);
                 return (IReadOnlyList<VarInfo>)(vars ?? new List<VarInfo>());
-            }, cancellationToken);
+            }, _options.BrowseTimeout, cancellationToken);
         }
 
         public Task<IReadOnlyList<S7CommPlusBlockInfo>> BrowseBlocksAsync(CancellationToken cancellationToken = default)
@@ -541,7 +541,7 @@ namespace S7CommPlusDriver
                     () => _session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
                     _options.RequestTimeout,
                     cancellationToken).ConfigureAwait(false);
-                ThrowIfError("CreateAlarmSubscription", error);
+                ThrowIfAlarmSubscriptionError("CreateAlarmSubscription", error);
 
                 subscription.Start(token => RunAlarmSubscriptionLoopAsync(subscription, subscriptionOptions, subscriptionObjectId, token));
                 return subscription;
@@ -736,12 +736,17 @@ namespace S7CommPlusDriver
 
         private Task<T> ExecuteReadOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
         {
-            return ExecuteOperationAsync(operation, allowReconnect: true, operationFunc, cancellationToken);
+            return ExecuteReadOperationAsync(operation, operationFunc, _options.RequestTimeout, cancellationToken);
+        }
+
+        private Task<T> ExecuteReadOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            return ExecuteOperationAsync(operation, allowReconnect: true, operationFunc, timeout, cancellationToken);
         }
 
         private Task<T> ExecuteSessionOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
         {
-            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, cancellationToken);
+            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, _options.RequestTimeout, cancellationToken);
         }
 
         private async Task SetCpuOperatingStateAsync(string operation, int operatingStateRequest, CancellationToken cancellationToken)
@@ -760,10 +765,10 @@ namespace S7CommPlusDriver
             {
                 throw new S7CommPlusWriteDisabledException(Endpoint);
             }
-            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, cancellationToken);
+            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, _options.RequestTimeout, cancellationToken);
         }
 
-        private async Task<T> ExecuteOperationAsync<T>(string operation, bool allowReconnect, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
+        private async Task<T> ExecuteOperationAsync<T>(string operation, bool allowReconnect, Func<IS7CommPlusSession, T> operationFunc, TimeSpan timeout, CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -772,14 +777,14 @@ namespace S7CommPlusDriver
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), _options.RequestTimeout, cancellationToken).ConfigureAwait(false);
+                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
                 }
                 catch (S7CommPlusException ex) when (allowReconnect && _options.AutoReconnect && ex.IsTransient)
                 {
                     RaiseCommunicationError(ex);
                     _options.Logger.LogWarning(ex, "Transient {Operation} failure for {Endpoint}; reconnecting and retrying once.", operation, Endpoint);
                     await ReconnectCoreAsync(cancellationToken).ConfigureAwait(false);
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), _options.RequestTimeout, cancellationToken).ConfigureAwait(false);
+                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (S7CommPlusException ex)
@@ -1071,6 +1076,25 @@ namespace S7CommPlusDriver
         private S7CommPlusException CreateTisWatchException(string operation, int errorCode)
         {
             var diagnostic = _session?.LastTisWatchDiagnostic;
+            var effectiveOperation = string.IsNullOrWhiteSpace(diagnostic)
+                ? operation
+                : $"{operation}: {diagnostic}";
+            return CreateException(effectiveOperation, errorCode);
+        }
+
+        private void ThrowIfAlarmSubscriptionError(string operation, int errorCode)
+        {
+            if (errorCode == 0)
+            {
+                return;
+            }
+
+            throw CreateAlarmSubscriptionException(operation, errorCode);
+        }
+
+        private S7CommPlusException CreateAlarmSubscriptionException(string operation, int errorCode)
+        {
+            var diagnostic = _session?.LastAlarmSubscriptionDiagnostic;
             var effectiveOperation = string.IsNullOrWhiteSpace(diagnostic)
                 ? operation
                 : $"{operation}: {diagnostic}";

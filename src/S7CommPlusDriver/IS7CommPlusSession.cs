@@ -38,6 +38,7 @@ namespace S7CommPlusDriver
         int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId);
         int WaitForTisWatchNotifications(uint subscriptionObjectId, int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications);
         string LastTisWatchDiagnostic { get; }
+        string LastAlarmSubscriptionDiagnostic { get; }
         int DeleteTisWatchSubscription(uint subscriptionObjectId);
     }
 }
