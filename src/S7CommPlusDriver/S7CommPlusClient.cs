@@ -23,6 +23,7 @@ namespace S7CommPlusDriver
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
         private int _tagsPerReadRequestMax = DefaultTagsPerRequest;
         private int _tagsPerWriteRequestMax = DefaultTagsPerRequest;
+        private IReadOnlyDictionary<string, VarInfo> _symbolCatalog;
 
         public S7CommPlusClient(S7CommPlusClientOptions options)
             : this(options, () => new S7CommPlusProtocolSession())
@@ -152,13 +153,11 @@ namespace S7CommPlusDriver
 
             return ExecuteReadOperationAsync("GetTagsBySymbols", session =>
             {
-                var error = session.BrowseVariables(false, out var variables);
-                ThrowIfError("GetTagsBySymbols", error);
-
+                var symbolCatalog = GetOrCreateSymbolCatalog(session);
                 var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
-                foreach (var variable in variables ?? Enumerable.Empty<VarInfo>())
+                foreach (var requestedSymbol in requestedSymbols)
                 {
-                    if (variable == null || !requestedSymbols.Contains(variable.Name) || resolvedTags.ContainsKey(variable.Name))
+                    if (!symbolCatalog.TryGetValue(requestedSymbol, out var variable))
                     {
                         continue;
                     }
@@ -166,11 +165,35 @@ namespace S7CommPlusDriver
                     var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
                     if (tag != null)
                     {
-                        resolvedTags.Add(variable.Name, tag);
+                        resolvedTags.Add(requestedSymbol, tag);
                     }
                 }
                 return (IReadOnlyDictionary<string, PlcTag>)resolvedTags;
             }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Discards the retained PLC symbol metadata after the caller detects that the controller program structure changed.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels waiting for another client operation to finish.</param>
+        /// <returns>A task that completes after subsequent bulk resolutions are forced to browse the PLC again.</returns>
+        /// <remarks>
+        /// Normal disconnects and reconnects intentionally retain the catalog because access metadata remains valid while the PLC
+        /// program is unchanged. Call this method when a program-structure hash changes, before rebuilding cached <see cref="PlcTag"/>
+        /// accessors. The next <see cref="GetTagsBySymbolsAsync(IEnumerable{string}, CancellationToken)"/> call then refreshes the catalog.
+        /// </remarks>
+        public async Task InvalidateSymbolCatalogAsync(CancellationToken cancellationToken = default)
+        {
+            await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                _symbolCatalog = null;
+            }
+            finally
+            {
+                _operationGate.Release();
+            }
         }
 
         public Task<IReadOnlyList<S7CommPlusBlockInfo>> BrowseBlocksAsync(CancellationToken cancellationToken = default)
@@ -937,6 +960,37 @@ namespace S7CommPlusDriver
                 _disposed = true;
                 _operationGate.Dispose();
             }
+        }
+
+        /// <summary>
+        /// Returns the retained aggregate symbol catalog or builds it through one PLC metadata browse for the current program.
+        /// </summary>
+        /// <param name="session">The connected session used only when no catalog has been retained yet.</param>
+        /// <returns>A case-sensitive lookup containing the first browse result for every valid symbolic name.</returns>
+        /// <remarks>
+        /// The catalog deliberately survives reconnects. Its access metadata describes the PLC program rather than a transport
+        /// session and is refreshed explicitly through <see cref="InvalidateSymbolCatalogAsync(CancellationToken)"/> when the caller
+        /// detects a program-structure change.
+        /// </remarks>
+        private IReadOnlyDictionary<string, VarInfo> GetOrCreateSymbolCatalog(IS7CommPlusSession session)
+        {
+            if (_symbolCatalog != null)
+            {
+                return _symbolCatalog;
+            }
+
+            var error = session.BrowseVariables(false, out var variables);
+            ThrowIfError("GetTagsBySymbols", error);
+            var symbolCatalog = new Dictionary<string, VarInfo>(StringComparer.Ordinal);
+            foreach (var variable in variables ?? Enumerable.Empty<VarInfo>())
+            {
+                if (variable != null && !string.IsNullOrWhiteSpace(variable.Name))
+                {
+                    symbolCatalog.TryAdd(variable.Name, variable);
+                }
+            }
+            _symbolCatalog = symbolCatalog;
+            return _symbolCatalog;
         }
 
         private Task<T> ExecuteReadOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)

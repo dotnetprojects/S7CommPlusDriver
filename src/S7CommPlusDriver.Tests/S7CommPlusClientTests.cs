@@ -247,6 +247,36 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task BulkSymbolResolutionRetainsCatalogUntilExplicitInvalidation()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Value",
+                        AccessSequence = "8A0E0001.F",
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_INT,
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+            await client.DisconnectAsync();
+            await client.ConnectAsync();
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(1, fake.BrowseVariablesCount);
+
+            await client.InvalidateSymbolCatalogAsync();
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(2, fake.BrowseVariablesCount);
+        }
+
+        [Fact]
         public async Task DisconnectIsIdempotent()
         {
             var fake = new FakeS7CommPlusSession();
