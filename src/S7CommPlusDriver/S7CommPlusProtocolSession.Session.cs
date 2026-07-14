@@ -47,9 +47,9 @@ namespace S7CommPlusDriver
             return Legitimate(password, username);
         }
 
-        int IS7CommPlusSession.BrowseVariables(out List<VarInfo> variables)
+        int IS7CommPlusSession.BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables)
         {
-            return Browse(out variables);
+            return Browse(expandPrimitiveArrayElements, out variables);
         }
 
         int IS7CommPlusSession.BrowseBlocks(out List<S7CommPlusBlockInfo> blocks)

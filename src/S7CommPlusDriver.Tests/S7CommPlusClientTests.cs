@@ -35,6 +35,22 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task BrowseUsesAggregatePrimitiveArraysByDefaultAndSupportsLegacyExpansion()
+        {
+            var fake = new FakeS7CommPlusSession();
+            var client = CreateClient(fake);
+
+            await client.BrowseAsync();
+            Assert.False(fake.LastBrowseExpandedPrimitiveArrayElements);
+
+            await client.BrowseAsync(new S7CommPlusBrowseOptions
+            {
+                ExpandPrimitiveArrayElements = true,
+            });
+            Assert.True(fake.LastBrowseExpandedPrimitiveArrayElements);
+        }
+
+        [Fact]
         public async Task DisconnectIsIdempotent()
         {
             var fake = new FakeS7CommPlusSession();
@@ -1207,6 +1223,7 @@ namespace S7CommPlusDriver.Tests
                     Address = "127.0.0.1",
                     WriteEnabled = writeEnabled,
                     RequestTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
+                    BrowseTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
                     ConnectTimeout = TimeSpan.FromMilliseconds(500),
                     DisconnectTimeout = TimeSpan.FromMilliseconds(100)
                 },

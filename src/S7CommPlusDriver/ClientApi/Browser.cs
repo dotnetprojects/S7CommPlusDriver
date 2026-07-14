@@ -21,12 +21,20 @@ namespace S7CommPlusDriver
 {
     internal class Browser
     {
+        readonly bool m_expandPrimitiveArrayElements;
         VarRoot m_Root;
         List<PObject> m_objs;
         List<VarInfo> m_varInfoList;
 
-        public Browser()
+        /// <summary>
+        /// Creates a symbol browser with the requested primitive-array representation.
+        /// </summary>
+        /// <param name="expandPrimitiveArrayElements">
+        /// Whether primitive arrays are materialized as individual indexed leaves. Arrays of structures are always expanded.
+        /// </param>
+        public Browser(bool expandPrimitiveArrayElements = false)
         {
+            m_expandPrimitiveArrayElements = expandPrimitiveArrayElements;
             m_Root = new VarRoot();
             m_Root.Nodes = new List<Node>();
         }
@@ -88,6 +96,17 @@ namespace S7CommPlusDriver
                     accessIds += "." + String.Format("{0:X}", node.AccessId) + ".1";
                     nextCrcPath = ReplaceLastCrcSegmentWithArray(node, crcPath);
                     break;
+                case eNodeType.PrimitiveArray:
+                    names += "." + node.Name;
+                    accessIds += "." + String.Format("{0:X}", node.AccessId);
+                    nextCrcPath = new List<S7CommPlusSymbolCrc.PathSegment>(crcPath)
+                    {
+                        S7CommPlusSymbolCrc.PathSegment.Array(
+                            node.Name,
+                            node.Softdatatype,
+                            GetArrayLowerBound(node.Vte?.OffsetInfoType))
+                    };
+                    break;
                 default:
                     names += "." + node.Name;
                     accessIds += "." + String.Format("{0:X}", node.AccessId);
@@ -114,6 +133,8 @@ namespace S7CommPlusDriver
                         // HMI attributes still apply. Default to true when unknown so nothing is dropped.
                         HmiVisible = node.Vte?.GetAttributeFlagHmiVisible() ?? true,
                         HmiAccessible = node.Vte?.GetAttributeFlagHmiAccessible() ?? true,
+                        ArrayElementCount = GetArrayElementCount(node),
+                        ArrayDimensions = GetArrayDimensions(node),
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)
@@ -225,6 +246,70 @@ namespace S7CommPlusDriver
             return 0;
         }
 
+        /// <summary>
+        /// Returns the total number of primitive elements represented by an aggregate array node.
+        /// </summary>
+        /// <param name="node">The browser node whose offset metadata describes the PLC array.</param>
+        /// <returns>The PLC-reported total element count, or zero for scalar and expanded-element nodes.</returns>
+        private static uint GetArrayElementCount(Node node)
+        {
+            if (node.NodeType != eNodeType.PrimitiveArray)
+            {
+                return 0;
+            }
+
+            if (node.Vte?.OffsetInfoType is IOffsetInfoType_1Dim oneDim)
+            {
+                return oneDim.GetArrayElementCount();
+            }
+            if (node.Vte?.OffsetInfoType is IOffsetInfoType_MDim multiDim)
+            {
+                return multiDim.GetArrayElementCount();
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// Converts protocol array bounds into caller-facing dimensions ordered as they appear in a PLC symbol.
+        /// </summary>
+        /// <param name="node">The aggregate primitive-array node to describe.</param>
+        /// <returns>An empty list for scalar or expanded-element nodes; otherwise one entry per declared dimension.</returns>
+        private static IReadOnlyList<S7CommPlusArrayDimension> GetArrayDimensions(Node node)
+        {
+            if (node.NodeType != eNodeType.PrimitiveArray)
+            {
+                return Array.Empty<S7CommPlusArrayDimension>();
+            }
+
+            if (node.Vte?.OffsetInfoType is IOffsetInfoType_1Dim oneDim)
+            {
+                var elementCount = oneDim.GetArrayElementCount();
+                return elementCount == 0
+                    ? Array.Empty<S7CommPlusArrayDimension>()
+                    : new[] { new S7CommPlusArrayDimension(oneDim.GetArrayLowerBounds(), elementCount) };
+            }
+
+            if (node.Vte?.OffsetInfoType is IOffsetInfoType_MDim multiDim)
+            {
+                var lowerBounds = multiDim.GetMdimArrayLowerBounds();
+                var elementCounts = multiDim.GetMdimArrayElementCount();
+                var dimensions = new List<S7CommPlusArrayDimension>();
+
+                // The protocol stores dimensions inside-out; symbolic names print them in reverse order.
+                for (var index = elementCounts.Length - 1; index >= 0; index--)
+                {
+                    if (elementCounts[index] > 0)
+                    {
+                        dimensions.Add(new S7CommPlusArrayDimension(lowerBounds[index], elementCounts[index]));
+                    }
+                }
+
+                return dimensions;
+            }
+
+            return Array.Empty<S7CommPlusArrayDimension>();
+        }
+
         public void BuildTree()
         {
             for (int i = 0; i < m_Root.Nodes.Count; i++)
@@ -272,6 +357,13 @@ namespace S7CommPlusDriver
                         var ioit = (IOffsetInfoType_1Dim)vte.OffsetInfoType;
                         ArrayElementCount = ioit.GetArrayElementCount();
                         ArrayLowerBounds = ioit.GetArrayLowerBounds();
+
+                        if (!vte.OffsetInfoType.HasRelation() && !m_expandPrimitiveArrayElements)
+                        {
+                            subnode.NodeType = eNodeType.PrimitiveArray;
+                            element_index++;
+                            continue;
+                        }
 
                         // The access-id always starts with 0, independent of lowerbounds
                         for (uint i = 0; i < ArrayElementCount; i++)
@@ -334,6 +426,13 @@ namespace S7CommPlusDriver
                         ArrayLowerBounds = ioit.GetArrayLowerBounds();
                         MdimArrayElementCount = ioit.GetMdimArrayElementCount();
                         MdimArrayLowerBounds = ioit.GetMdimArrayLowerBounds();
+
+                        if (!vte.OffsetInfoType.HasRelation() && !m_expandPrimitiveArrayElements)
+                        {
+                            subnode.NodeType = eNodeType.PrimitiveArray;
+                            element_index++;
+                            continue;
+                        }
 
                         // Determine the actual number of dimensions
                         int actdimensions = 0;
@@ -728,16 +827,48 @@ namespace S7CommPlusDriver
 
     public class VarInfo
     {
+        /// <summary>Gets the symbolic PLC name represented by this browse item.</summary>
         public string Name;
+
+        /// <summary>Gets the low-level access sequence resolved while browsing the PLC type information.</summary>
         public string AccessSequence;
+
+        /// <summary>Gets the Siemens symbol CRC calculated from the member path and datatype metadata.</summary>
         public UInt32 SymbolCrc;
+
+        /// <summary>Gets the S7 soft-datatype identifier of the value or primitive array element.</summary>
         public UInt32 Softdatatype;
+
+        /// <summary>Gets the optimized byte address used when reading complete data-block content.</summary>
         public UInt32 OptAddress;       // Optimized access: Byte-Offset where the value is located when reading a complete DB content.
+
+        /// <summary>Gets the optimized bit offset for bit-addressed PLC values.</summary>
         public int OptBitoffset;        // Optimized access: Bit-Offset where the value is located when reading a complete DB content. 
+
+        /// <summary>Gets the non-optimized byte address used when reading complete data-block content.</summary>
         public UInt32 NonOptAddress;    // NonOptimized access: Byte-Offset where the value is located when reading a complete DB content.
+
+        /// <summary>Gets the non-optimized bit offset for bit-addressed PLC values.</summary>
         public int NonOptBitoffset;     // NonOptimized access: Bit-Offset where the value is located when reading a complete DB content.
+
+        /// <summary>Gets whether TIA marks the symbol as visible in HMI engineering.</summary>
         public bool HmiVisible = true;    // TIA "Visible in HMI engineering" attribute.
+
+        /// <summary>Gets whether TIA permits HMI, OPC UA, or web-server access to the symbol.</summary>
         public bool HmiAccessible = true; // TIA "Accessible from HMI/OPC UA/Web server" attribute.
+
+        /// <summary>
+        /// Gets the total primitive element count when this item represents an aggregate array, or zero for a scalar or
+        /// an individually expanded array element.
+        /// </summary>
+        public UInt32 ArrayElementCount;
+
+        /// <summary>
+        /// Gets the declared PLC dimensions in the same left-to-right order used by symbolic indices.
+        /// </summary>
+        public IReadOnlyList<S7CommPlusArrayDimension> ArrayDimensions = Array.Empty<S7CommPlusArrayDimension>();
+
+        /// <summary>Retains the parsed symbol path so tag creation can reuse the exact CRC inputs.</summary>
         internal List<S7CommPlusSymbolCrc.PathSegment> SymbolCrcPath;
     }
 
@@ -746,6 +877,7 @@ namespace S7CommPlusDriver
         Undefined = 0,
         Root,
         Var,
+        PrimitiveArray,
         Array,
         StructArray
     }

@@ -18,6 +18,7 @@ namespace S7CommPlusDriver.Tests
         public int ActiveReads;
         public int CpuOperatingStateWriteCount { get; private set; }
         public int? LastCpuOperatingStateRequest { get; private set; }
+        public bool? LastBrowseExpandedPrimitiveArrayElements { get; private set; }
         public List<int> CpuOperatingStateRequests { get; } = new List<int>();
         public int TagSubscriptionCreateCount { get; private set; }
         public int TagSubscriptionWaitCount { get; private set; }
@@ -73,6 +74,7 @@ namespace S7CommPlusDriver.Tests
         public Func<uint, int, (int Error, List<S7CommPlusTisWatchNotification> Notifications)>? WaitForTisWatchSubscriptionByIdHandler { get; set; }
         public Func<int>? DeleteTisWatchSubscriptionHandler { get; set; }
         public string LastTisWatchDiagnostic { get; set; } = "";
+        public string LastAlarmSubscriptionDiagnostic { get; set; } = "";
 
         public int Connect(S7CommPlusClientOptions options)
         {
@@ -101,8 +103,9 @@ namespace S7CommPlusDriver.Tests
             return LegitimateHandler?.Invoke(password, username) ?? 0;
         }
 
-        public int BrowseVariables(out List<VarInfo> variables)
+        public int BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables)
         {
+            LastBrowseExpandedPrimitiveArrayElements = expandPrimitiveArrayElements;
             var result = BrowseVariablesHandler?.Invoke() ?? (0, new List<VarInfo>());
             variables = result.Variables;
             return result.Error;

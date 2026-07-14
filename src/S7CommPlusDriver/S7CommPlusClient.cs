@@ -72,11 +72,36 @@ namespace S7CommPlusDriver
             }
         }
 
+        /// <summary>
+        /// Browses readable PLC symbols while representing each primitive array as one item with dimension metadata.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>The scalar symbols, aggregate primitive arrays, and expanded members of structure arrays reported by the PLC.</returns>
         public Task<IReadOnlyList<VarInfo>> BrowseAsync(CancellationToken cancellationToken = default)
         {
+            return BrowseAsync(new S7CommPlusBrowseOptions(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Browses readable PLC symbols using an explicit primitive-array representation.
+        /// </summary>
+        /// <param name="options">
+        /// Controls whether primitive arrays are returned once with bounds metadata or flattened into indexed element items.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>The browse items produced from the PLC type-information catalog.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+        public Task<IReadOnlyList<VarInfo>> BrowseAsync(S7CommPlusBrowseOptions options, CancellationToken cancellationToken = default)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            var expandPrimitiveArrayElements = options.ExpandPrimitiveArrayElements;
             return ExecuteReadOperationAsync("Browse", session =>
             {
-                var error = session.BrowseVariables(out var vars);
+                var error = session.BrowseVariables(expandPrimitiveArrayElements, out var vars);
                 ThrowIfError("Browse", error);
                 return (IReadOnlyList<VarInfo>)(vars ?? new List<VarInfo>());
             }, _options.BrowseTimeout, cancellationToken);

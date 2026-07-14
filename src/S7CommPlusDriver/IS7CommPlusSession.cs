@@ -13,7 +13,7 @@ namespace S7CommPlusDriver
         int Disconnect(int timeoutMilliseconds);
         int CloseTransport(int timeoutMilliseconds);
         int Legitimate(string password, string username);
-        int BrowseVariables(out List<VarInfo> variables);
+        int BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables);
         int BrowseBlocks(out List<S7CommPlusBlockInfo> blocks);
         int GetPlcStructureXml(out S7CommPlusPlcStructureSnapshot plcStructure);
         int GetBlockContent(uint relationId, out S7CommPlusClientBlockContent blockContent);

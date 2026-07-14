@@ -105,6 +105,35 @@ foreach (var culture in cpuCulture.Cultures)
 }
 ```
 
+### Browsing arrays
+
+`BrowseAsync()` returns primitive arrays as one `VarInfo` by default. Use
+`ArrayElementCount` and `ArrayDimensions` to inspect the PLC bounds without
+creating one browse item for every byte, Boolean, or other primitive element:
+
+```csharp
+foreach (var variable in await client.BrowseAsync())
+{
+    if (variable.ArrayElementCount > 0)
+    {
+        Console.WriteLine($"{variable.Name}: {variable.ArrayElementCount} elements");
+    }
+}
+```
+
+Applications that require the former flattened representation can request it
+explicitly:
+
+```csharp
+var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
+{
+    ExpandPrimitiveArrayElements = true
+});
+```
+
+Arrays of structures are always traversed because their readable member fields
+cannot be represented by one primitive value.
+
 The built-in connection defaults match Siemens S7CommPlus HMI communication:
 ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
 `S7CommPlusDefaults.LocalTsap` (`0x0600`), and remote TSAP

@@ -1462,11 +1462,29 @@ namespace S7CommPlusDriver
             return 0;
         }
 
+        /// <summary>
+        /// Browses variables using the legacy element-expanded primitive-array representation.
+        /// </summary>
+        /// <param name="varInfoList">Receives the flattened variables when the browse succeeds.</param>
+        /// <returns>A native driver error code, or zero on success.</returns>
         public int Browse(out List<VarInfo> varInfoList)
+        {
+            return Browse(true, out varInfoList);
+        }
+
+        /// <summary>
+        /// Browses PLC type information and chooses whether primitive array elements are materialized individually.
+        /// </summary>
+        /// <param name="expandPrimitiveArrayElements">
+        /// <see langword="true"/> for the legacy indexed-element list; <see langword="false"/> for aggregate array items.
+        /// </param>
+        /// <param name="varInfoList">Receives the browsable variables when the operation succeeds.</param>
+        /// <returns>A native driver error code, or zero on success.</returns>
+        internal int Browse(bool expandPrimitiveArrayElements, out List<VarInfo> varInfoList)
         {
             int res;
             varInfoList = new List<VarInfo>();
-            Browser vars = new Browser();
+            Browser vars = new Browser(expandPrimitiveArrayElements);
             ExploreRequest exploreReq;
             ExploreResponse exploreRes;
 
