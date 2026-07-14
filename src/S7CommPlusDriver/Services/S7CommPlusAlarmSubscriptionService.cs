@@ -25,6 +25,8 @@ namespace S7CommPlusDriver
         private readonly IS7CommPlusProtocolSession _session;
         private readonly S7CommPlusProtocolRequests _requests;
 
+        public string LastDiagnostic { get; private set; } = "";
+
         public S7CommPlusAlarmSubscriptionService(IS7CommPlusProtocolSession session)
         {
             _session = session;
@@ -54,6 +56,7 @@ namespace S7CommPlusDriver
         public int Create(uint[] languageIds, short initialCreditLimit, out uint subscriptionObjectId)
         {
             subscriptionObjectId = 0;
+            LastDiagnostic = "";
             int res;
             languageIds ??= Array.Empty<uint>();
             var state = new AlarmSubscriptionState { NextCreditLimit = initialCreditLimit };
@@ -116,7 +119,8 @@ namespace S7CommPlusDriver
             {
                 // If creating a subscription fails, the object is still created and should be deleted.
                 // At least deleting it, gives no error.
-                System.Diagnostics.Trace.WriteLine(String.Format("AlarmSubscription - Create: Failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue));
+                LastDiagnostic = String.Format("Create failed with Returnvalue = 0x{0:X8}", createObjRes.ReturnValue);
+                System.Diagnostics.Trace.WriteLine("AlarmSubscription - " + LastDiagnostic);
                 res = S7Consts.errCliInvalidParams;
             }
 

@@ -17,6 +17,7 @@ namespace S7CommPlusDriver
         public TimeSpan ConnectTimeout { get; set; } = S7CommPlusDefaults.ConnectTimeout;
         public TimeSpan RequestTimeout { get; set; } = S7CommPlusDefaults.RequestTimeout;
         public TimeSpan DisconnectTimeout { get; set; } = S7CommPlusDefaults.DisconnectTimeout;
+        public TimeSpan BrowseTimeout { get; set; } = S7CommPlusDefaults.BrowseTimeout;
         public bool AutoReconnect { get; set; } = true;
         public bool WriteEnabled { get; set; } = false;
         public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Tls;
@@ -28,6 +29,7 @@ namespace S7CommPlusDriver
         internal int ConnectTimeoutMilliseconds => ToPositiveMilliseconds(ConnectTimeout, nameof(ConnectTimeout));
         internal int RequestTimeoutMilliseconds => ToPositiveMilliseconds(RequestTimeout, nameof(RequestTimeout));
         internal int DisconnectTimeoutMilliseconds => ToPositiveMilliseconds(DisconnectTimeout, nameof(DisconnectTimeout));
+        internal int BrowseTimeoutMilliseconds => ToPositiveMilliseconds(BrowseTimeout, nameof(BrowseTimeout));
         internal byte[] RemoteTsapBytes => Encoding.ASCII.GetBytes(RemoteTsap ?? string.Empty);
 
         internal S7CommPlusClientOptions Clone()
@@ -80,6 +82,7 @@ namespace S7CommPlusDriver
             _ = ConnectTimeoutMilliseconds;
             _ = RequestTimeoutMilliseconds;
             _ = DisconnectTimeoutMilliseconds;
+            _ = BrowseTimeoutMilliseconds;
             Logger ??= NullLogger.Instance;
         }
 

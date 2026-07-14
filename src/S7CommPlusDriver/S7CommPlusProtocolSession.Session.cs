@@ -169,6 +169,8 @@ namespace S7CommPlusDriver
 
         string IS7CommPlusSession.LastTisWatchDiagnostic => TisWatchSubscriptions.LastDiagnostic;
 
+        string IS7CommPlusSession.LastAlarmSubscriptionDiagnostic => AlarmSubscriptions.LastDiagnostic;
+
         int IS7CommPlusSession.DeleteTisWatchSubscription(uint subscriptionObjectId)
         {
             return TisWatchSubscriptions.Delete(subscriptionObjectId);
