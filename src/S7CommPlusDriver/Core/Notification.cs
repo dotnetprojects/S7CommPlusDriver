@@ -128,10 +128,12 @@ namespace S7CommPlusDriver
                     //case 0x81: //Only in protocol version v1, but also used in S7-1500 in part 2 for ProgramAlarm
                     case S7CommPlusNotificationReturnCode.LegacyValue:
                         // Probably only in protocol version v1
-                        throw new NotImplementedException();
+                        throw new NotSupportedException(
+                            $"Unsupported legacy notification return code 0x{item_return_value:X2} at PDU offset {buffer.Position} of {buffer.Length}.");
                     default:
                         // unknown return value
-                        throw new NotImplementedException();
+                        throw new NotSupportedException(
+                            $"Unsupported notification return code 0x{item_return_value:X2} at PDU offset {buffer.Position} of {buffer.Length}.");
                 }
             } while (item_return_value != 0);
 
