@@ -946,7 +946,7 @@ namespace S7CommPlusDriver
         private int ConnectAndSetNegotiatedMode(S7CommPlusClientOptions options, S7CommPlusSecurityMode securityMode)
         {
             var result = securityMode == S7CommPlusSecurityMode.Tls
-                ? ConnectTls(options.Address, options.Password, options.Username, options.RequestTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend)
+                ? ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend)
                 : ConnectLegacyChallenge(options);
             if (result == 0)
             {

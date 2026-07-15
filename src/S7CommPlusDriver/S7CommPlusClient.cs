@@ -818,7 +818,10 @@ namespace S7CommPlusDriver
             _session = _sessionFactory();
             _options.Logger.LogInformation("Connecting to PLC {Endpoint}.", Endpoint);
 
-            var error = await RunWithTimeoutAsync("Connect", () => _session.Connect(_options), _options.ConnectTimeout, cancellationToken).ConfigureAwait(false);
+            var connectOperationTimeout = _options.SecurityMode == S7CommPlusSecurityMode.Auto
+                ? TimeSpan.FromTicks(_options.ConnectTimeout.Ticks * 2)
+                : _options.ConnectTimeout;
+            var error = await RunWithTimeoutAsync("Connect", () => _session.Connect(_options), connectOperationTimeout, cancellationToken).ConfigureAwait(false);
             if (error != 0)
             {
                 var exception = CreateException("Connect", error);

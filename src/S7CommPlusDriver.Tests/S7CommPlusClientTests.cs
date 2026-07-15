@@ -360,6 +360,34 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task AutoSecurityModeAllowsOneConnectTimeoutPerSecurityAttempt()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                ConnectHandler = options =>
+                {
+                    Assert.Equal(TimeSpan.FromMilliseconds(200), options.ConnectTimeout);
+                    Thread.Sleep(300);
+                    return 0;
+                }
+            };
+            var client = new S7CommPlusClient(
+                new S7CommPlusClientOptions
+                {
+                    Address = "127.0.0.1",
+                    SecurityMode = S7CommPlusSecurityMode.Auto,
+                    ConnectTimeout = TimeSpan.FromMilliseconds(200),
+                    RequestTimeout = TimeSpan.FromMilliseconds(500),
+                    DisconnectTimeout = TimeSpan.FromMilliseconds(100)
+                },
+                () => fake);
+
+            await client.ConnectAsync();
+
+            Assert.True(client.IsConnected);
+        }
+
+        [Fact]
         public void BouncyCastleIsDefaultTlsBackend()
         {
             var options = new S7CommPlusClientOptions();
