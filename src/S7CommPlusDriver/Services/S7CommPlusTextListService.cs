@@ -98,7 +98,17 @@ namespace S7CommPlusDriver
             return DecodeTextListLibrary(offsets[0].GetValue(), offsets[1].GetValue(), strings, languageId, scope, lists);
         }
 
-        private static int DecodeTextListLibrary(
+        /// <summary>
+        /// Decodes the three binary tables carried by a PLC text-library object into public catalog entries.
+        /// </summary>
+        /// <param name="listTable">Maps each 16-bit runtime list identifier to an offset in <paramref name="entryTable"/>.</param>
+        /// <param name="entryTable">Contains 32-bit list values and offsets into <paramref name="stringTable"/>.</param>
+        /// <param name="stringTable">Contains length-prefixed UTF-8 text values.</param>
+        /// <param name="languageId">The LCID represented by the library, or zero for language-independent lists.</param>
+        /// <param name="scope">Identifies whether the source library is language-independent or language-specific.</param>
+        /// <param name="lists">Receives successfully decoded lists.</param>
+        /// <returns>Zero when every referenced table entry is valid; otherwise the S7 invalid-PDU error.</returns>
+        internal static int DecodeTextListLibrary(
             byte[] listTable,
             byte[] entryTable,
             byte[] stringTable,
@@ -160,14 +170,17 @@ namespace S7CommPlusDriver
             var pos = entryOffset + 4;
             for (var i = 0; i < entryCount; i++)
             {
-                if (!TryReadUInt16(entryTable, pos, out var value) ||
-                    !TryReadUInt32(entryTable, pos + 2, out var stringOffset) ||
+                // PLC list values are signed 32-bit values. The previous 6-byte interpretation truncated the
+                // value to UInt16 and consequently read the string offset two bytes too early.
+                if (!TryReadUInt32(entryTable, pos, out var value) ||
+                    !TryReadUInt32(entryTable, pos + 4, out var stringOffset) ||
                     !TryReadText(stringTable, stringOffset, out var text))
                 {
                     return false;
                 }
-                pos += 6;
-                entries.Add(new S7CommPlusTextListEntry(value, value, text));
+                pos += 8;
+                var signedValue = unchecked((int)value);
+                entries.Add(new S7CommPlusTextListEntry(signedValue, signedValue, text));
             }
 
             return true;

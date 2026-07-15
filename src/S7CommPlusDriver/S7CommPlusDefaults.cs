@@ -12,5 +12,6 @@ namespace S7CommPlusDriver
         public static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
         public static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(5);
         public static readonly TimeSpan DisconnectTimeout = TimeSpan.FromSeconds(2);
+        public static readonly TimeSpan BrowseTimeout = TimeSpan.FromSeconds(120);
     }
 }

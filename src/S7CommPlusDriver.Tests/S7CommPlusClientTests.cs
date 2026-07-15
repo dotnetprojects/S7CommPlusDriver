@@ -35,6 +35,408 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task AggregateReadUsesElementAddressesAndPublishesOneArrayResult()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                ReadHandler = addresses =>
+                {
+                    Assert.Equal(new[] { "8A0E0001.F.0", "8A0E0001.F.1" }, addresses.Select(address => address.GetAccessString()));
+                    return (0, new List<object?> { new ValueUDInt(11), new ValueUDInt(22) }, new List<ulong> { 0, 0 });
+                },
+            };
+            var aggregate = new PlcTagUDIntArray(
+                "DB.Values",
+                new ItemAddress("8A0E0001.F"),
+                Softdatatype.S7COMMP_SOFTDATATYPE_UDINT);
+            aggregate.SetAggregateElements(new PlcTag[]
+            {
+                new PlcTagUDInt("DB.Values[1]", new ItemAddress("8A0E0001.F.0"), Softdatatype.S7COMMP_SOFTDATATYPE_UDINT),
+                new PlcTagUDInt("DB.Values[2]", new ItemAddress("8A0E0001.F.1"), Softdatatype.S7COMMP_SOFTDATATYPE_UDINT),
+            });
+            var client = CreateClient(fake);
+
+            var result = await client.ReadAsync(new[] { aggregate });
+
+            Assert.Single(result.Items);
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(new uint[] { 11, 22 }, aggregate.Value);
+            Assert.Equal(new uint[] { 11, 22 }, Assert.IsType<uint[]>(aggregate.AggregateValue));
+        }
+
+        [Fact]
+        public async Task AggregateReadSplitsExpandedElementsAtDefaultPlcLimit()
+        {
+            var nextValue = 0U;
+            var fake = new FakeS7CommPlusSession
+            {
+                ReadHandler = addresses =>
+                {
+                    Assert.InRange(addresses.Count, 1, 20);
+                    var values = addresses.Select(_ => (object?)new ValueUDInt(nextValue++)).ToList();
+                    return (0, values, new List<ulong>(new ulong[addresses.Count]));
+                },
+            };
+            var aggregate = CreateAggregateUnsignedIntegerTag(25);
+            var client = CreateClient(fake);
+
+            var result = await client.ReadAsync(new[] { aggregate });
+
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(2, fake.ReadCount);
+            Assert.Equal(Enumerable.Range(0, 25).Select(value => (uint)value), aggregate.Value);
+        }
+
+        [Fact]
+        public async Task AggregateWriteCopiesParentArrayAndSplitsExpandedElements()
+        {
+            var writtenValues = new List<uint>();
+            var fake = new FakeS7CommPlusSession
+            {
+                WriteHandler = (addresses, values) =>
+                {
+                    Assert.InRange(addresses.Count, 1, 20);
+                    writtenValues.AddRange(values.Cast<ValueUDInt>().Select(value => value.GetValue()));
+                    return (0, new List<ulong>(new ulong[addresses.Count]));
+                },
+            };
+            var aggregate = CreateAggregateUnsignedIntegerTag(25);
+            aggregate.Value = Enumerable.Range(1, 25).Select(value => (uint)value).ToArray();
+            var client = CreateClient(fake, writeEnabled: true);
+
+            var result = await client.WriteAsync(new[] { aggregate });
+
+            Assert.True(result.Items[0].IsSuccess);
+            Assert.Equal(aggregate.Value, writtenValues);
+        }
+
+        [Fact]
+        public async Task InvalidSymbolSyntaxPreservesSymbolAndDoesNotReconnect()
+        {
+            var syntaxException = new ArgumentException("Expected an array index.", "symbol");
+            var fake = new FakeS7CommPlusSession
+            {
+                GetTagHandler = _ => throw syntaxException,
+            };
+            var client = CreateClient(fake);
+
+            var exception = await Assert.ThrowsAsync<S7CommPlusConnectionException>(() => client.GetTagBySymbolAsync("DB.Values"));
+
+            Assert.Contains("DB.Values", exception.Message);
+            Assert.Same(syntaxException, exception.InnerException);
+            Assert.False(exception.IsTransient);
+            Assert.Equal(S7Consts.errCliItemNotAvailable, exception.ErrorCode);
+            Assert.Equal(1, fake.ConnectCount);
+            Assert.Equal(0, fake.DisconnectCount);
+        }
+
+        [Fact]
+        public async Task UnexpectedSymbolFailurePreservesSymbolAndInnerException()
+        {
+            var innerException = new InvalidOperationException("Broken type metadata.");
+            var fake = new FakeS7CommPlusSession
+            {
+                GetTagHandler = _ => throw innerException,
+            };
+            var client = CreateClient(fake);
+
+            var exception = await Assert.ThrowsAsync<S7CommPlusConnectionException>(() => client.GetTagBySymbolAsync("DB.Broken"));
+
+            Assert.Contains("DB.Broken", exception.Message);
+            Assert.Same(innerException, exception.InnerException);
+            Assert.True(exception.IsTransient);
+            Assert.Equal(S7Consts.errCliFunctionRefused, exception.ErrorCode);
+        }
+
+        [Fact]
+        public async Task BrowseUsesAggregatePrimitiveArraysByDefaultAndSupportsLegacyExpansion()
+        {
+            var fake = new FakeS7CommPlusSession();
+            var client = CreateClient(fake);
+
+            await client.BrowseAsync();
+            Assert.False(fake.LastBrowseExpandedPrimitiveArrayElements);
+
+            await client.BrowseAsync(new S7CommPlusBrowseOptions
+            {
+                ExpandPrimitiveArrayElements = true,
+            });
+            Assert.True(fake.LastBrowseExpandedPrimitiveArrayElements);
+        }
+
+        [Fact]
+        public async Task SymbolCommentsResolveDbModelPathsAndAllLanguages()
+        {
+            const string commentsXml = "<InterfaceLineComments><Part Kind=\"Comments\">" +
+                "<Comment Path=\"51:65\"><DictEntry Language=\"de-DE\">Deutscher Text</DictEntry>" +
+                "<DictEntry Language=\"en-GB\">English text</DictEntry></Comment>" +
+                "</Part></InterfaceLineComments>";
+            const string interfaceXml = "<BlockInterface>" +
+                "<Part Kind=\"DBSource\"><Payload><Root>" +
+                "<Member ID=\"51\" Name=\"General\" LID=\"9\" SubPartIndex=\"0\" />" +
+                "</Root></Payload></Part>" +
+                "<Part Kind=\"Structure\"><Payload><Root><Sections><Section>" +
+                "<Member ID=\"65\" Name=\"FinePosScreenActive\" LID=\"23\" />" +
+                "</Section></Sections></Root></Payload></Part>" +
+                "</BlockInterface>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(
+                0x8A0E1451,
+                "Conditions",
+                commentsXml,
+                interfaceXml);
+            var fake = new FakeS7CommPlusSession
+            {
+                GetSymbolCommentsHandler = relationId =>
+                {
+                    Assert.Equal(0x8A0E1451U, relationId);
+                    return (0, catalog);
+                },
+            };
+            var client = CreateClient(fake);
+
+            var comments = await client.GetSymbolCommentsAsync(0x8A0E1451);
+            var found = comments.TryGetComments(new VarInfo
+            {
+                Name = "Conditions.General.FinePosScreenActive",
+                AccessSequence = "8A0E1451.9.17",
+            }, out var localizedComments);
+
+            Assert.True(found);
+            Assert.Equal("Deutscher Text", localizedComments[1031]);
+            Assert.Equal("English text", localizedComments[2057]);
+            Assert.Equal(1, fake.GetSymbolCommentsCount);
+        }
+
+        [Fact]
+        public void SymbolCommentsApplyArrayDeclarationCommentToIndexedElements()
+        {
+            const string commentsXml = "<InterfaceLineComments><Part Kind=\"Comments\">" +
+                "<Comment Path=\"53:51\"><DictEntry Language=\"de-DE\">Endschalter</DictEntry></Comment>" +
+                "</Part></InterfaceLineComments>";
+            const string interfaceXml = "<BlockInterface>" +
+                "<Part Kind=\"DBSource\"><Payload><Root>" +
+                "<Member ID=\"53\" Name=\"HoistUnit\" LID=\"11\" SubPartIndex=\"0\" />" +
+                "</Root></Payload></Part>" +
+                "<Part Kind=\"Structure\"><Payload><Root><Sections><Section>" +
+                "<Member ID=\"51\" Name=\"ELimitSwitchTrig\" LID=\"9\" />" +
+                "</Section></Sections></Root></Payload></Part>" +
+                "</BlockInterface>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(0x8A0E1451, "Conditions", commentsXml, interfaceXml);
+
+            var found = catalog.TryGetComments(new VarInfo
+            {
+                Name = "Conditions.HoistUnit[2].ELimitSwitchTrig",
+                AccessSequence = "8A0E1451.B.2.1.9",
+            }, out var comments);
+
+            Assert.True(found);
+            Assert.Equal("Endschalter", comments[1031]);
+        }
+
+        [Fact]
+        public void SymbolCommentsResolveAbsoluteAreaRefIdByExactAccessSequence()
+        {
+            const string commentsXml = "<CommentDictionary><TagLineComments>" +
+                "<Comment RefID=\"4345\"><DictEntry Language=\"de-DE\">Direktes Eingangssignal</DictEntry></Comment>" +
+                "</TagLineComments></CommentDictionary>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(0x50, "", commentsXml, "");
+
+            var directFound = catalog.TryGetComments(new VarInfo
+            {
+                Name = "IArea.DirectInput",
+                AccessSequence = "50.10F9",
+            }, out var directComments);
+            var childFound = catalog.TryGetComments(new VarInfo
+            {
+                Name = "IArea.StructuredInput.Status",
+                AccessSequence = "50.10F9.9",
+            }, out _);
+
+            Assert.True(directFound);
+            Assert.Equal("Direktes Eingangssignal", directComments[1031]);
+            Assert.False(childFound);
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionUsesOneBrowseAndOmitsMissingSymbols()
+        {
+            var getTagCalls = 0;
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Temperature",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_REAL,
+                    },
+                    new VarInfo
+                    {
+                        Name = "DB.Counter",
+                        AccessSequence = "8A0E0001.10",
+                        SymbolCrc = 0x87654321,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_DINT,
+                    },
+                }),
+                GetTagHandler = symbol =>
+                {
+                    getTagCalls++;
+                    return PlcTags.TagFactory(symbol, new ItemAddress("8A0E0001.F"), Softdatatype.S7COMMP_SOFTDATATYPE_INT);
+                },
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[]
+            {
+                "DB.Temperature",
+                "DB.Counter",
+                "DB.Missing",
+                "DB.Temperature",
+            });
+
+            Assert.Equal(2, tags.Count);
+            var temperature = Assert.IsType<PlcTagReal>(tags["DB.Temperature"]);
+            Assert.Equal("8A0E0001.F", temperature.Address.GetAccessString());
+            Assert.Equal(0x12345678U, temperature.Address.SymbolCrc);
+            Assert.IsType<PlcTagDInt>(tags["DB.Counter"]);
+            Assert.False(tags.ContainsKey("DB.Missing"));
+            Assert.Equal(1, fake.BrowseVariablesCount);
+            Assert.Equal(0, getTagCalls);
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionBuildsPackedMultidimensionalBooleanElements()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Flags",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL,
+                        ArrayElementCount = 6,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 3),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[] { "DB.Flags" });
+
+            var aggregate = Assert.IsType<PlcTagBoolArray>(tags["DB.Flags"]);
+            Assert.Equal(
+                new[] { "8A0E0001.F.0", "8A0E0001.F.1", "8A0E0001.F.2", "8A0E0001.F.8", "8A0E0001.F.9", "8A0E0001.F.A" },
+                aggregate.AggregateElements.Select(element => element.Address.GetAccessString()));
+            Assert.All(aggregate.AggregateElements, element => Assert.Equal(0U, element.Address.SymbolCrc));
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionDerivesIndexedPrimitiveArrayElementsFromAggregateCatalog()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Counters",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_UDINT,
+                        ArrayElementCount = 8,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 2),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[]
+            {
+                "DB.Counters[1,1,1]",
+                "DB.Counters[2,1,2]",
+                "DB.Counters[3,1,1]",
+            });
+
+            Assert.Equal(2, tags.Count);
+            Assert.Equal("8A0E0001.F.0", tags["DB.Counters[1,1,1]"].Address.GetAccessString());
+            Assert.Equal("8A0E0001.F.5", tags["DB.Counters[2,1,2]"].Address.GetAccessString());
+            Assert.All(tags.Values, tag => Assert.Equal(0U, tag.Address.SymbolCrc));
+            Assert.Equal(1, fake.BrowseVariablesCount);
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionPreservesPackedBooleanStrideForIndexedElement()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Flags",
+                        AccessSequence = "8A0E0001.F",
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL,
+                        ArrayElementCount = 6,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 3),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[] { "DB.Flags[2,1]" });
+
+            Assert.Equal("8A0E0001.F.8", tags["DB.Flags[2,1]"].Address.GetAccessString());
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionRetainsCatalogUntilExplicitInvalidation()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Value",
+                        AccessSequence = "8A0E0001.F",
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_INT,
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+            await client.DisconnectAsync();
+            await client.ConnectAsync();
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(1, fake.BrowseVariablesCount);
+
+            await client.InvalidateSymbolCatalogAsync();
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(2, fake.BrowseVariablesCount);
+        }
+
+        [Fact]
         public async Task DisconnectIsIdempotent()
         {
             var fake = new FakeS7CommPlusSession();
@@ -1235,10 +1637,31 @@ namespace S7CommPlusDriver.Tests
                     Address = "127.0.0.1",
                     WriteEnabled = writeEnabled,
                     RequestTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
+                    BrowseTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
                     ConnectTimeout = TimeSpan.FromMilliseconds(500),
                     DisconnectTimeout = TimeSpan.FromMilliseconds(100)
                 },
                 () => fake);
+        }
+
+        /// <summary>
+        /// Creates one synthetic aggregate UDINT tag with sequential element access IDs.
+        /// </summary>
+        /// <param name="elementCount">Number of scalar element tags to attach.</param>
+        /// <returns>A parent array tag ready for aggregate read or write tests.</returns>
+        private static PlcTagUDIntArray CreateAggregateUnsignedIntegerTag(int elementCount)
+        {
+            var aggregate = new PlcTagUDIntArray(
+                "DB.Values",
+                new ItemAddress("8A0E0001.F"),
+                Softdatatype.S7COMMP_SOFTDATATYPE_UDINT);
+            aggregate.SetAggregateElements(Enumerable.Range(0, elementCount)
+                .Select(index => (PlcTag)new PlcTagUDInt(
+                    $"DB.Values[{index}]",
+                    new ItemAddress($"8A0E0001.F.{index:X}"),
+                    Softdatatype.S7COMMP_SOFTDATATYPE_UDINT))
+                .ToArray());
+            return aggregate;
         }
 
         private static S7CommPlusSubscriptionOptions FastSubscriptionOptions()

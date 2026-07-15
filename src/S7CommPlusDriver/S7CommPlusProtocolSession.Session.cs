@@ -47,9 +47,9 @@ namespace S7CommPlusDriver
             return Legitimate(password, username);
         }
 
-        int IS7CommPlusSession.BrowseVariables(out List<VarInfo> variables)
+        int IS7CommPlusSession.BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables)
         {
-            return Browse(out variables);
+            return Browse(expandPrimitiveArrayElements, out variables);
         }
 
         int IS7CommPlusSession.BrowseBlocks(out List<S7CommPlusBlockInfo> blocks)
@@ -65,6 +65,17 @@ namespace S7CommPlusDriver
         int IS7CommPlusSession.GetBlockContent(uint relationId, out S7CommPlusClientBlockContent blockContent)
         {
             return Metadata.GetBlockContent(relationId, out blockContent);
+        }
+
+        /// <summary>
+        /// Retrieves and parses only the engineering comment metadata for one block or absolute area.
+        /// </summary>
+        /// <param name="relationId">The DB, I, Q, or M relation ID.</param>
+        /// <param name="comments">Receives the multilingual declaration comments.</param>
+        /// <returns>A native driver error code, or zero on success.</returns>
+        int IS7CommPlusSession.GetSymbolComments(uint relationId, out S7CommPlusSymbolCommentCatalog comments)
+        {
+            return Metadata.GetSymbolComments(relationId, out comments);
         }
 
         PlcTag IS7CommPlusSession.GetPlcTagBySymbol(string symbol)
@@ -168,6 +179,8 @@ namespace S7CommPlusDriver
         }
 
         string IS7CommPlusSession.LastTisWatchDiagnostic => TisWatchSubscriptions.LastDiagnostic;
+
+        string IS7CommPlusSession.LastAlarmSubscriptionDiagnostic => AlarmSubscriptions.LastDiagnostic;
 
         int IS7CommPlusSession.DeleteTisWatchSubscription(uint subscriptionObjectId)
         {

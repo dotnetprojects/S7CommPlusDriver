@@ -13,10 +13,18 @@ namespace S7CommPlusDriver
         int Disconnect(int timeoutMilliseconds);
         int CloseTransport(int timeoutMilliseconds);
         int Legitimate(string password, string username);
-        int BrowseVariables(out List<VarInfo> variables);
+        int BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables);
         int BrowseBlocks(out List<S7CommPlusBlockInfo> blocks);
         int GetPlcStructureXml(out S7CommPlusPlcStructureSnapshot plcStructure);
         int GetBlockContent(uint relationId, out S7CommPlusClientBlockContent blockContent);
+
+        /// <summary>
+        /// Retrieves the engineering comment catalog for one browsed DB or absolute I/Q/M area.
+        /// </summary>
+        /// <param name="relationId">The PLC object relation ID that owns the declarations.</param>
+        /// <param name="comments">Receives a catalog that resolves the session's browsed <see cref="VarInfo"/> instances.</param>
+        /// <returns>A native driver error code, or zero when retrieval and parsing succeed.</returns>
+        int GetSymbolComments(uint relationId, out S7CommPlusSymbolCommentCatalog comments);
         PlcTag GetPlcTagBySymbol(string symbol);
         int GetCpuInfo(out S7CommPlusCpuInfo cpuInfo);
         int GetCpuState(out S7CommPlusCpuState cpuState);
@@ -38,6 +46,7 @@ namespace S7CommPlusDriver
         int CreateTisWatchSubscription(S7CommPlusTisWatchRequest request, out uint subscriptionObjectId);
         int WaitForTisWatchNotifications(uint subscriptionObjectId, int timeoutMilliseconds, out List<S7CommPlusTisWatchNotification> notifications);
         string LastTisWatchDiagnostic { get; }
+        string LastAlarmSubscriptionDiagnostic { get; }
         int DeleteTisWatchSubscription(uint subscriptionObjectId);
     }
 }

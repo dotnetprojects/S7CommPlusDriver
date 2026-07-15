@@ -69,11 +69,14 @@ namespace S7CommPlusDriver
                 S7p.DecodeByte(buffer, out datatype);
             }
 
-            // Sparsearray and Addressarray of Struct are different
-            if (flags == FLAGS_ARRAY || flags == FLAGS_ADDRESSARRAY)
+            // Controllers may combine the collection-shape bit with additional transport flags (for example 0x80).
+            // Test the shape bits instead of requiring byte equality so lifecycle notifications remain decodable.
+            if ((flags & (FLAGS_ARRAY | FLAGS_ADDRESSARRAY)) != 0)
             {
                 switch (datatype)
                 {
+                    case Datatype.Null:
+                        return ValueNullArray.Deserialize(buffer, flags, disableVlq);
                     case Datatype.Bool:
                         return ValueBoolArray.Deserialize(buffer, flags, disableVlq);
                     case Datatype.USInt:
@@ -116,11 +119,17 @@ namespace S7CommPlusDriver
                         return ValueBlobArray.Deserialize(buffer, flags, disableVlq);
                     case Datatype.WString:
                         return ValueWStringArray.Deserialize(buffer, flags, disableVlq);
+                    case Datatype.Variant:
+                        return ValueVariantArray.Deserialize(buffer, flags, disableVlq);
+                    case Datatype.Struct:
+                        return ValueStructArray.Deserialize(buffer, flags, disableVlq);
+                    case Datatype.S7String:
+                        return ValueS7StringArray.Deserialize(buffer, flags, disableVlq);
                     default:
-                        throw new NotImplementedException();
+                        throw CreateUnsupportedDatatypeException(buffer, flags, datatype);
                 }
             }
-            else if (flags == FLAGS_SPARSEARRAY)
+            else if ((flags & FLAGS_SPARSEARRAY) != 0)
             {
                 switch (datatype)
                 {
@@ -132,8 +141,10 @@ namespace S7CommPlusDriver
                         return ValueBlobSparseArray.Deserialize(buffer, flags, disableVlq);
                     case Datatype.WString:
                         return ValueWStringSparseArray.Deserialize(buffer, flags, disableVlq);
+                    case Datatype.Variant:
+                        return ValueVariantSparseArray.Deserialize(buffer, flags, disableVlq);
                     default:
-                        throw new NotImplementedException();
+                        throw CreateUnsupportedDatatypeException(buffer, flags, datatype);
                 }
             }
             else
@@ -185,14 +196,29 @@ namespace S7CommPlusDriver
                     case Datatype.WString:
                         return ValueWString.Deserialize(buffer, flags, disableVlq);
                     case Datatype.Variant:
-                        throw new NotImplementedException();
+                        return ValueVariant.Deserialize(buffer, flags, disableVlq);
                     case Datatype.Struct:
                         return ValueStruct.Deserialize(buffer, flags, disableVlq);
                     case Datatype.S7String:
-                        throw new NotImplementedException();
+                        return ValueS7String.Deserialize(buffer, flags, disableVlq);
+                    default:
+                        throw CreateUnsupportedDatatypeException(buffer, flags, datatype);
                 }
             }
-            return null;
+        }
+
+        /// <summary>
+        /// Creates a diagnostic exception that preserves the wire flags, datatype, and stream location of an unsupported value.
+        /// </summary>
+        /// <param name="buffer">The PDU stream positioned at the unsupported value payload.</param>
+        /// <param name="flags">The datatype collection-shape flags read from the PDU.</param>
+        /// <param name="datatype">The unsupported S7CommPlus datatype identifier.</param>
+        /// <returns>An exception suitable for propagating through the connection diagnostics.</returns>
+        private static NotSupportedException CreateUnsupportedDatatypeException(Stream buffer, byte flags, byte datatype)
+        {
+            return new NotSupportedException(
+                $"Unsupported S7CommPlus value datatype 0x{datatype:X2} with flags 0x{flags:X2} " +
+                $"at PDU offset {buffer.Position} of {buffer.Length}.");
         }
     }
     internal class ValueNull : PValue
@@ -224,6 +250,63 @@ namespace S7CommPlusDriver
             return new ValueNull(flags);
         }
     }
+
+    /// <summary>
+    /// Represents an array whose elements intentionally carry no payload, as emitted by PLC lifecycle notifications.
+    /// </summary>
+    internal sealed class ValueNullArray : PValue
+    {
+        private readonly uint _count;
+
+        /// <summary>
+        /// Initializes a null array while preserving its protocol collection shape.
+        /// </summary>
+        /// <param name="count">Number of logical null elements.</param>
+        /// <param name="flags">Regular-array or address-array datatype flags.</param>
+        internal ValueNullArray(uint count, byte flags)
+        {
+            _count = count;
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets the number of logical elements even though no per-element bytes exist on the wire.
+        /// </summary>
+        internal uint Count => _count;
+
+        /// <summary>
+        /// Writes the array header and element count; null elements themselves have no payload.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.Null);
+            ret += S7p.EncodeUInt32Vlq(buffer, _count);
+            return ret;
+        }
+
+        /// <summary>
+        /// Reads the shared array count used by regular and address arrays of null values.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream positioned at the array count.</param>
+        /// <param name="flags">Collection-shape flags already read from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width counters for system-event payloads when set.</param>
+        /// <returns>The decoded null array.</returns>
+        internal static ValueNullArray Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out var fixedCount);
+                return new ValueNullArray(fixedCount, flags);
+            }
+
+            S7p.DecodeUInt32Vlq(buffer, out var count);
+            return new ValueNullArray(count, flags);
+        }
+    }
+
     internal class ValueBool : PValue
     {
         bool Value;
@@ -2668,7 +2751,9 @@ namespace S7CommPlusDriver
                         break;
                     default:
                         // can't handle this for now, this is completely different...
-                        throw new NotImplementedException();
+                        throw new NotSupportedException(
+                            $"Unsupported S7CommPlus blob type 0x{blobType:X2} for root id 0x{blobRootId:X8} " +
+                            $"at PDU offset {buffer.Position} of {buffer.Length}.");
                 }
             }
 
@@ -3052,6 +3137,422 @@ namespace S7CommPlusDriver
             return new ValueWStringSparseArray(value, flags);
         }
     }
+    /// <summary>
+    /// Represents the S7String descriptor payload used in tag descriptions.
+    /// </summary>
+    /// <remarks>
+    /// The wire value is the VLQ-encoded maximum S7String length, not the bytes of a runtime PLC string.
+    /// Runtime strings are transported through their resolved primitive storage representation.
+    /// </remarks>
+    internal sealed class ValueS7String : PValue
+    {
+        private readonly uint _maximumLength;
+
+        /// <summary>
+        /// Initializes an S7String descriptor while preserving its datatype flags.
+        /// </summary>
+        /// <param name="maximumLength">Maximum character count declared by the PLC tag description.</param>
+        /// <param name="flags">Datatype flags from the value header.</param>
+        internal ValueS7String(uint maximumLength, byte flags = 0)
+        {
+            _maximumLength = maximumLength;
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets the maximum S7String character count declared by the PLC.
+        /// </summary>
+        internal uint MaximumLength => _maximumLength;
+
+        /// <summary>
+        /// Writes the descriptor header and its maximum-length payload.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.S7String);
+            ret += SerializePayload(buffer, disableVlq: false);
+            return ret;
+        }
+
+        /// <summary>
+        /// Writes only the maximum-length payload for use in homogeneous arrays.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <param name="disableVlq">Uses fixed-width encoding for system-event payloads when set.</param>
+        /// <returns>Number of bytes written.</returns>
+        internal int SerializePayload(Stream buffer, bool disableVlq)
+        {
+            return disableVlq
+                ? S7p.EncodeUInt32(buffer, _maximumLength)
+                : S7p.EncodeUInt32Vlq(buffer, _maximumLength);
+        }
+
+        /// <summary>
+        /// Reads an S7String maximum-length descriptor after its header has been consumed.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream.</param>
+        /// <param name="flags">Datatype flags from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width decoding for system-event payloads when set.</param>
+        /// <returns>The decoded descriptor.</returns>
+        internal static ValueS7String Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out var fixedLength);
+                return new ValueS7String(fixedLength, flags);
+            }
+
+            S7p.DecodeUInt32Vlq(buffer, out var maximumLength);
+            return new ValueS7String(maximumLength, flags);
+        }
+    }
+
+    /// <summary>
+    /// Represents a regular or address array of S7String maximum-length descriptors.
+    /// </summary>
+    internal sealed class ValueS7StringArray : PValue
+    {
+        private readonly ValueS7String[] _values;
+
+        /// <summary>
+        /// Initializes an S7String descriptor array while preserving its collection shape.
+        /// </summary>
+        /// <param name="values">Decoded S7String descriptors.</param>
+        /// <param name="flags">Regular-array or address-array datatype flags.</param>
+        internal ValueS7StringArray(ValueS7String[] values, byte flags)
+        {
+            _values = values ?? Array.Empty<ValueS7String>();
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets a defensive copy of the decoded descriptors.
+        /// </summary>
+        internal ValueS7String[] GetValue() => (ValueS7String[])_values.Clone();
+
+        /// <summary>
+        /// Writes the array header, count, and bare maximum-length payloads.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.S7String);
+            ret += S7p.EncodeUInt32Vlq(buffer, (uint)_values.Length);
+            foreach (var value in _values)
+            {
+                ret += value.SerializePayload(buffer, disableVlq: false);
+            }
+            return ret;
+        }
+
+        /// <summary>
+        /// Reads a counted sequence of S7String maximum-length descriptors.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream positioned at the element count.</param>
+        /// <param name="flags">Collection-shape flags already read from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width counters and payloads for system events when set.</param>
+        /// <returns>The decoded descriptor array.</returns>
+        internal static ValueS7StringArray Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            uint count;
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out count);
+            }
+            else
+            {
+                S7p.DecodeUInt32Vlq(buffer, out count);
+            }
+
+            var values = new ValueS7String[count];
+            for (var index = 0; index < count; index++)
+            {
+                values[index] = ValueS7String.Deserialize(buffer, flags, disableVlq);
+            }
+            return new ValueS7StringArray(values, flags);
+        }
+    }
+
+    /// <summary>
+    /// Represents the protocol Variant payload, which carries a single VLQ-encoded unsigned identifier/value.
+    /// </summary>
+    internal sealed class ValueVariant : PValue
+    {
+        private readonly uint _value;
+
+        /// <summary>
+        /// Initializes a Variant value while preserving its datatype flags.
+        /// </summary>
+        /// <param name="value">Unsigned Variant payload decoded from the PLC.</param>
+        /// <param name="flags">Datatype flags from the value header.</param>
+        internal ValueVariant(uint value, byte flags = 0)
+        {
+            _value = value;
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets the raw Variant payload used by the PLC protocol.
+        /// </summary>
+        internal uint GetValue() => _value;
+
+        /// <summary>
+        /// Writes the Variant header and VLQ payload.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.Variant);
+            ret += SerializePayload(buffer, disableVlq: false);
+            return ret;
+        }
+
+        /// <summary>
+        /// Writes only the payload for use inside homogeneous arrays.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <param name="disableVlq">Uses fixed-width encoding for system-event payloads when set.</param>
+        /// <returns>Number of bytes written.</returns>
+        internal int SerializePayload(Stream buffer, bool disableVlq)
+        {
+            return disableVlq
+                ? S7p.EncodeUInt32(buffer, _value)
+                : S7p.EncodeUInt32Vlq(buffer, _value);
+        }
+
+        /// <summary>
+        /// Reads a Variant payload after its header has already been consumed.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream.</param>
+        /// <param name="flags">Datatype flags from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width decoding for system-event payloads when set.</param>
+        /// <returns>The decoded Variant value.</returns>
+        internal static ValueVariant Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out var fixedValue);
+                return new ValueVariant(fixedValue, flags);
+            }
+
+            S7p.DecodeUInt32Vlq(buffer, out var value);
+            return new ValueVariant(value, flags);
+        }
+    }
+
+    /// <summary>
+    /// Represents a regular or address array of homogeneous Variant payloads.
+    /// </summary>
+    internal sealed class ValueVariantArray : PValue
+    {
+        private readonly ValueVariant[] _values;
+
+        /// <summary>
+        /// Initializes a Variant array while retaining the PLC collection shape.
+        /// </summary>
+        /// <param name="values">Decoded Variant elements.</param>
+        /// <param name="flags">Regular-array or address-array datatype flags.</param>
+        internal ValueVariantArray(ValueVariant[] values, byte flags)
+        {
+            _values = values ?? Array.Empty<ValueVariant>();
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets a defensive copy of the decoded Variant elements.
+        /// </summary>
+        internal ValueVariant[] GetValue() => (ValueVariant[])_values.Clone();
+
+        /// <summary>
+        /// Writes the homogeneous array without repeating a datatype header for each element.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.Variant);
+            ret += S7p.EncodeUInt32Vlq(buffer, (uint)_values.Length);
+            foreach (var value in _values)
+            {
+                ret += value.SerializePayload(buffer, disableVlq: false);
+            }
+            return ret;
+        }
+
+        /// <summary>
+        /// Reads a counted sequence of bare Variant payloads.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream positioned at the element count.</param>
+        /// <param name="flags">Collection-shape flags already read from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width counters and payloads for system events when set.</param>
+        /// <returns>The decoded Variant array.</returns>
+        internal static ValueVariantArray Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            uint count;
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out count);
+            }
+            else
+            {
+                S7p.DecodeUInt32Vlq(buffer, out count);
+            }
+
+            var values = new ValueVariant[count];
+            for (var index = 0; index < count; index++)
+            {
+                values[index] = ValueVariant.Deserialize(buffer, flags, disableVlq);
+            }
+            return new ValueVariantArray(values, flags);
+        }
+    }
+
+    /// <summary>
+    /// Represents a null-terminated map of Variant type identifiers to Variant payloads.
+    /// </summary>
+    internal sealed class ValueVariantSparseArray : PValue
+    {
+        private readonly Dictionary<uint, ValueVariant> _values;
+
+        /// <summary>
+        /// Initializes a sparse Variant collection.
+        /// </summary>
+        /// <param name="values">Variant payloads keyed by the PLC type identifier carried in the sparse key.</param>
+        internal ValueVariantSparseArray(Dictionary<uint, ValueVariant> values)
+        {
+            _values = values ?? new Dictionary<uint, ValueVariant>();
+            DatatypeFlags = FLAGS_SPARSEARRAY;
+        }
+
+        /// <summary>
+        /// Gets a copy of the sparse Variant mapping.
+        /// </summary>
+        internal Dictionary<uint, ValueVariant> GetValue() => new Dictionary<uint, ValueVariant>(_values);
+
+        /// <summary>
+        /// Writes key/payload pairs followed by the protocol's zero-key terminator.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.Variant);
+            foreach (var value in _values)
+            {
+                ret += S7p.EncodeUInt32Vlq(buffer, value.Key);
+                ret += value.Value.SerializePayload(buffer, disableVlq: false);
+            }
+            ret += S7p.EncodeByte(buffer, 0);
+            return ret;
+        }
+
+        /// <summary>
+        /// Reads sparse Variant pairs until the zero-key terminator is reached.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream.</param>
+        /// <param name="flags">Sparse-array flags already read from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width keys and payloads for system events when set.</param>
+        /// <returns>The decoded sparse Variant collection.</returns>
+        internal static ValueVariantSparseArray Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            var values = new Dictionary<uint, ValueVariant>();
+            while (true)
+            {
+                uint key;
+                if (disableVlq)
+                {
+                    S7p.DecodeUInt32(buffer, out key);
+                }
+                else
+                {
+                    S7p.DecodeUInt32Vlq(buffer, out key);
+                }
+                if (key == 0)
+                {
+                    return new ValueVariantSparseArray(values) { DatatypeFlags = flags };
+                }
+                values.Add(key, ValueVariant.Deserialize(buffer, flags, disableVlq));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Represents a counted sequence of Struct payloads used by PLC lifecycle and alarm notifications.
+    /// </summary>
+    internal sealed class ValueStructArray : PValue
+    {
+        private readonly ValueStruct[] _values;
+
+        /// <summary>
+        /// Initializes a Struct array while preserving its collection-shape flags.
+        /// </summary>
+        /// <param name="values">Decoded Struct values.</param>
+        /// <param name="flags">Regular-array or address-array datatype flags.</param>
+        internal ValueStructArray(ValueStruct[] values, byte flags)
+        {
+            _values = values ?? Array.Empty<ValueStruct>();
+            DatatypeFlags = flags;
+        }
+
+        /// <summary>
+        /// Gets a defensive copy of the decoded Struct values.
+        /// </summary>
+        internal ValueStruct[] GetValue() => (ValueStruct[])_values.Clone();
+
+        /// <summary>
+        /// Writes a single array header followed by each bare Struct payload.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <returns>Number of bytes written.</returns>
+        public override int Serialize(Stream buffer)
+        {
+            var ret = S7p.EncodeByte(buffer, DatatypeFlags);
+            ret += S7p.EncodeByte(buffer, Datatype.Struct);
+            ret += S7p.EncodeUInt32Vlq(buffer, (uint)_values.Length);
+            foreach (var value in _values)
+            {
+                ret += value.SerializePayload(buffer, disableVlq: false);
+            }
+            return ret;
+        }
+
+        /// <summary>
+        /// Reads a counted sequence of Struct payloads, including nested and packed structs.
+        /// </summary>
+        /// <param name="buffer">Source protocol stream positioned at the element count.</param>
+        /// <param name="flags">Collection-shape flags already read from the value header.</param>
+        /// <param name="disableVlq">Uses fixed-width counters inside system-event payloads when set.</param>
+        /// <returns>The decoded Struct array.</returns>
+        internal static ValueStructArray Deserialize(Stream buffer, byte flags, bool disableVlq)
+        {
+            uint count;
+            if (disableVlq)
+            {
+                S7p.DecodeUInt32(buffer, out count);
+            }
+            else
+            {
+                S7p.DecodeUInt32Vlq(buffer, out count);
+            }
+
+            var values = new ValueStruct[count];
+            for (var index = 0; index < count; index++)
+            {
+                values[index] = ValueStruct.Deserialize(buffer, flags, disableVlq);
+            }
+            return new ValueStructArray(values, flags);
+        }
+    }
+
     internal class ValueStruct : PValue
     {
         UInt32 Value;
@@ -3104,6 +3605,19 @@ namespace S7CommPlusDriver
 
             ret += S7p.EncodeByte(buffer, DatatypeFlags);
             ret += S7p.EncodeByte(buffer, Datatype.Struct);
+            ret += SerializePayload(buffer, disableVlq: false);
+            return ret;
+        }
+
+        /// <summary>
+        /// Writes the Struct body without a datatype header so it can be embedded in a homogeneous Struct array.
+        /// </summary>
+        /// <param name="buffer">Destination protocol stream.</param>
+        /// <param name="disableVlq">Uses fixed-width counters for system-event payloads when set.</param>
+        /// <returns>Number of bytes written.</returns>
+        internal int SerializePayload(Stream buffer, bool disableVlq)
+        {
+            int ret = 0;
             ret += S7p.EncodeUInt32(buffer, Value);
             // Packed Struct, see comment in Deserialize
             if ((Value > 0x90000000 && Value < 0x9fffffff) || (Value > 0x02000000 && Value < 0x02ffffff))
@@ -3116,13 +3630,23 @@ namespace S7CommPlusDriver
                     // get an Error "InvalidTimestampInTypeSafeBlob"
                     ret += S7p.EncodeUInt64(buffer, PackedStructInterfaceTimestamp);
 
-                    ret += S7p.EncodeUInt32Vlq(buffer, PackedStructTransportFlags);
+                    ret += disableVlq
+                        ? S7p.EncodeUInt32(buffer, PackedStructTransportFlags)
+                        : S7p.EncodeUInt32Vlq(buffer, PackedStructTransportFlags);
 
                     if (elem.Value.GetType() == typeof(ValueByteArray))
                     {
                         var barr = ((ValueByteArray)elem.Value).GetValue();
                         UInt32 elementcount = (UInt32)barr.Length;
-                        ret += S7p.EncodeUInt32Vlq(buffer, elementcount);
+                        ret += disableVlq
+                            ? S7p.EncodeUInt32(buffer, elementcount)
+                            : S7p.EncodeUInt32Vlq(buffer, elementcount);
+                        if ((PackedStructTransportFlags & (uint)PackedStructTransportFlagBits.Count2Present) != 0)
+                        {
+                            ret += disableVlq
+                                ? S7p.EncodeUInt32(buffer, elementcount)
+                                : S7p.EncodeUInt32Vlq(buffer, elementcount);
+                        }
                         // Don't use the Serialize method of ValueByteArray, because there is an additional header we don't want here.
                         for (int i = 0; i < barr.Length; i++)
                         {
@@ -3139,10 +3663,14 @@ namespace S7CommPlusDriver
             {
                 foreach (var elem in Elements)
                 {
-                    ret += S7p.EncodeUInt32Vlq(buffer, elem.Key);
+                    ret += disableVlq
+                        ? S7p.EncodeUInt32(buffer, elem.Key)
+                        : S7p.EncodeUInt32Vlq(buffer, elem.Key);
                     ret += elem.Value.Serialize(buffer);
                 }
-                ret += S7p.EncodeByte(buffer, 0); // List Terminator
+                ret += disableVlq
+                    ? S7p.EncodeUInt32(buffer, 0)
+                    : S7p.EncodeByte(buffer, 0); // List Terminator
             }
             return ret;
         }

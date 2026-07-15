@@ -14,10 +14,13 @@ namespace S7CommPlusDriver.Tests
         public int ConnectCount { get; private set; }
         public int DisconnectCount { get; private set; }
         public int ReadCount { get; private set; }
+        public int BrowseVariablesCount { get; private set; }
+        public int GetSymbolCommentsCount { get; private set; }
         public int MaxConcurrentReads { get; private set; }
         public int ActiveReads;
         public int CpuOperatingStateWriteCount { get; private set; }
         public int? LastCpuOperatingStateRequest { get; private set; }
+        public bool? LastBrowseExpandedPrimitiveArrayElements { get; private set; }
         public List<int> CpuOperatingStateRequests { get; } = new List<int>();
         public int TagSubscriptionCreateCount { get; private set; }
         public int TagSubscriptionWaitCount { get; private set; }
@@ -48,6 +51,7 @@ namespace S7CommPlusDriver.Tests
         public Func<(int Error, List<S7CommPlusBlockInfo> Blocks)>? BrowseBlocksHandler { get; set; }
         public Func<(int Error, string StructureXml)>? PlcStructureXmlHandler { get; set; }
         public Func<uint, (int Error, S7CommPlusClientBlockContent Block)>? GetBlockHandler { get; set; }
+        public Func<uint, (int Error, S7CommPlusSymbolCommentCatalog Comments)>? GetSymbolCommentsHandler { get; set; }
         public Func<(int Error, List<S7CommPlusAlarm> Alarms)>? ActiveAlarmsHandler { get; set; }
         public Func<string, PlcTag>? GetTagHandler { get; set; }
         public Func<(int Error, S7CommPlusCpuInfo CpuInfo)>? CpuInfoHandler { get; set; }
@@ -73,6 +77,7 @@ namespace S7CommPlusDriver.Tests
         public Func<uint, int, (int Error, List<S7CommPlusTisWatchNotification> Notifications)>? WaitForTisWatchSubscriptionByIdHandler { get; set; }
         public Func<int>? DeleteTisWatchSubscriptionHandler { get; set; }
         public string LastTisWatchDiagnostic { get; set; } = "";
+        public string LastAlarmSubscriptionDiagnostic { get; set; } = "";
 
         public int Connect(S7CommPlusClientOptions options)
         {
@@ -101,8 +106,10 @@ namespace S7CommPlusDriver.Tests
             return LegitimateHandler?.Invoke(password, username) ?? 0;
         }
 
-        public int BrowseVariables(out List<VarInfo> variables)
+        public int BrowseVariables(bool expandPrimitiveArrayElements, out List<VarInfo> variables)
         {
+            BrowseVariablesCount++;
+            LastBrowseExpandedPrimitiveArrayElements = expandPrimitiveArrayElements;
             var result = BrowseVariablesHandler?.Invoke() ?? (0, new List<VarInfo>());
             variables = result.Variables;
             return result.Error;
@@ -126,6 +133,15 @@ namespace S7CommPlusDriver.Tests
         {
             var result = GetBlockHandler?.Invoke(relationId) ?? (0, new S7CommPlusClientBlockContent(relationId, $"Block_{relationId}", S7CommPlusProgrammingLanguage.SCL, relationId & 0xffff, S7CommPlusBlockType.FC, "", new Dictionary<uint, string>(), "", Array.Empty<string>(), "", "", Array.Empty<string>(), Array.Empty<string>()));
             blockContent = result.Block;
+            return result.Error;
+        }
+
+        public int GetSymbolComments(uint relationId, out S7CommPlusSymbolCommentCatalog comments)
+        {
+            GetSymbolCommentsCount++;
+            var result = GetSymbolCommentsHandler?.Invoke(relationId)
+                ?? (0, S7CommPlusSymbolCommentParser.Parse(relationId, string.Empty, string.Empty, string.Empty));
+            comments = result.Comments;
             return result.Error;
         }
 

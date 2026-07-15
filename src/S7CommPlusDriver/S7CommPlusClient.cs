@@ -12,14 +12,18 @@ namespace S7CommPlusDriver
 {
     public sealed class S7CommPlusClient : IAsyncDisposable
     {
+        private const int DefaultTagsPerRequest = 20;
+        private const int CpuStopRequest = 1;
+        private const int CpuRunRequest = 3;
         private readonly S7CommPlusClientOptions _options;
         private readonly Func<IS7CommPlusSession> _sessionFactory;
         private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
         private IS7CommPlusSession _session;
         private bool _disposed;
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
-        private const int CpuStopRequest = 1;
-        private const int CpuRunRequest = 3;
+        private int _tagsPerReadRequestMax = DefaultTagsPerRequest;
+        private int _tagsPerWriteRequestMax = DefaultTagsPerRequest;
+        private IReadOnlyDictionary<string, VarInfo> _symbolCatalog;
 
         public S7CommPlusClient(S7CommPlusClientOptions options)
             : this(options, () => new S7CommPlusProtocolSession())
@@ -72,14 +76,155 @@ namespace S7CommPlusDriver
             }
         }
 
+        /// <summary>
+        /// Browses readable PLC symbols while representing each primitive array as one item with dimension metadata.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>The scalar symbols, aggregate primitive arrays, and expanded members of structure arrays reported by the PLC.</returns>
         public Task<IReadOnlyList<VarInfo>> BrowseAsync(CancellationToken cancellationToken = default)
         {
+            return BrowseAsync(new S7CommPlusBrowseOptions(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Browses readable PLC symbols using an explicit primitive-array representation.
+        /// </summary>
+        /// <param name="options">
+        /// Controls whether primitive arrays are returned once with bounds metadata or flattened into indexed element items.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>The browse items produced from the PLC type-information catalog.</returns>
+        /// <exception cref="ArgumentNullException"><paramref name="options"/> is <see langword="null"/>.</exception>
+        public Task<IReadOnlyList<VarInfo>> BrowseAsync(S7CommPlusBrowseOptions options, CancellationToken cancellationToken = default)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            var expandPrimitiveArrayElements = options.ExpandPrimitiveArrayElements;
             return ExecuteReadOperationAsync("Browse", session =>
             {
-                var error = session.BrowseVariables(out var vars);
+                var error = session.BrowseVariables(expandPrimitiveArrayElements, out var vars);
                 ThrowIfError("Browse", error);
                 return (IReadOnlyList<VarInfo>)(vars ?? new List<VarInfo>());
-            }, cancellationToken);
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Resolves many exact symbolic PLC names from one type-catalog browse instead of issuing one metadata request per symbol.
+        /// </summary>
+        /// <param name="symbols">Fully qualified PLC symbols to resolve. Duplicate names are resolved only once.</param>
+        /// <param name="cancellationToken">Cancels the browse request and its client-side timeout wait.</param>
+        /// <returns>
+        /// A case-sensitive mapping from every requested symbol found in the current PLC program to a typed, ready-to-read
+        /// <see cref="PlcTag"/>. Names absent from the PLC catalog are omitted so callers can handle stale configuration per item.
+        /// </returns>
+        /// <remarks>
+        /// This method is intended for initializing large tag caches after connecting or after the PLC program changes. It preserves
+        /// the access sequence, symbol CRC, datatype, and aggregate-array element addresses produced by normal symbolic resolution,
+        /// while requiring only one PLC browse operation for the complete requested set. A fully indexed primitive-array symbol is
+        /// derived from its aggregate catalog metadata, including declared lower bounds and packed multidimensional BOOL strides.
+        /// </remarks>
+        /// <exception cref="ArgumentNullException"><paramref name="symbols"/> is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException">The collection contains a null, empty, or whitespace-only symbol.</exception>
+        public Task<IReadOnlyDictionary<string, PlcTag>> GetTagsBySymbolsAsync(
+            IEnumerable<string> symbols,
+            CancellationToken cancellationToken = default)
+        {
+            if (symbols == null)
+            {
+                throw new ArgumentNullException(nameof(symbols));
+            }
+
+            var requestedSymbols = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var symbol in symbols)
+            {
+                if (string.IsNullOrWhiteSpace(symbol))
+                {
+                    throw new ArgumentException("Symbol collection cannot contain null, empty, or whitespace-only entries.", nameof(symbols));
+                }
+                requestedSymbols.Add(symbol);
+            }
+            if (requestedSymbols.Count == 0)
+            {
+                return Task.FromResult<IReadOnlyDictionary<string, PlcTag>>(
+                    new Dictionary<string, PlcTag>(StringComparer.Ordinal));
+            }
+
+            return ExecuteReadOperationAsync("GetTagsBySymbols", session =>
+            {
+                var symbolCatalog = GetOrCreateSymbolCatalog(session);
+                var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
+                foreach (var requestedSymbol in requestedSymbols)
+                {
+                    if (symbolCatalog.TryGetValue(requestedSymbol, out var variable))
+                    {
+                        var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+                        if (tag != null)
+                        {
+                            resolvedTags.Add(requestedSymbol, tag);
+                        }
+                    }
+                    else if (TryResolveAggregateArrayElement(symbolCatalog, requestedSymbol, out var elementTag))
+                    {
+                        resolvedTags.Add(requestedSymbol, elementTag);
+                    }
+                }
+                return (IReadOnlyDictionary<string, PlcTag>)resolvedTags;
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Resolves an indexed primitive-array element from its aggregate catalog entry without another PLC metadata request.
+        /// </summary>
+        /// <param name="symbolCatalog">The retained aggregate PLC symbol catalog.</param>
+        /// <param name="requestedSymbol">The fully indexed scalar symbol requested by the caller.</param>
+        /// <param name="tag">Receives a scalar tag when the parent array and indices are valid.</param>
+        /// <returns><see langword="true"/> when the requested symbol identifies one declared primitive-array element.</returns>
+        private static bool TryResolveAggregateArrayElement(
+            IReadOnlyDictionary<string, VarInfo> symbolCatalog,
+            string requestedSymbol,
+            out PlcTag tag)
+        {
+            tag = null;
+            var indexStart = requestedSymbol.LastIndexOf('[');
+            if (indexStart <= 0 || requestedSymbol[requestedSymbol.Length - 1] != ']')
+            {
+                return false;
+            }
+
+            var aggregateSymbol = requestedSymbol.Substring(0, indexStart);
+            return symbolCatalog.TryGetValue(aggregateSymbol, out var aggregateVariable)
+                && S7CommPlusProtocolSession.TryCreateResolvedPrimitiveArrayElement(
+                    aggregateVariable,
+                    requestedSymbol,
+                    requestedSymbol.Substring(indexStart + 1, requestedSymbol.Length - indexStart - 2),
+                    out tag);
+        }
+
+        /// <summary>
+        /// Discards the retained PLC symbol metadata after the caller detects that the controller program structure changed.
+        /// </summary>
+        /// <param name="cancellationToken">Cancels waiting for another client operation to finish.</param>
+        /// <returns>A task that completes after subsequent bulk resolutions are forced to browse the PLC again.</returns>
+        /// <remarks>
+        /// Normal disconnects and reconnects intentionally retain the catalog because access metadata remains valid while the PLC
+        /// program is unchanged. Call this method when a program-structure hash changes, before rebuilding cached <see cref="PlcTag"/>
+        /// accessors. The next <see cref="GetTagsBySymbolsAsync(IEnumerable{string}, CancellationToken)"/> call then refreshes the catalog.
+        /// </remarks>
+        public async Task InvalidateSymbolCatalogAsync(CancellationToken cancellationToken = default)
+        {
+            await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                ThrowIfDisposed();
+                _symbolCatalog = null;
+            }
+            finally
+            {
+                _operationGate.Release();
+            }
         }
 
         public Task<IReadOnlyList<S7CommPlusBlockInfo>> BrowseBlocksAsync(CancellationToken cancellationToken = default)
@@ -133,6 +278,55 @@ namespace S7CommPlusDriver
                 ThrowIfError("GetBlockContent", error);
                 return blockContent;
             }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Retrieves multilingual engineering comments for one data block or absolute I/Q/M area without downloading block code.
+        /// </summary>
+        /// <param name="relationId">
+        /// The relation ID obtained from a browsed variable access sequence or <see cref="BrowseBlocksAsync(System.Threading.CancellationToken)"/>.
+        /// Absolute input, output, and marker areas use relation IDs <c>0x50</c>, <c>0x51</c>, and <c>0x52</c> respectively.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the PLC request, decompression, and client-side timeout wait.</param>
+        /// <returns>A catalog that can resolve comments for the <see cref="VarInfo"/> values returned by the same PLC program.</returns>
+        /// <remarks>
+        /// The request is intentionally narrower than <see cref="GetBlockContentAsync(uint, System.Threading.CancellationToken)"/>:
+        /// it downloads line comments and the DB interface needed for path translation, but omits block bodies, executable code,
+        /// debug data, and network metadata. Callers should cache the returned catalog per relation ID while processing one browse.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="relationId"/> is zero.</exception>
+        public Task<S7CommPlusSymbolCommentCatalog> GetSymbolCommentsAsync(
+            uint relationId,
+            CancellationToken cancellationToken = default)
+        {
+            if (relationId == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(relationId), "A PLC block or area relation ID is required.");
+            }
+
+            return ExecuteReadOperationAsync("GetSymbolComments", session =>
+            {
+                try
+                {
+                    var error = session.GetSymbolComments(relationId, out var comments);
+                    ThrowIfError("GetSymbolComments", error);
+                    return comments;
+                }
+                catch (S7CommPlusException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetSymbolComments",
+                        Endpoint,
+                        S7Consts.errIsoInvalidPDU,
+                        false,
+                        $"GetSymbolComments failed for PLC {Endpoint}: PLC comment metadata could not be parsed.",
+                        exception);
+                }
+            }, _options.BrowseTimeout, cancellationToken);
         }
 
         public Task<S7CommPlusCpuInfo> GetCpuInfoAsync(CancellationToken cancellationToken = default)
@@ -229,7 +423,10 @@ namespace S7CommPlusDriver
             {
                 var error = session.GetCommunicationResources(out var resources);
                 ThrowIfError("GetCommunicationResources", error);
-                return new S7CommPlusCommunicationResources(resources);
+                var result = new S7CommPlusCommunicationResources(resources);
+                _tagsPerReadRequestMax = Math.Max(1, result.TagsPerReadRequestMax);
+                _tagsPerWriteRequestMax = Math.Max(1, result.TagsPerWriteRequestMax);
+                return result;
             }, cancellationToken);
         }
 
@@ -541,7 +738,7 @@ namespace S7CommPlusDriver
                     () => _session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
                     _options.RequestTimeout,
                     cancellationToken).ConfigureAwait(false);
-                ThrowIfError("CreateAlarmSubscription", error);
+                ThrowIfAlarmSubscriptionError("CreateAlarmSubscription", error);
 
                 subscription.Start(token => RunAlarmSubscriptionLoopAsync(subscription, subscriptionOptions, subscriptionObjectId, token));
                 return subscription;
@@ -571,7 +768,35 @@ namespace S7CommPlusDriver
 
             return ExecuteReadOperationAsync("GetTagBySymbol", session =>
             {
-                var tag = session.GetPlcTagBySymbol(symbol);
+                PlcTag tag;
+                try
+                {
+                    tag = session.GetPlcTagBySymbol(symbol);
+                }
+                catch (ArgumentException exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetTagBySymbol",
+                        Endpoint,
+                        S7Consts.errCliItemNotAvailable,
+                        false,
+                        $"PLC tag '{symbol}' has invalid symbolic array syntax: {exception.Message}",
+                        exception);
+                }
+                catch (S7CommPlusException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetTagBySymbol",
+                        Endpoint,
+                        S7Consts.errCliFunctionRefused,
+                        true,
+                        $"Unexpected failure while resolving PLC tag '{symbol}': {exception.Message}",
+                        exception);
+                }
                 if (tag == null)
                 {
                     throw new S7CommPlusConnectionException("GetTagBySymbol", Endpoint, S7Consts.errCliItemNotAvailable, false, $"PLC tag '{symbol}' could not be resolved.");
@@ -627,16 +852,32 @@ namespace S7CommPlusDriver
 
             return ExecuteReadOperationAsync("ReadTags", session =>
             {
-                var addresses = tagList.Select(tag => tag.Address).ToList();
-                var error = session.ReadValues(addresses, out var values, out var itemErrors);
-                ThrowIfError("ReadTags", error);
+                var requestTags = tagList
+                    .SelectMany(tag => tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag })
+                    .ToList();
+                var (values, itemErrors) = ReadTagValuesInBatches(session, requestTags);
                 var items = new List<S7CommPlusTagReadResult>(tagList.Count);
-                for (var i = 0; i < tagList.Count; i++)
+                var requestIndex = 0;
+                foreach (var tag in tagList)
                 {
-                    var value = i < values.Count ? values[i] : null;
-                    var itemError = i < itemErrors.Count ? itemErrors[i] : ulong.MaxValue;
-                    tagList[i].ProcessReadResult(value, itemError);
-                    items.Add(new S7CommPlusTagReadResult(tagList[i], itemError));
+                    var elementTags = tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag };
+                    var aggregateError = 0UL;
+                    foreach (var elementTag in elementTags)
+                    {
+                        var value = requestIndex < values.Count ? values[requestIndex] : null;
+                        var itemError = requestIndex < itemErrors.Count ? itemErrors[requestIndex] : ulong.MaxValue;
+                        elementTag.ProcessReadResult(value, itemError);
+                        if (aggregateError == 0 && itemError != 0)
+                        {
+                            aggregateError = itemError;
+                        }
+                        requestIndex++;
+                    }
+                    if (tag.AggregateElements.Count > 0)
+                    {
+                        tag.CompleteAggregateRead(aggregateError);
+                    }
+                    items.Add(new S7CommPlusTagReadResult(tag, aggregateError));
                 }
                 return new S7CommPlusBatchResult<S7CommPlusTagReadResult>(items);
             }, cancellationToken);
@@ -697,19 +938,86 @@ namespace S7CommPlusDriver
 
             return ExecuteWriteOperationAsync("WriteTags", session =>
             {
-                var addresses = tagList.Select(tag => tag.Address).ToList();
-                var values = tagList.Select(tag => tag.GetWriteValue()).ToList();
-                var error = session.WriteValues(addresses, values, out var itemErrors);
-                ThrowIfError("WriteTags", error);
-                var items = new List<S7CommPlusWriteResult>(tagList.Count);
-                for (var i = 0; i < tagList.Count; i++)
+                foreach (var tag in tagList)
                 {
-                    var itemError = i < itemErrors.Count ? itemErrors[i] : ulong.MaxValue;
-                    tagList[i].ProcessWriteResult(itemError);
-                    items.Add(new S7CommPlusWriteResult(addresses[i], itemError));
+                    tag.PrepareAggregateWrite();
+                }
+                var requestTags = tagList
+                    .SelectMany(tag => tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag })
+                    .ToList();
+                var itemErrors = WriteTagValuesInBatches(session, requestTags);
+                var items = new List<S7CommPlusWriteResult>(tagList.Count);
+                var requestIndex = 0;
+                foreach (var tag in tagList)
+                {
+                    var elementTags = tag.AggregateElements.Count > 0 ? tag.AggregateElements : new[] { tag };
+                    var aggregateError = 0UL;
+                    foreach (var elementTag in elementTags)
+                    {
+                        var itemError = requestIndex < itemErrors.Count ? itemErrors[requestIndex] : ulong.MaxValue;
+                        elementTag.ProcessWriteResult(itemError);
+                        if (aggregateError == 0 && itemError != 0)
+                        {
+                            aggregateError = itemError;
+                        }
+                        requestIndex++;
+                    }
+                    tag.ProcessWriteResult(aggregateError);
+                    items.Add(new S7CommPlusWriteResult(tag.Address, aggregateError));
                 }
                 return new S7CommPlusBatchResult<S7CommPlusWriteResult>(items);
             }, cancellationToken);
+        }
+
+        /// <summary>
+        /// Reads resolved tags in PLC-supported item counts and concatenates the per-item values and errors in request order.
+        /// </summary>
+        /// <param name="session">The connected protocol session that owns the resolved addresses.</param>
+        /// <param name="requestTags">Scalar tags after aggregate arrays have been expanded into their elements.</param>
+        /// <returns>All values and item errors in the same order as <paramref name="requestTags"/>.</returns>
+        private (List<object> Values, List<ulong> ItemErrors) ReadTagValuesInBatches(
+            IS7CommPlusSession session,
+            IReadOnlyCollection<PlcTag> requestTags)
+        {
+            var values = new List<object>(requestTags.Count);
+            var itemErrors = new List<ulong>(requestTags.Count);
+            foreach (var batch in requestTags.Chunk(_tagsPerReadRequestMax))
+            {
+                var error = session.ReadValues(batch.Select(tag => tag.Address).ToList(), out var batchValues, out var batchErrors);
+                ThrowIfError("ReadTags", error);
+                for (var index = 0; index < batch.Length; index++)
+                {
+                    values.Add(index < batchValues.Count ? batchValues[index] : null);
+                    itemErrors.Add(index < batchErrors.Count ? batchErrors[index] : ulong.MaxValue);
+                }
+            }
+            return (values, itemErrors);
+        }
+
+        /// <summary>
+        /// Writes resolved tags in PLC-supported item counts and concatenates item errors in request order.
+        /// </summary>
+        /// <param name="session">The connected protocol session that owns the resolved addresses.</param>
+        /// <param name="requestTags">Scalar tags after aggregate arrays have been expanded and populated.</param>
+        /// <returns>All item errors in the same order as <paramref name="requestTags"/>.</returns>
+        private List<ulong> WriteTagValuesInBatches(
+            IS7CommPlusSession session,
+            IReadOnlyCollection<PlcTag> requestTags)
+        {
+            var itemErrors = new List<ulong>(requestTags.Count);
+            foreach (var batch in requestTags.Chunk(_tagsPerWriteRequestMax))
+            {
+                var error = session.WriteValues(
+                    batch.Select(tag => tag.Address).ToList(),
+                    batch.Select(tag => tag.GetWriteValue()).ToList(),
+                    out var batchErrors);
+                ThrowIfError("WriteTags", error);
+                for (var index = 0; index < batch.Length; index++)
+                {
+                    itemErrors.Add(index < batchErrors.Count ? batchErrors[index] : ulong.MaxValue);
+                }
+            }
+            return itemErrors;
         }
 
         public async ValueTask DisposeAsync()
@@ -734,14 +1042,50 @@ namespace S7CommPlusDriver
             }
         }
 
+        /// <summary>
+        /// Returns the retained aggregate symbol catalog or builds it through one PLC metadata browse for the current program.
+        /// </summary>
+        /// <param name="session">The connected session used only when no catalog has been retained yet.</param>
+        /// <returns>A case-sensitive lookup containing the first browse result for every valid symbolic name.</returns>
+        /// <remarks>
+        /// The catalog deliberately survives reconnects. Its access metadata describes the PLC program rather than a transport
+        /// session and is refreshed explicitly through <see cref="InvalidateSymbolCatalogAsync(CancellationToken)"/> when the caller
+        /// detects a program-structure change.
+        /// </remarks>
+        private IReadOnlyDictionary<string, VarInfo> GetOrCreateSymbolCatalog(IS7CommPlusSession session)
+        {
+            if (_symbolCatalog != null)
+            {
+                return _symbolCatalog;
+            }
+
+            var error = session.BrowseVariables(false, out var variables);
+            ThrowIfError("GetTagsBySymbols", error);
+            var symbolCatalog = new Dictionary<string, VarInfo>(StringComparer.Ordinal);
+            foreach (var variable in variables ?? Enumerable.Empty<VarInfo>())
+            {
+                if (variable != null && !string.IsNullOrWhiteSpace(variable.Name))
+                {
+                    symbolCatalog.TryAdd(variable.Name, variable);
+                }
+            }
+            _symbolCatalog = symbolCatalog;
+            return _symbolCatalog;
+        }
+
         private Task<T> ExecuteReadOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
         {
-            return ExecuteOperationAsync(operation, allowReconnect: true, operationFunc, cancellationToken);
+            return ExecuteReadOperationAsync(operation, operationFunc, _options.RequestTimeout, cancellationToken);
+        }
+
+        private Task<T> ExecuteReadOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            return ExecuteOperationAsync(operation, allowReconnect: true, operationFunc, timeout, cancellationToken);
         }
 
         private Task<T> ExecuteSessionOperationAsync<T>(string operation, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
         {
-            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, cancellationToken);
+            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, _options.RequestTimeout, cancellationToken);
         }
 
         private async Task SetCpuOperatingStateAsync(string operation, int operatingStateRequest, CancellationToken cancellationToken)
@@ -760,10 +1104,10 @@ namespace S7CommPlusDriver
             {
                 throw new S7CommPlusWriteDisabledException(Endpoint);
             }
-            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, cancellationToken);
+            return ExecuteOperationAsync(operation, allowReconnect: false, operationFunc, _options.RequestTimeout, cancellationToken);
         }
 
-        private async Task<T> ExecuteOperationAsync<T>(string operation, bool allowReconnect, Func<IS7CommPlusSession, T> operationFunc, CancellationToken cancellationToken)
+        private async Task<T> ExecuteOperationAsync<T>(string operation, bool allowReconnect, Func<IS7CommPlusSession, T> operationFunc, TimeSpan timeout, CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -772,14 +1116,14 @@ namespace S7CommPlusDriver
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), _options.RequestTimeout, cancellationToken).ConfigureAwait(false);
+                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
                 }
                 catch (S7CommPlusException ex) when (allowReconnect && _options.AutoReconnect && ex.IsTransient)
                 {
                     RaiseCommunicationError(ex);
                     _options.Logger.LogWarning(ex, "Transient {Operation} failure for {Endpoint}; reconnecting and retrying once.", operation, Endpoint);
                     await ReconnectCoreAsync(cancellationToken).ConfigureAwait(false);
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), _options.RequestTimeout, cancellationToken).ConfigureAwait(false);
+                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (S7CommPlusException ex)
@@ -830,6 +1174,8 @@ namespace S7CommPlusDriver
             }
 
             SetState(S7CommPlusConnectionState.Connected);
+            _tagsPerReadRequestMax = DefaultTagsPerRequest;
+            _tagsPerWriteRequestMax = DefaultTagsPerRequest;
             _options.Logger.LogInformation("Connected to PLC {Endpoint}.", Endpoint);
         }
 
@@ -1074,6 +1420,25 @@ namespace S7CommPlusDriver
         private S7CommPlusException CreateTisWatchException(string operation, int errorCode)
         {
             var diagnostic = _session?.LastTisWatchDiagnostic;
+            var effectiveOperation = string.IsNullOrWhiteSpace(diagnostic)
+                ? operation
+                : $"{operation}: {diagnostic}";
+            return CreateException(effectiveOperation, errorCode);
+        }
+
+        private void ThrowIfAlarmSubscriptionError(string operation, int errorCode)
+        {
+            if (errorCode == 0)
+            {
+                return;
+            }
+
+            throw CreateAlarmSubscriptionException(operation, errorCode);
+        }
+
+        private S7CommPlusException CreateAlarmSubscriptionException(string operation, int errorCode)
+        {
+            var diagnostic = _session?.LastAlarmSubscriptionDiagnostic;
             var effectiveOperation = string.IsNullOrWhiteSpace(diagnostic)
                 ? operation
                 : $"{operation}: {diagnostic}";

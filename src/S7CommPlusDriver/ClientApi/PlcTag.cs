@@ -3,6 +3,7 @@ using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 
 namespace S7CommPlusDriver.ClientApi
 {
@@ -15,6 +16,8 @@ namespace S7CommPlusDriver.ClientApi
      */
     public abstract class PlcTag
     {
+        private IReadOnlyList<PlcTag> m_AggregateElements = Array.Empty<PlcTag>();
+
         public string Name;
         public ItemAddress Address;
         public short Quality;
@@ -22,6 +25,20 @@ namespace S7CommPlusDriver.ClientApi
 
         public ulong LastReadError;
         public ulong LastWriteError;
+
+        /// <summary>
+        /// Gets the individually addressable element tags used internally when the PLC cannot transfer a complete array by its base address.
+        /// </summary>
+        /// <remarks>
+        /// The collection is empty for scalars. Consumers normally use the parent tag's typed <c>Value</c>; the elements remain
+        /// exposed for datatype adapters that need to normalize an otherwise unsupported array type.
+        /// </remarks>
+        public IReadOnlyList<PlcTag> AggregateElements => m_AggregateElements;
+
+        /// <summary>
+        /// Gets the typed CLR array assembled from <see cref="AggregateElements"/>, or <see langword="null"/> before a successful read.
+        /// </summary>
+        public object AggregateValue { get; private set; }
 
         public PlcTag(string name, ItemAddress address, uint softdatatype)
         {
@@ -58,6 +75,88 @@ namespace S7CommPlusDriver.ClientApi
                 res = 0;
             }
             return res;
+        }
+
+        /// <summary>
+        /// Configures the scalar element tags that collectively represent this aggregate PLC array.
+        /// </summary>
+        /// <param name="elements">Element tags in PLC declaration order.</param>
+        internal void SetAggregateElements(IReadOnlyList<PlcTag> elements)
+        {
+            m_AggregateElements = elements ?? throw new ArgumentNullException(nameof(elements));
+        }
+
+        /// <summary>
+        /// Publishes a completed set of scalar element reads as one aggregate value and mirrors it into a compatible typed array tag.
+        /// </summary>
+        /// <param name="itemError">The first element error, or zero when every element succeeded.</param>
+        internal void CompleteAggregateRead(ulong itemError)
+        {
+            LastReadError = itemError;
+            if (itemError != 0 || m_AggregateElements.Count == 0)
+            {
+                Quality = PlcTagQC.TAG_QUALITY_BAD;
+                AggregateValue = null;
+                return;
+            }
+
+            var elementValueProperty = m_AggregateElements[0].GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (elementValueProperty == null)
+            {
+                Quality = PlcTagQC.TAG_QUALITY_BAD;
+                AggregateValue = null;
+                return;
+            }
+
+            var values = Array.CreateInstance(elementValueProperty.PropertyType, m_AggregateElements.Count);
+            for (var index = 0; index < m_AggregateElements.Count; index++)
+            {
+                values.SetValue(elementValueProperty.GetValue(m_AggregateElements[index]), index);
+            }
+
+            AggregateValue = values;
+            var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (aggregateValueProperty?.PropertyType == values.GetType())
+            {
+                aggregateValueProperty.SetValue(this, values);
+            }
+            Quality = PlcTagQC.TAG_QUALITY_GOOD;
+        }
+
+        /// <summary>
+        /// Copies a typed parent array value into its scalar element tags before an aggregate write is encoded.
+        /// Unsupported native array types intentionally keep their explicitly populated element values unchanged.
+        /// </summary>
+        /// <exception cref="InvalidOperationException">A typed parent array does not contain exactly one value per aggregate element.</exception>
+        internal void PrepareAggregateWrite()
+        {
+            if (m_AggregateElements.Count == 0)
+            {
+                return;
+            }
+
+            var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (aggregateValueProperty?.PropertyType.IsArray != true)
+            {
+                return;
+            }
+
+            var values = (Array)aggregateValueProperty.GetValue(this);
+            if (values == null || values.Length != m_AggregateElements.Count)
+            {
+                throw new InvalidOperationException(
+                    $"Aggregate tag '{Name}' requires {m_AggregateElements.Count} values, but received {values?.Length ?? 0}.");
+            }
+
+            for (var index = 0; index < m_AggregateElements.Count; index++)
+            {
+                var elementValueProperty = m_AggregateElements[index].GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+                if (elementValueProperty == null)
+                {
+                    throw new InvalidOperationException($"Aggregate element '{m_AggregateElements[index].Name}' has no writable Value property.");
+                }
+                elementValueProperty.SetValue(m_AggregateElements[index], values.GetValue(index));
+            }
         }
 
         protected static string ResultString(PlcTag tag, string value )

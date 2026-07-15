@@ -10,6 +10,15 @@ Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs usi
 
 The public API for new applications is `S7CommPlusClient`. Low-level protocol/session types are internal implementation details; production code should use the client surface.
 
+## Acknowledgements
+
+Legacy challenge authentication on `net8.0` and `net9.0` uses the
+MIT-licensed [HarpoS7](https://github.com/bonk-dev/HarpoS7) project through
+the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages. HarpoS7 provides the
+challenge, public-key, and packet-digest primitives; S7CommPlusDriver provides
+the PLC transport, session handling, request ordering, reconnect behavior, and
+write protection.
+
 ## What The Production Client Provides
 
 - Async connect, disconnect, browse, read, write, active-alarm, subscription, block metadata, CPU metadata/control, online block-view, and legitimation methods
@@ -104,6 +113,35 @@ foreach (var culture in cpuCulture.Cultures)
     Console.WriteLine($"{culture.LCID}: {culture.Name}");
 }
 ```
+
+### Browsing arrays
+
+`BrowseAsync()` returns primitive arrays as one `VarInfo` by default. Use
+`ArrayElementCount` and `ArrayDimensions` to inspect the PLC bounds without
+creating one browse item for every byte, Boolean, or other primitive element:
+
+```csharp
+foreach (var variable in await client.BrowseAsync())
+{
+    if (variable.ArrayElementCount > 0)
+    {
+        Console.WriteLine($"{variable.Name}: {variable.ArrayElementCount} elements");
+    }
+}
+```
+
+Applications that require the former flattened representation can request it
+explicitly:
+
+```csharp
+var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
+{
+    ExpandPrimitiveArrayElements = true
+});
+```
+
+Arrays of structures are always traversed because their readable member fields
+cannot be represented by one primitive value.
 
 The built-in connection defaults match Siemens S7CommPlus HMI communication:
 ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
@@ -327,9 +365,8 @@ Console.WriteLine(client.Options.NegotiatedSecurityMode);
 
 `S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy challenge authentication. Reconnect and write safety behave the same in all modes: read/browse may reconnect once, writes are never retried automatically, and writes still require `WriteEnabled = true`.
 
-Legacy challenge support references the `HarpoS7` and `HarpoS7.PublicKeys`
-NuGet packages on `net8.0` and `net9.0`. HarpoS7 is MIT licensed; this project
-remains LGPL-3.0-or-later unless noted otherwise.
+See [Acknowledgements](#acknowledgements) for the HarpoS7 dependency and
+attribution. This project remains LGPL-3.0-or-later unless noted otherwise.
 
 Legacy packet-capture notes, auth frame variants, and live PLC observations are tracked in `docs/legacy-s7commplus-memory.md`.
 
