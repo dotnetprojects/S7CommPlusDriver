@@ -280,6 +280,55 @@ namespace S7CommPlusDriver
             }, cancellationToken);
         }
 
+        /// <summary>
+        /// Retrieves multilingual engineering comments for one data block or absolute I/Q/M area without downloading block code.
+        /// </summary>
+        /// <param name="relationId">
+        /// The relation ID obtained from a browsed variable access sequence or <see cref="BrowseBlocksAsync(System.Threading.CancellationToken)"/>.
+        /// Absolute input, output, and marker areas use relation IDs <c>0x50</c>, <c>0x51</c>, and <c>0x52</c> respectively.
+        /// </param>
+        /// <param name="cancellationToken">Cancels the PLC request, decompression, and client-side timeout wait.</param>
+        /// <returns>A catalog that can resolve comments for the <see cref="VarInfo"/> values returned by the same PLC program.</returns>
+        /// <remarks>
+        /// The request is intentionally narrower than <see cref="GetBlockContentAsync(uint, System.Threading.CancellationToken)"/>:
+        /// it downloads line comments and the DB interface needed for path translation, but omits block bodies, executable code,
+        /// debug data, and network metadata. Callers should cache the returned catalog per relation ID while processing one browse.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="relationId"/> is zero.</exception>
+        public Task<S7CommPlusSymbolCommentCatalog> GetSymbolCommentsAsync(
+            uint relationId,
+            CancellationToken cancellationToken = default)
+        {
+            if (relationId == 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(relationId), "A PLC block or area relation ID is required.");
+            }
+
+            return ExecuteReadOperationAsync("GetSymbolComments", session =>
+            {
+                try
+                {
+                    var error = session.GetSymbolComments(relationId, out var comments);
+                    ThrowIfError("GetSymbolComments", error);
+                    return comments;
+                }
+                catch (S7CommPlusException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new S7CommPlusConnectionException(
+                        "GetSymbolComments",
+                        Endpoint,
+                        S7Consts.errIsoInvalidPDU,
+                        false,
+                        $"GetSymbolComments failed for PLC {Endpoint}: PLC comment metadata could not be parsed.",
+                        exception);
+                }
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
         public Task<S7CommPlusCpuInfo> GetCpuInfoAsync(CancellationToken cancellationToken = default)
         {
             return ExecuteReadOperationAsync("GetCpuInfo", session =>

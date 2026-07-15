@@ -67,6 +67,17 @@ namespace S7CommPlusDriver
             return Metadata.GetBlockContent(relationId, out blockContent);
         }
 
+        /// <summary>
+        /// Retrieves and parses only the engineering comment metadata for one block or absolute area.
+        /// </summary>
+        /// <param name="relationId">The DB, I, Q, or M relation ID.</param>
+        /// <param name="comments">Receives the multilingual declaration comments.</param>
+        /// <returns>A native driver error code, or zero on success.</returns>
+        int IS7CommPlusSession.GetSymbolComments(uint relationId, out S7CommPlusSymbolCommentCatalog comments)
+        {
+            return Metadata.GetSymbolComments(relationId, out comments);
+        }
+
         PlcTag IS7CommPlusSession.GetPlcTagBySymbol(string symbol)
         {
             return getPlcTagBySymbol(symbol);

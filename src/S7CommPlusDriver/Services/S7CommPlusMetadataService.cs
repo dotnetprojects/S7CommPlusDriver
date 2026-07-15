@@ -380,6 +380,94 @@ namespace S7CommPlusDriver
             return 0;
         }
 
+        /// <summary>
+        /// Retrieves only the line-comment and interface attributes needed to resolve multilingual symbol comments.
+        /// </summary>
+        /// <param name="relationId">The data-block or absolute I/Q/M area relation ID.</param>
+        /// <param name="comments">Receives comments indexed for direct <see cref="VarInfo"/> lookup.</param>
+        /// <returns>A native driver error code, or zero on success.</returns>
+        public int GetSymbolComments(uint relationId, out S7CommPlusSymbolCommentCatalog comments)
+        {
+            comments = null;
+            var blockName = string.Empty;
+            var lineCommentsXml = string.Empty;
+            var interfaceDescriptionXml = string.Empty;
+
+            var request = new ExploreRequest(ProtocolVersion.V2)
+            {
+                ExploreId = relationId,
+                ExploreRequestId = Ids.None,
+                ExploreChildsRecursive = 1,
+                ExploreParents = 0,
+            };
+            request.AddressList.Add(Ids.ObjectVariableTypeName);
+            request.AddressList.Add(Ids.DataInterface_LineComments);
+            request.AddressList.Add(Ids.DataInterface_InterfaceDescription);
+
+            var result = _requests.SendExplore(request, out var response);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            foreach (var obj in response.Objects)
+            {
+                foreach (var attribute in obj.Attributes)
+                {
+                    switch (attribute.Key)
+                    {
+                        case Ids.ObjectVariableTypeName when attribute.Value is ValueWString name:
+                            blockName = name.GetValue();
+                            break;
+                        case Ids.DataInterface_LineComments when attribute.Value is ValueBlobSparseArray lineComments:
+                            lineCommentsXml = DecompressFirstSparseBlob(lineComments);
+                            break;
+                        case Ids.DataInterface_InterfaceDescription when attribute.Value is ValueBlob interfaceDescription:
+                            interfaceDescriptionXml = DecompressBlob(interfaceDescription);
+                            break;
+                    }
+                }
+            }
+
+            comments = S7CommPlusSymbolCommentParser.Parse(
+                relationId,
+                blockName,
+                lineCommentsXml,
+                interfaceDescriptionXml);
+            return 0;
+        }
+
+        /// <summary>
+        /// Decompresses the first non-empty sparse blob used by Siemens line-comment attributes.
+        /// </summary>
+        /// <param name="value">The sparse blob array returned by the PLC.</param>
+        /// <returns>The decompressed XML, or an empty string when no value is present.</returns>
+        private static string DecompressFirstSparseBlob(ValueBlobSparseArray value)
+        {
+            var blobs = value.GetValue();
+            foreach (var key in blobs.Keys.OrderBy(key => key))
+            {
+                if (blobs[key].value != null)
+                {
+                    return new BlobDecompressor().decompress(blobs[key].value, 4);
+                }
+            }
+            return string.Empty;
+        }
+
+        /// <summary>
+        /// Decompresses one Siemens blob whose first four bytes contain the dictionary header.
+        /// </summary>
+        /// <param name="value">The compressed interface-description value.</param>
+        /// <returns>The decompressed XML, or an empty string for an absent payload.</returns>
+        private static string DecompressBlob(ValueBlob value)
+        {
+            var blob = value.GetValue();
+            return blob == null || blob.Length == 0
+                ? string.Empty
+                : new BlobDecompressor().decompress(blob, 4);
+        }
+
         private static S7CommPlusBlockType GetBlockTypeFromClassId(uint classId)
         {
             return classId switch

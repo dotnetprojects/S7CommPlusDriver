@@ -165,6 +165,99 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task SymbolCommentsResolveDbModelPathsAndAllLanguages()
+        {
+            const string commentsXml = "<InterfaceLineComments><Part Kind=\"Comments\">" +
+                "<Comment Path=\"51:65\"><DictEntry Language=\"de-DE\">Deutscher Text</DictEntry>" +
+                "<DictEntry Language=\"en-GB\">English text</DictEntry></Comment>" +
+                "</Part></InterfaceLineComments>";
+            const string interfaceXml = "<BlockInterface>" +
+                "<Part Kind=\"DBSource\"><Payload><Root>" +
+                "<Member ID=\"51\" Name=\"General\" LID=\"9\" SubPartIndex=\"0\" />" +
+                "</Root></Payload></Part>" +
+                "<Part Kind=\"Structure\"><Payload><Root><Sections><Section>" +
+                "<Member ID=\"65\" Name=\"FinePosScreenActive\" LID=\"23\" />" +
+                "</Section></Sections></Root></Payload></Part>" +
+                "</BlockInterface>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(
+                0x8A0E1451,
+                "Conditions",
+                commentsXml,
+                interfaceXml);
+            var fake = new FakeS7CommPlusSession
+            {
+                GetSymbolCommentsHandler = relationId =>
+                {
+                    Assert.Equal(0x8A0E1451U, relationId);
+                    return (0, catalog);
+                },
+            };
+            var client = CreateClient(fake);
+
+            var comments = await client.GetSymbolCommentsAsync(0x8A0E1451);
+            var found = comments.TryGetComments(new VarInfo
+            {
+                Name = "Conditions.General.FinePosScreenActive",
+                AccessSequence = "8A0E1451.9.17",
+            }, out var localizedComments);
+
+            Assert.True(found);
+            Assert.Equal("Deutscher Text", localizedComments[1031]);
+            Assert.Equal("English text", localizedComments[2057]);
+            Assert.Equal(1, fake.GetSymbolCommentsCount);
+        }
+
+        [Fact]
+        public void SymbolCommentsApplyArrayDeclarationCommentToIndexedElements()
+        {
+            const string commentsXml = "<InterfaceLineComments><Part Kind=\"Comments\">" +
+                "<Comment Path=\"53:51\"><DictEntry Language=\"de-DE\">Endschalter</DictEntry></Comment>" +
+                "</Part></InterfaceLineComments>";
+            const string interfaceXml = "<BlockInterface>" +
+                "<Part Kind=\"DBSource\"><Payload><Root>" +
+                "<Member ID=\"53\" Name=\"HoistUnit\" LID=\"11\" SubPartIndex=\"0\" />" +
+                "</Root></Payload></Part>" +
+                "<Part Kind=\"Structure\"><Payload><Root><Sections><Section>" +
+                "<Member ID=\"51\" Name=\"ELimitSwitchTrig\" LID=\"9\" />" +
+                "</Section></Sections></Root></Payload></Part>" +
+                "</BlockInterface>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(0x8A0E1451, "Conditions", commentsXml, interfaceXml);
+
+            var found = catalog.TryGetComments(new VarInfo
+            {
+                Name = "Conditions.HoistUnit[2].ELimitSwitchTrig",
+                AccessSequence = "8A0E1451.B.2.1.9",
+            }, out var comments);
+
+            Assert.True(found);
+            Assert.Equal("Endschalter", comments[1031]);
+        }
+
+        [Fact]
+        public void SymbolCommentsResolveAbsoluteAreaRefIdByExactAccessSequence()
+        {
+            const string commentsXml = "<CommentDictionary><TagLineComments>" +
+                "<Comment RefID=\"4345\"><DictEntry Language=\"de-DE\">Direktes Eingangssignal</DictEntry></Comment>" +
+                "</TagLineComments></CommentDictionary>";
+            var catalog = S7CommPlusSymbolCommentParser.Parse(0x50, "", commentsXml, "");
+
+            var directFound = catalog.TryGetComments(new VarInfo
+            {
+                Name = "IArea.DirectInput",
+                AccessSequence = "50.10F9",
+            }, out var directComments);
+            var childFound = catalog.TryGetComments(new VarInfo
+            {
+                Name = "IArea.StructuredInput.Status",
+                AccessSequence = "50.10F9.9",
+            }, out _);
+
+            Assert.True(directFound);
+            Assert.Equal("Direktes Eingangssignal", directComments[1031]);
+            Assert.False(childFound);
+        }
+
+        [Fact]
         public async Task BulkSymbolResolutionUsesOneBrowseAndOmitsMissingSymbols()
         {
             var getTagCalls = 0;
