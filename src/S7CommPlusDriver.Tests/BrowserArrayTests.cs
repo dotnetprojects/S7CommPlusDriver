@@ -136,7 +136,54 @@ namespace S7CommPlusDriver.Tests
             {
                 Assert.Equal(0U, variable.ArrayElementCount);
                 Assert.Equal(0U, variable.SymbolCrc);
+                Assert.True(variable.ContainsIndexedArray);
+                Assert.Equal(0U, S7CommPlusProtocolSession.CreateResolvedPlcTag(variable).Address.SymbolCrc);
             });
+        }
+
+        /// <summary>
+        /// Verifies that bulk tag creation does not attach a declaration CRC to a member selected through a multidimensional
+        /// structure-array index, because S7-1500 PLCs reject that CRC and access-sequence combination.
+        /// </summary>
+        [Fact]
+        public void MultidimensionalStructArrayBulkTagOmitsDeclarationCrc()
+        {
+            const uint rootTypeRelationId = 100;
+            const uint elementTypeRelationId = 200;
+            var rootType = CreateTypeObject(
+                rootTypeRelationId,
+                "Entries",
+                Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT,
+                new POffsetInfoType_StructMDim
+                {
+                    ArrayLowerBounds = 1,
+                    ArrayElementCount = 8,
+                    MdimArrayLowerBounds = new[] { 1, 1, 1, 0, 0, 0 },
+                    MdimArrayElementCount = new uint[] { 2, 2, 2, 0, 0, 0 },
+                    RelationId = elementTypeRelationId,
+                });
+            var elementType = CreateTypeObject(
+                elementTypeRelationId,
+                "Compress",
+                Softdatatype.S7COMMP_SOFTDATATYPE_BOOL,
+                new POffsetInfoType_Std());
+            elementType.AddAttribute(Ids.TI_TComSize, new ValueUDInt(1));
+
+            var browser = new Browser(expandPrimitiveArrayElements: false);
+            browser.AddBlockNode(eNodeType.Root, "Data", 0x8A0E0001, rootTypeRelationId);
+            browser.SetTypeInfoContainerObjects(new List<PObject> { rootType, elementType });
+            browser.BuildTree();
+            browser.BuildFlatList();
+
+            var variable = Assert.Single(
+                browser.GetVarInfoList(),
+                item => item.Name == "Data.Entries[2,1,1].Compress");
+            var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+
+            Assert.True(variable.ContainsIndexedArray);
+            Assert.Equal(0U, variable.SymbolCrc);
+            Assert.NotNull(tag);
+            Assert.Equal(0U, tag.Address.SymbolCrc);
         }
 
         [Fact]

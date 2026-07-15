@@ -169,6 +169,7 @@ namespace S7CommPlusDriver
                         HmiAccessible = hmiAccessible,
                         ArrayElementCount = GetArrayElementCount(node),
                         ArrayDimensions = GetArrayDimensions(node),
+                        ContainsIndexedArray = containsIndexedArray,
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)
