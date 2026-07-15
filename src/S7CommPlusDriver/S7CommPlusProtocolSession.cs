@@ -21,6 +21,7 @@ using System.Threading.Channels;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
+using System.Globalization;
 using S7CommPlusDriver.ClientApi;
 using S7CommPlusDriver.Internal;
 using System.Text.RegularExpressions;
@@ -2050,6 +2051,83 @@ namespace S7CommPlusDriver
             if (string.IsNullOrWhiteSpace(aggregateAccessSequence)) throw new ArgumentException("An aggregate access sequence is required.", nameof(aggregateAccessSequence));
 
             return new ItemAddress($"{aggregateAccessSequence}.{accessId:X}");
+        }
+
+        /// <summary>
+        /// Creates one scalar array-element tag from retained aggregate browse metadata and caller-facing PLC indices.
+        /// </summary>
+        /// <param name="aggregateVariable">The aggregate primitive-array entry retained in the symbol catalog.</param>
+        /// <param name="requestedSymbol">The exact indexed symbol to assign to the resulting tag.</param>
+        /// <param name="indicesText">The comma-separated indices between the final square brackets.</param>
+        /// <param name="tag">Receives the resolved scalar tag when every index is valid.</param>
+        /// <returns><see langword="true"/> when the metadata and indices identify a declared array element.</returns>
+        /// <remarks>
+        /// Multidimensional Siemens arrays use row-major symbolic indices, while packed multidimensional boolean arrays reserve
+        /// physical alignment cells in their innermost dimension. The calculated access ID preserves that wire layout.
+        /// </remarks>
+        internal static bool TryCreateResolvedPrimitiveArrayElement(
+            VarInfo aggregateVariable,
+            string requestedSymbol,
+            string indicesText,
+            out PlcTag tag)
+        {
+            tag = null;
+            if (aggregateVariable == null
+                || aggregateVariable.ArrayElementCount == 0
+                || string.IsNullOrWhiteSpace(aggregateVariable.AccessSequence)
+                || string.IsNullOrWhiteSpace(requestedSymbol))
+            {
+                return false;
+            }
+
+            var dimensions = aggregateVariable.ArrayDimensions ?? Array.Empty<S7CommPlusArrayDimension>();
+            var indexParts = indicesText.Split(',');
+            if (dimensions.Count == 0 || indexParts.Length != dimensions.Count)
+            {
+                return false;
+            }
+
+            var normalizedIndices = new uint[dimensions.Count];
+            for (var dimensionIndex = 0; dimensionIndex < dimensions.Count; dimensionIndex++)
+            {
+                if (!int.TryParse(indexParts[dimensionIndex], NumberStyles.Integer, CultureInfo.InvariantCulture, out var index))
+                {
+                    return false;
+                }
+
+                var dimension = dimensions[dimensionIndex];
+                var normalizedIndex = (long)index - dimension.LowerBound;
+                if (normalizedIndex < 0 || normalizedIndex >= dimension.ElementCount)
+                {
+                    return false;
+                }
+                normalizedIndices[dimensionIndex] = (uint)normalizedIndex;
+            }
+
+            uint accessId = 0;
+            uint stride = 1;
+            for (var dimensionIndex = dimensions.Count - 1; dimensionIndex >= 0; dimensionIndex--)
+            {
+                accessId = checked(accessId + normalizedIndices[dimensionIndex] * stride);
+                var physicalElementCount = dimensions[dimensionIndex].ElementCount;
+                if (dimensionIndex == dimensions.Count - 1
+                    && dimensions.Count > 1
+                    && aggregateVariable.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL)
+                {
+                    var remainder = physicalElementCount % 8;
+                    if (remainder != 0)
+                    {
+                        physicalElementCount += 8 - remainder;
+                    }
+                }
+                stride = checked(stride * physicalElementCount);
+            }
+
+            tag = PlcTags.TagFactory(
+                requestedSymbol,
+                CreateAggregateArrayElementAddress(aggregateVariable.AccessSequence, accessId),
+                aggregateVariable.Softdatatype);
+            return tag != null;
         }
 
         /// <summary>

@@ -123,7 +123,8 @@ namespace S7CommPlusDriver
         /// <remarks>
         /// This method is intended for initializing large tag caches after connecting or after the PLC program changes. It preserves
         /// the access sequence, symbol CRC, datatype, and aggregate-array element addresses produced by normal symbolic resolution,
-        /// while requiring only one PLC browse operation for the complete requested set.
+        /// while requiring only one PLC browse operation for the complete requested set. A fully indexed primitive-array symbol is
+        /// derived from its aggregate catalog metadata, including declared lower bounds and packed multidimensional BOOL strides.
         /// </remarks>
         /// <exception cref="ArgumentNullException"><paramref name="symbols"/> is <see langword="null"/>.</exception>
         /// <exception cref="ArgumentException">The collection contains a null, empty, or whitespace-only symbol.</exception>
@@ -157,19 +158,49 @@ namespace S7CommPlusDriver
                 var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
                 foreach (var requestedSymbol in requestedSymbols)
                 {
-                    if (!symbolCatalog.TryGetValue(requestedSymbol, out var variable))
+                    if (symbolCatalog.TryGetValue(requestedSymbol, out var variable))
                     {
-                        continue;
+                        var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+                        if (tag != null)
+                        {
+                            resolvedTags.Add(requestedSymbol, tag);
+                        }
                     }
-
-                    var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
-                    if (tag != null)
+                    else if (TryResolveAggregateArrayElement(symbolCatalog, requestedSymbol, out var elementTag))
                     {
-                        resolvedTags.Add(requestedSymbol, tag);
+                        resolvedTags.Add(requestedSymbol, elementTag);
                     }
                 }
                 return (IReadOnlyDictionary<string, PlcTag>)resolvedTags;
             }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Resolves an indexed primitive-array element from its aggregate catalog entry without another PLC metadata request.
+        /// </summary>
+        /// <param name="symbolCatalog">The retained aggregate PLC symbol catalog.</param>
+        /// <param name="requestedSymbol">The fully indexed scalar symbol requested by the caller.</param>
+        /// <param name="tag">Receives a scalar tag when the parent array and indices are valid.</param>
+        /// <returns><see langword="true"/> when the requested symbol identifies one declared primitive-array element.</returns>
+        private static bool TryResolveAggregateArrayElement(
+            IReadOnlyDictionary<string, VarInfo> symbolCatalog,
+            string requestedSymbol,
+            out PlcTag tag)
+        {
+            tag = null;
+            var indexStart = requestedSymbol.LastIndexOf('[');
+            if (indexStart <= 0 || requestedSymbol[requestedSymbol.Length - 1] != ']')
+            {
+                return false;
+            }
+
+            var aggregateSymbol = requestedSymbol.Substring(0, indexStart);
+            return symbolCatalog.TryGetValue(aggregateSymbol, out var aggregateVariable)
+                && S7CommPlusProtocolSession.TryCreateResolvedPrimitiveArrayElement(
+                    aggregateVariable,
+                    requestedSymbol,
+                    requestedSymbol.Substring(indexStart + 1, requestedSymbol.Length - indexStart - 2),
+                    out tag);
         }
 
         /// <summary>

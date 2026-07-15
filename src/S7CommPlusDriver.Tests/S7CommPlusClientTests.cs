@@ -247,6 +247,73 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task BulkSymbolResolutionDerivesIndexedPrimitiveArrayElementsFromAggregateCatalog()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Counters",
+                        AccessSequence = "8A0E0001.F",
+                        SymbolCrc = 0x12345678,
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_UDINT,
+                        ArrayElementCount = 8,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 2),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[]
+            {
+                "DB.Counters[1,1,1]",
+                "DB.Counters[2,1,2]",
+                "DB.Counters[3,1,1]",
+            });
+
+            Assert.Equal(2, tags.Count);
+            Assert.Equal("8A0E0001.F.0", tags["DB.Counters[1,1,1]"].Address.GetAccessString());
+            Assert.Equal("8A0E0001.F.5", tags["DB.Counters[2,1,2]"].Address.GetAccessString());
+            Assert.All(tags.Values, tag => Assert.Equal(0U, tag.Address.SymbolCrc));
+            Assert.Equal(1, fake.BrowseVariablesCount);
+        }
+
+        [Fact]
+        public async Task BulkSymbolResolutionPreservesPackedBooleanStrideForIndexedElement()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Flags",
+                        AccessSequence = "8A0E0001.F",
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_BBOOL,
+                        ArrayElementCount = 6,
+                        ArrayDimensions = new[]
+                        {
+                            new S7CommPlusArrayDimension(1, 2),
+                            new S7CommPlusArrayDimension(1, 3),
+                        },
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var tags = await client.GetTagsBySymbolsAsync(new[] { "DB.Flags[2,1]" });
+
+            Assert.Equal("8A0E0001.F.8", tags["DB.Flags[2,1]"].Address.GetAccessString());
+        }
+
+        [Fact]
         public async Task BulkSymbolResolutionRetainsCatalogUntilExplicitInvalidation()
         {
             var fake = new FakeS7CommPlusSession
