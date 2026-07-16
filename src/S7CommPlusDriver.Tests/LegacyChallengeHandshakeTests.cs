@@ -30,6 +30,51 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void PlcSimAdvancedV5CaptureUsesHighSessionRolesShape()
+        {
+            var createObjectPdu = Convert.FromHexString(
+                "720100E532000004CA0000000136A0809080808080801102878080A03D878080A03EA100000120821F0100" +
+                "A3816900151330333A42303736353441433943414134414341" +
+                "A3822B00048280808002" +
+                "A3822D00151C4F4D53505F31332E30302E30302E30355F33392E30352E30302E3031" +
+                "A3822F10021418B53027F2B537EFEC68E03C8FC5344486039143" +
+                "A3823200170000013A823B00048640823C00048500823D000484818500823E000484818400" +
+                "823F00151A313B364553372053494D2D30313530302D41504C433B53332E30" +
+                "824000150A323B313735323334363082410003000300A20000000072010000");
+            var responsePdu = new byte[createObjectPdu.Length - 3];
+            responsePdu[0] = createObjectPdu[1];
+            createObjectPdu.AsSpan(4).CopyTo(responsePdu.AsSpan(1));
+            using var responseStream = new MemoryStream(responsePdu);
+            var response = CreateObjectResponse.DeserializeFromPdu(responseStream);
+
+            Assert.NotNull(response);
+            Assert.True(LegacyChallengeHandshake.TryParse(createObjectPdu, response, out var handshake));
+            Assert.Equal((uint)0x7000103D, handshake.SessionId);
+            Assert.Equal("03:B07654AC9CAA4ACA", handshake.Fingerprint);
+            Assert.Equal(EPublicKeyFamily.PlcSim, handshake.KeyFamily);
+            Assert.Equal(LegacyAuthenticationFrameKind.PlcSimHighSession, handshake.AuthenticationFrameKind);
+
+            var request = LegacyChallengeHandshake.CreateAuthenticationRequest(
+                handshake.KeyFamily,
+                handshake.SessionId,
+                Convert.FromHexString("CA4AAA9CAC5476B0"),
+                Convert.FromHexString("0123456789ABCDEF"),
+                new byte[216],
+                response.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct,
+                LegacyServerSessionRole.Hmi,
+                handshake.AuthenticationFrameKind);
+
+            Assert.NotNull(request);
+            Assert.Equal(
+                new uint[] { Ids.SessionKey, Ids.ServerSessionVersion, Ids.ServerSessionRoles },
+                request.AddressList);
+            var payload = Serialize(request);
+            Assert.True(payload.AsSpan().StartsWith(Convert.FromHexString(
+                "3100000542000000027000103D347000103D03038E2682328231")));
+            Assert.True(ContainsSequence(payload, Convert.FromHexString("032003010002")));
+        }
+
+        [Fact]
         public void TryParseFindsChallengeByAttributeShapeInsteadOfFixedOffset()
         {
             var pdu = Convert.FromHexString(
@@ -112,7 +157,7 @@ namespace S7CommPlusDriver.Tests
 
             var request = LegacyChallengeHandshake.CreateAuthenticationRequest(
                 EPublicKeyFamily.PlcSim,
-                0x70000FDB,
+                0x000003DB,
                 publicKeyId,
                 sessionKeyId,
                 keyBlob,
@@ -122,8 +167,8 @@ namespace S7CommPlusDriver.Tests
             Assert.NotNull(request);
             Assert.Equal(ProtocolVersion.V2, request.ProtocolVersion);
             Assert.Equal(2, request.SequenceNumber);
-            Assert.Equal((uint)0x70000FDB, request.SessionId);
-            Assert.Equal((uint)0x70000FDB, request.InObjectId);
+            Assert.Equal((uint)0x000003DB, request.SessionId);
+            Assert.Equal((uint)0x000003DB, request.InObjectId);
             Assert.Equal(new uint[] { Ids.SessionKey, Ids.ServerSessionVersion, Ids.ServerSessionRole, Ids.LegacyAuthenticationCompatibilityFlag }, request.AddressList);
 
             var payload = Serialize(request);

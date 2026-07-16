@@ -29,7 +29,11 @@ namespace S7CommPlusDriver
         /// the shorter default leaves margin before PLC-side expiration.
         /// </summary>
         public TimeSpan LegacySessionKeyRefreshInterval { get; set; } = TimeSpan.FromMinutes(25);
+#if NET8_0_OR_GREATER
+        public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Auto;
+#else
         public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Tls;
+#endif
         public S7CommPlusTlsBackend TlsBackend { get; set; } = S7CommPlusTlsBackend.BouncyCastle;
         public S7CommPlusSecurityMode? NegotiatedSecurityMode { get; internal set; }
         public Func<string, byte[]> LegacyPublicKeyResolver { get; set; }

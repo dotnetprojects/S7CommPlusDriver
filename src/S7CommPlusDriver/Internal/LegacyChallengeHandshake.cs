@@ -92,7 +92,8 @@ namespace S7CommPlusDriver.Internal
             request.AddressList.Add(Ids.ServerSessionVersion);
             request.ValueList.Add(serverSessionVersion);
 
-            if (resolvedFrameKind == LegacyAuthenticationFrameKind.S71500HighSession)
+            if (resolvedFrameKind == LegacyAuthenticationFrameKind.S71500HighSession
+                || resolvedFrameKind == LegacyAuthenticationFrameKind.PlcSimHighSession)
             {
                 request.AddressList.Add(Ids.ServerSessionRoles);
                 request.ValueList.Add(new ValueUIntArray(new ushort[] { (ushort)LegacyServerSessionRole.Hmi }, AddressArrayValueFlag));
@@ -157,6 +158,12 @@ namespace S7CommPlusDriver.Internal
 
         private static LegacyAuthenticationFrameKind SelectAuthenticationFrameKind(byte[] createObjectPdu, string serverSessionVersion, EPublicKeyFamily keyFamily, uint sessionId)
         {
+            if (keyFamily == EPublicKeyFamily.PlcSim
+                && sessionId >= LegacyOmsConstants.HighSessionIdStart)
+            {
+                return LegacyAuthenticationFrameKind.PlcSimHighSession;
+            }
+
             if (keyFamily != EPublicKeyFamily.S71500)
             {
                 return LegacyAuthenticationFrameKind.Auto;
@@ -209,6 +216,12 @@ namespace S7CommPlusDriver.Internal
             if (keyFamily == EPublicKeyFamily.S71500 && sessionId < LegacyOmsConstants.HighSessionIdStart)
             {
                 return LegacyAuthenticationFrameKind.S71500LowSessionCompact;
+            }
+
+            if (keyFamily == EPublicKeyFamily.PlcSim
+                && sessionId >= LegacyOmsConstants.HighSessionIdStart)
+            {
+                return LegacyAuthenticationFrameKind.PlcSimHighSession;
             }
 
             if (keyFamily != EPublicKeyFamily.S71500)

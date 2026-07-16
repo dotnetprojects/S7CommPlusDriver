@@ -27,7 +27,7 @@ namespace S7CommPlusDriver.Tests
             }
 
             var securityModeName = Environment.GetEnvironmentVariable("S7COMMPLUS_LIVE_SECURITY_MODE");
-            var securityMode = S7CommPlusSecurityMode.Tls;
+            var securityMode = new S7CommPlusClientOptions().SecurityMode;
             if (!string.IsNullOrWhiteSpace(securityModeName))
             {
                 Assert.True(Enum.TryParse(securityModeName, ignoreCase: true, out securityMode), $"Invalid S7COMMPLUS_LIVE_SECURITY_MODE value '{securityModeName}'.");

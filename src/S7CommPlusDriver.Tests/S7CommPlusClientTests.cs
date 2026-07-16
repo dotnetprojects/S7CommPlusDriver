@@ -798,6 +798,14 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void AutoIsDefaultSecurityMode()
+        {
+            var options = new S7CommPlusClientOptions();
+
+            Assert.Equal(S7CommPlusSecurityMode.Auto, options.SecurityMode);
+        }
+
+        [Fact]
         public void LegacySessionKeyRefreshDefaultsToTwentyFiveMinutes()
         {
             var options = new S7CommPlusClientOptions();

@@ -35,7 +35,8 @@ write protection.
 
 ### PLC / CPU
 
-The default mode supports CPUs and projects that allow secure PG/HMI communication over TLS:
+The net8.0/net9.0 default first tries secure PG/HMI communication over TLS and,
+if the PLC rejects it, reconnects with legacy challenge authentication:
 
 - S7-1200 firmware V4.3 or newer, TLS 1.3 from V4.5
 - S7-1500 firmware V2.9 or newer
@@ -43,7 +44,11 @@ The default mode supports CPUs and projects that allow secure PG/HMI communicati
 
 The PLC project must also be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer.
 
-For older S7-1200/1500 CPUs that do not support TLS, use `S7CommPlusSecurityMode.LegacyChallenge` or `Auto` on `net8.0`/`net9.0`. Legacy mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0` builds remain TLS-only and fail fast if legacy mode is requested.
+For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
+`net8.0`/`net9.0` falls back to legacy authentication. Set
+`S7CommPlusSecurityMode.LegacyChallenge` to skip the initial TLS attempt. Legacy
+mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0`
+builds remain TLS-only and fail fast if legacy mode is requested.
 
 ### TLS Backend
 
@@ -349,7 +354,10 @@ protection is unchanged: subscriptions do not enable PLC signal writes.
 
 ## Older PLCs / Legacy Challenge Auth
 
-TLS remains the default to avoid accidental security downgrades. Enable the older Siemens challenge authentication explicitly:
+On net8.0/net9.0, `Auto` is the default: it tries TLS first and reconnects with
+the older Siemens challenge authentication when TLS is rejected. Applications
+that must never downgrade should explicitly set `SecurityMode` to `Tls`.
+To force legacy mode and skip the initial TLS attempt:
 
 ```csharp
 await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
@@ -363,7 +371,10 @@ await client.ConnectAsync();
 Console.WriteLine(client.Options.NegotiatedSecurityMode);
 ```
 
-`S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy challenge authentication. Reconnect and write safety behave the same in all modes: read/browse may reconnect once, writes are never retried automatically, and writes still require `WriteEnabled = true`.
+`S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy
+challenge authentication. net6.0 remains TLS-only. Reconnect and write safety
+behave the same in all modes: read/browse may reconnect once, writes are never
+retried automatically, and writes still require `WriteEnabled = true`.
 
 Legacy integrity keys expire even when requests are still flowing; normal reads do not reset that lifetime. The driver therefore renews a legacy session key every 25 minutes by default, before the roughly 30-minute renewal point observed in TIA Portal traffic. Configure this with `LegacySessionKeyRefreshEnabled` and `LegacySessionKeyRefreshInterval`. Renewal is an internal session-control exchange and does not write PLC tags or require `WriteEnabled = true`.
 
