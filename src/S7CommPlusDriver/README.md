@@ -33,6 +33,8 @@ await client.DisconnectAsync();
 
 Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation references the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages for challenge/key/digest primitives on `net8.0` and `net9.0`, while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.
 
+Legacy integrity keys expire even on active connections; ordinary reads do not extend their lifetime. The driver renews them every 25 minutes by default. Use `LegacySessionKeyRefreshEnabled` and `LegacySessionKeyRefreshInterval` to change this behavior. The renewal is an internal session-control exchange, not a PLC tag write, and works while `WriteEnabled` remains `false`.
+
 ## Browsing Primitive Arrays
 
 `BrowseAsync()` returns one `VarInfo` for each primitive array instead of allocating an item for every indexed element. `VarInfo.ArrayElementCount` contains the total size and `VarInfo.ArrayDimensions` preserves every declared lower bound and dimension length. Arrays of structures remain expanded so their readable fields are still discoverable.

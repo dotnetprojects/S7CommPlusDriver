@@ -365,6 +365,8 @@ Console.WriteLine(client.Options.NegotiatedSecurityMode);
 
 `S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy challenge authentication. Reconnect and write safety behave the same in all modes: read/browse may reconnect once, writes are never retried automatically, and writes still require `WriteEnabled = true`.
 
+Legacy integrity keys expire even when requests are still flowing; normal reads do not reset that lifetime. The driver therefore renews a legacy session key every 25 minutes by default, before the roughly 30-minute renewal point observed in TIA Portal traffic. Configure this with `LegacySessionKeyRefreshEnabled` and `LegacySessionKeyRefreshInterval`. Renewal is an internal session-control exchange and does not write PLC tags or require `WriteEnabled = true`.
+
 See [Acknowledgements](#acknowledgements) for the HarpoS7 dependency and
 attribution. This project remains LGPL-3.0-or-later unless noted otherwise.
 

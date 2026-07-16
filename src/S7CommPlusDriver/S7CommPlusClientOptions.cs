@@ -20,6 +20,15 @@ namespace S7CommPlusDriver
         public TimeSpan BrowseTimeout { get; set; } = S7CommPlusDefaults.BrowseTimeout;
         public bool AutoReconnect { get; set; } = true;
         public bool WriteEnabled { get; set; } = false;
+        /// <summary>
+        /// Enables periodic renewal of the integrity key for legacy challenge-authenticated sessions.
+        /// </summary>
+        public bool LegacySessionKeyRefreshEnabled { get; set; } = true;
+        /// <summary>
+        /// Time between successful legacy session-key renewals. Siemens TIA renews after roughly 30 to 35 minutes;
+        /// the shorter default leaves margin before PLC-side expiration.
+        /// </summary>
+        public TimeSpan LegacySessionKeyRefreshInterval { get; set; } = TimeSpan.FromMinutes(25);
         public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Tls;
         public S7CommPlusTlsBackend TlsBackend { get; set; } = S7CommPlusTlsBackend.BouncyCastle;
         public S7CommPlusSecurityMode? NegotiatedSecurityMode { get; internal set; }
@@ -30,6 +39,7 @@ namespace S7CommPlusDriver
         internal int RequestTimeoutMilliseconds => ToPositiveMilliseconds(RequestTimeout, nameof(RequestTimeout));
         internal int DisconnectTimeoutMilliseconds => ToPositiveMilliseconds(DisconnectTimeout, nameof(DisconnectTimeout));
         internal int BrowseTimeoutMilliseconds => ToPositiveMilliseconds(BrowseTimeout, nameof(BrowseTimeout));
+        internal int LegacySessionKeyRefreshIntervalMilliseconds => ToPositiveMilliseconds(LegacySessionKeyRefreshInterval, nameof(LegacySessionKeyRefreshInterval));
         internal byte[] RemoteTsapBytes => Encoding.ASCII.GetBytes(RemoteTsap ?? string.Empty);
 
         internal S7CommPlusClientOptions Clone()
@@ -83,6 +93,10 @@ namespace S7CommPlusDriver
             _ = RequestTimeoutMilliseconds;
             _ = DisconnectTimeoutMilliseconds;
             _ = BrowseTimeoutMilliseconds;
+            if (LegacySessionKeyRefreshEnabled)
+            {
+                _ = LegacySessionKeyRefreshIntervalMilliseconds;
+            }
             Logger ??= NullLogger.Instance;
         }
 

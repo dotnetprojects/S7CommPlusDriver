@@ -798,6 +798,29 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void LegacySessionKeyRefreshDefaultsToTwentyFiveMinutes()
+        {
+            var options = new S7CommPlusClientOptions();
+
+            Assert.True(options.LegacySessionKeyRefreshEnabled);
+            Assert.Equal(TimeSpan.FromMinutes(25), options.LegacySessionKeyRefreshInterval);
+        }
+
+        [Fact]
+        public void EnabledLegacySessionKeyRefreshRequiresPositiveInterval()
+        {
+            var ex = Assert.Throws<ArgumentOutOfRangeException>(() => new S7CommPlusClient(
+                new S7CommPlusClientOptions
+                {
+                    Address = "127.0.0.1",
+                    LegacySessionKeyRefreshInterval = TimeSpan.Zero
+                },
+                () => new FakeS7CommPlusSession()));
+
+            Assert.Equal("LegacySessionKeyRefreshInterval", ex.ParamName);
+        }
+
+        [Fact]
         public async Task ConnectErrorIncludesSessionErrorDetail()
         {
             var fake = new FakeS7CommPlusSession

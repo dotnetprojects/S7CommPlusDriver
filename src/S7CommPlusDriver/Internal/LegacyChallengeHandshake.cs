@@ -124,6 +124,28 @@ namespace S7CommPlusDriver.Internal
             return securityKey;
         }
 
+        internal static SetVariableRequest CreateSessionKeyRenewalRequest(
+            EPublicKeyFamily keyFamily,
+            uint sessionId,
+            ReadOnlySpan<byte> publicKeyId,
+            ReadOnlySpan<byte> sessionKeyId,
+            ReadOnlySpan<byte> keyBlob)
+        {
+            if (publicKeyId.Length != Constants.KeyIdLength
+                || sessionKeyId.Length != Constants.KeyIdLength
+                || keyBlob.Length == 0)
+            {
+                return null;
+            }
+
+            return new SetVariableRequest(ProtocolVersion.V2)
+            {
+                InObjectId = sessionId,
+                Address = Ids.SessionKey,
+                Value = CreateSecurityKey(keyFamily, publicKeyId, sessionKeyId, keyBlob)
+            };
+        }
+
         private static ValueStruct CreateSecurityKeyId(ReadOnlySpan<byte> keyId, uint flags)
         {
             var key = new ValueStruct(Ids.SecurityKeyId);

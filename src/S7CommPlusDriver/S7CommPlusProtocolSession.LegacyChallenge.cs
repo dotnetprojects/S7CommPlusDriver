@@ -25,6 +25,14 @@ namespace S7CommPlusDriver
         private const int LegacyDigestFieldLength = LegacyOmsConstants.PacketDigestFieldLength;
 
 #if NET8_0_OR_GREATER
+        private Timer m_LegacySessionKeyRefreshTimer;
+        private int m_LegacySessionKeyRefreshGeneration;
+        private int m_LegacySessionKeyRefreshIntervalMilliseconds;
+        private EPublicKeyFamily m_LegacySessionKeyFamily;
+        private byte[] m_LegacySessionPublicKey;
+        private ILogger m_LegacySessionKeyRefreshLogger;
+        private string m_LegacySessionKeyRefreshEndpoint;
+
         private int ConnectLegacyChallenge(S7CommPlusClientOptions options)
         {
             var usesEngineeringTsap = string.Equals(options.RemoteTsap, LegacyOmsConstants.EngineeringTsap, StringComparison.Ordinal);
@@ -169,8 +177,181 @@ namespace S7CommPlusDriver
                 return S7Consts.errCliFirmwareNotSupported;
             }
 
+            StartLegacySessionKeyRefresh(options, keyFamily, publicKey);
+
             options.Logger.LogInformation("Legacy S7CommPlus challenge connection to PLC {Address}:{Port} established in {ElapsedMilliseconds} ms.", options.Address, options.Port, Environment.TickCount - elapsed);
             return 0;
+        }
+
+        private void StartLegacySessionKeyRefresh(
+            S7CommPlusClientOptions options,
+            EPublicKeyFamily keyFamily,
+            byte[] publicKey)
+        {
+            StopLegacySessionKeyRefresh();
+            if (!options.LegacySessionKeyRefreshEnabled)
+            {
+                options.Logger.LogDebug(
+                    "Legacy S7CommPlus session-key refresh is disabled for PLC {Address}:{Port}.",
+                    options.Address,
+                    options.Port);
+                return;
+            }
+
+            m_LegacySessionKeyFamily = keyFamily;
+            m_LegacySessionPublicKey = (byte[])publicKey.Clone();
+            m_LegacySessionKeyRefreshIntervalMilliseconds = options.LegacySessionKeyRefreshIntervalMilliseconds;
+            m_LegacySessionKeyRefreshLogger = options.Logger;
+            m_LegacySessionKeyRefreshEndpoint = $"{options.Address}:{options.Port}";
+
+            var generation = Interlocked.Increment(ref m_LegacySessionKeyRefreshGeneration);
+            m_LegacySessionKeyRefreshTimer = new Timer(
+                RefreshLegacySessionKey,
+                generation,
+                m_LegacySessionKeyRefreshIntervalMilliseconds,
+                Timeout.Infinite);
+            options.Logger.LogDebug(
+                "Legacy S7CommPlus session-key refresh scheduled for PLC {Address}:{Port} in {RefreshInterval}.",
+                options.Address,
+                options.Port,
+                options.LegacySessionKeyRefreshInterval);
+        }
+
+        private void RefreshLegacySessionKey(object state)
+        {
+            if (state is not int generation
+                || generation != Volatile.Read(ref m_LegacySessionKeyRefreshGeneration))
+            {
+                return;
+            }
+
+            var logger = m_LegacySessionKeyRefreshLogger;
+            var endpoint = m_LegacySessionKeyRefreshEndpoint;
+            int result;
+            try
+            {
+                lock (m_RequestLock)
+                {
+                    if (generation != Volatile.Read(ref m_LegacySessionKeyRefreshGeneration)
+                        || m_client?.Connected != true
+                        || !m_LegacyDigestActive
+                        || m_LegacySessionPublicKey == null)
+                    {
+                        return;
+                    }
+
+                    var publicKey = m_LegacySessionPublicKey;
+                    var keyFamily = m_LegacySessionKeyFamily;
+                    result = RenewLegacySessionKey(keyFamily, publicKey);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "Legacy S7CommPlus session-key refresh failed for PLC {Endpoint}.", endpoint);
+                result = S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            if (result != 0)
+            {
+                logger?.LogError(
+                    "Legacy S7CommPlus session-key refresh failed for PLC {Endpoint} with error {ErrorCode}; closing the stale session.",
+                    endpoint,
+                    result);
+                CloseTransport();
+                return;
+            }
+
+            logger?.LogInformation("Legacy S7CommPlus session key refreshed for PLC {Endpoint}.", endpoint);
+            if (generation == Volatile.Read(ref m_LegacySessionKeyRefreshGeneration))
+            {
+                m_LegacySessionKeyRefreshTimer?.Change(
+                    m_LegacySessionKeyRefreshIntervalMilliseconds,
+                    Timeout.Infinite);
+            }
+        }
+
+        private int RenewLegacySessionKey(EPublicKeyFamily keyFamily, byte[] publicKey)
+        {
+            var challengeRequest = new GetVarSubstreamedRequest(ProtocolVersion.V2)
+            {
+                InObjectId = m_SessionId,
+                Address = Ids.ServerSessionRequest
+            };
+            var result = SendS7plusFunctionObjectAndWait(challengeRequest, m_ReadTimeout);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            var challengeResponse = GetVarSubstreamedResponse.DeserializeFromPdu(m_ReceivedPDU);
+            if (challengeResponse == null
+                || challengeResponse.ReturnValue != 0
+                || challengeResponse.Value is not ValueUSIntArray challengeValue)
+            {
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            var challenge = challengeValue.GetValue();
+            if (challenge == null || challenge.Length != LegacyOmsConstants.ChallengeLength)
+            {
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            var newSessionKey = new byte[Constants.SessionKeyLength];
+            var blobLength = keyFamily == EPublicKeyFamily.PlcSim
+                ? CommonConstants.EncryptedBlobLengthPlcSim
+                : CommonConstants.EncryptedBlobLengthRealPlc;
+            var keyBlob = new byte[blobLength];
+            LegacyAuthenticationScheme.Authenticate(
+                keyBlob.AsSpan(),
+                newSessionKey.AsSpan(),
+                challenge.AsSpan(),
+                publicKey.AsSpan(),
+                keyFamily);
+
+            Span<byte> publicKeyId = stackalloc byte[Constants.KeyIdLength];
+            Span<byte> sessionKeyId = stackalloc byte[Constants.KeyIdLength];
+            publicKey.AsSpan().DeriveKeyId(publicKeyId);
+            newSessionKey.AsSpan().DeriveKeyId(sessionKeyId);
+
+            var renewalRequest = LegacyChallengeHandshake.CreateSessionKeyRenewalRequest(
+                keyFamily,
+                m_SessionId,
+                publicKeyId,
+                sessionKeyId,
+                keyBlob);
+            if (renewalRequest == null)
+            {
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            result = SendS7plusFunctionObjectAndWait(renewalRequest, m_ReadTimeout);
+            if (result != 0)
+            {
+                return result;
+            }
+
+            var renewalResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
+            if (renewalResponse == null || renewalResponse.ReturnValue != 0)
+            {
+                return S7Consts.errS7CommPlusLegacyAuthentication;
+            }
+
+            // The PLC signs the response with the old key. Switch only after that
+            // response has been received and verified at the protocol boundary.
+            m_LegacySessionKey = newSessionKey;
+            return 0;
+        }
+
+        private void StopLegacySessionKeyRefresh()
+        {
+            Interlocked.Increment(ref m_LegacySessionKeyRefreshGeneration);
+            var timer = Interlocked.Exchange(ref m_LegacySessionKeyRefreshTimer, null);
+            timer?.Dispose();
+            m_LegacySessionPublicKey = null;
+            m_LegacySessionKeyRefreshLogger = null;
+            m_LegacySessionKeyRefreshEndpoint = null;
+            m_LegacySessionKeyRefreshIntervalMilliseconds = 0;
         }
 
         private int SendLegacyCreateObjectRequest(LegacyServerSessionRole serverSessionRole)
@@ -437,6 +618,10 @@ namespace S7CommPlusDriver
             return -1;
         }
 #else
+        private void StopLegacySessionKeyRefresh()
+        {
+        }
+
         private int ConnectLegacyChallenge(S7CommPlusClientOptions options)
         {
             return S7Consts.errCliFunctionNotImplemented;

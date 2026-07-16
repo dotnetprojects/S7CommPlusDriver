@@ -122,6 +122,51 @@ namespace S7CommPlusDriver.Tests
                 });
         }
 
+        [Fact]
+        public void TextListEntriesSupportLegacySixByteRecords()
+        {
+            var listTable = new byte[26];
+            BinaryPrimitives.WriteUInt32LittleEndian(listTable.AsSpan(16), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(listTable.AsSpan(20), 0x0042);
+            BinaryPrimitives.WriteUInt32LittleEndian(listTable.AsSpan(22), 16);
+
+            var entryTable = new byte[32];
+            BinaryPrimitives.WriteUInt32LittleEndian(entryTable.AsSpan(16), 2);
+            BinaryPrimitives.WriteUInt16LittleEndian(entryTable.AsSpan(20), 1);
+            BinaryPrimitives.WriteUInt32LittleEndian(entryTable.AsSpan(22), 8);
+            BinaryPrimitives.WriteUInt16LittleEndian(entryTable.AsSpan(26), UInt16.MaxValue);
+            BinaryPrimitives.WriteUInt32LittleEndian(entryTable.AsSpan(28), 15);
+
+            var stringTable = new byte[21];
+            WriteText(stringTable, 8, "Alpha");
+            WriteText(stringTable, 15, "Last");
+            var lists = new List<S7CommPlusTextList>();
+
+            var result = S7CommPlusTextListService.DecodeTextListLibrary(
+                listTable,
+                entryTable,
+                stringTable,
+                1031,
+                S7CommPlusTextListScope.LanguageSpecific,
+                lists);
+
+            Assert.Equal(0, result);
+            var list = Assert.Single(lists);
+            Assert.Equal(0x0042, list.ListId);
+            Assert.Collection(
+                list.Entries,
+                entry =>
+                {
+                    Assert.Equal(1, entry.From);
+                    Assert.Equal("Alpha", entry.Text);
+                },
+                entry =>
+                {
+                    Assert.Equal(UInt16.MaxValue, entry.From);
+                    Assert.Equal("Last", entry.Text);
+                });
+        }
+
         private static void WriteText(byte[] destination, int offset, string value)
         {
             var bytes = Encoding.UTF8.GetBytes(value);

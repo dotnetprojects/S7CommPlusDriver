@@ -367,6 +367,40 @@ namespace S7CommPlusDriver.Tests
                 payload);
         }
 
+        [Fact]
+        public void SessionKeyRenewalUsesCapturedSetVariableShape()
+        {
+            var publicKeyId = Convert.FromHexString("86EFB0C29FA29694");
+            var sessionKeyId = Convert.FromHexString("F5C3DCC68997F603");
+            var keyBlob = new byte[144];
+            for (var index = 0; index < keyBlob.Length; index++)
+            {
+                keyBlob[index] = (byte)index;
+            }
+
+            var request = LegacyChallengeHandshake.CreateSessionKeyRenewalRequest(
+                EPublicKeyFamily.S71500,
+                0x70000FDC,
+                publicKeyId,
+                sessionKeyId,
+                keyBlob);
+            Assert.NotNull(request);
+            request.ProtocolVersion = ProtocolVersion.V3;
+            request.SequenceNumber = 0x52;
+            request.SessionId = 0x70000FDC;
+            request.IntegrityId = 0x0D;
+
+            using var buffer = new MemoryStream();
+            request.Serialize(buffer);
+            var payload = buffer.ToArray();
+
+            Assert.Equal(Functioncode.SetVariable, request.FunctionCode);
+            Assert.True(payload.AsSpan().StartsWith(Convert.FromHexString(
+                "31000004F20000005270000FDC3470000FDC018E26001700000708")));
+            Assert.True(ContainsSequence(payload, keyBlob));
+            Assert.True(payload.AsSpan().EndsWith(Convert.FromHexString("0D00000000")));
+        }
+
         private static CreateObjectResponse CreateResponse(string fingerprint, byte[] challenge, uint objectId = 0x256, string serverSessionVersion = "")
         {
             var response = new CreateObjectResponse(1)

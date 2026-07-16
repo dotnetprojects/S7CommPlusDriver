@@ -160,6 +160,24 @@ namespace S7CommPlusDriver
 
         private static bool TryReadEntries(byte[] entryTable, byte[] stringTable, uint entryOffset, out List<S7CommPlusTextListEntry> entries)
         {
+            if (TryReadEntries(entryTable, stringTable, entryOffset, use32BitValues: true, out entries))
+            {
+                return true;
+            }
+
+            // Older S7-1200/1500 firmware stores each list entry as a 16-bit
+            // value followed by a 32-bit string offset. Current firmware uses
+            // a signed 32-bit value and therefore an eight-byte record.
+            return TryReadEntries(entryTable, stringTable, entryOffset, use32BitValues: false, out entries);
+        }
+
+        private static bool TryReadEntries(
+            byte[] entryTable,
+            byte[] stringTable,
+            uint entryOffset,
+            bool use32BitValues,
+            out List<S7CommPlusTextListEntry> entries)
+        {
             entries = null;
             if (!TryReadUInt32(entryTable, entryOffset, out var entryCount))
             {
@@ -170,17 +188,34 @@ namespace S7CommPlusDriver
             var pos = entryOffset + 4;
             for (var i = 0; i < entryCount; i++)
             {
-                // PLC list values are signed 32-bit values. The previous 6-byte interpretation truncated the
-                // value to UInt16 and consequently read the string offset two bytes too early.
-                if (!TryReadUInt32(entryTable, pos, out var value) ||
-                    !TryReadUInt32(entryTable, pos + 4, out var stringOffset) ||
-                    !TryReadText(stringTable, stringOffset, out var text))
+                int value;
+                uint stringOffset;
+                if (use32BitValues)
+                {
+                    if (!TryReadUInt32(entryTable, pos, out var value32) ||
+                        !TryReadUInt32(entryTable, pos + 4, out stringOffset))
+                    {
+                        return false;
+                    }
+                    value = unchecked((int)value32);
+                    pos += 8;
+                }
+                else
+                {
+                    if (!TryReadUInt16(entryTable, pos, out var value16) ||
+                        !TryReadUInt32(entryTable, pos + 2, out stringOffset))
+                    {
+                        return false;
+                    }
+                    value = value16;
+                    pos += 6;
+                }
+
+                if (!TryReadText(stringTable, stringOffset, out var text))
                 {
                     return false;
                 }
-                pos += 8;
-                var signedValue = unchecked((int)value);
-                entries.Add(new S7CommPlusTextListEntry(signedValue, signedValue, text));
+                entries.Add(new S7CommPlusTextListEntry(value, value, text));
             }
 
             return true;
