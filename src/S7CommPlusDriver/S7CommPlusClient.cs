@@ -13,6 +13,7 @@ namespace S7CommPlusDriver
     public sealed class S7CommPlusClient : IAsyncDisposable
     {
         private const int DefaultTagsPerRequest = 20;
+        private const int DefaultAlarmLanguageCount = 3;
         private const int CpuStopRequest = 1;
         private const int CpuRunRequest = 3;
         private readonly S7CommPlusClientOptions _options;
@@ -606,9 +607,7 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
-        /// Creates a live alarm subscription and requests all alarm text languages. The legacy
-        /// <see cref="S7CommPlusAlarm.AlarmTexts"/> property contains the first returned language;
-        /// use <see cref="S7CommPlusAlarm.AlarmTextsByLanguage"/> to access every returned language.
+        /// Creates a live alarm subscription for the first three languages advertised by the CPU.
         /// </summary>
         public Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
@@ -633,7 +632,7 @@ namespace S7CommPlusDriver
 
         /// <summary>
         /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
-        /// initially active alarms with all alarm text languages. Early live notifications are buffered by the subscription.
+        /// initially active alarms with the CPU's first three alarm languages. Early live notifications are buffered by the subscription.
         /// </summary>
         public Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
@@ -659,7 +658,7 @@ namespace S7CommPlusDriver
 
         /// <summary>
         /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
-        /// initially active alarms. Pass an empty language collection to request all alarm text languages.
+        /// initially active alarms. An empty language collection selects the first three languages advertised by the CPU.
         /// </summary>
         public async Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
         {
@@ -668,7 +667,7 @@ namespace S7CommPlusDriver
 
         /// <summary>
         /// Creates a live alarm subscription first, then uses the supplied separate snapshot client to read the
-        /// initially active alarms. Pass an empty language collection to request all alarm text languages.
+        /// initially active alarms. An empty language collection selects the first three languages advertised by the CPU.
         /// Text-list placeholders are resolved through the supplied catalog.
         /// </summary>
         public async Task<S7CommPlusAlarmSubscriptionWithSnapshot> SubscribeAlarmsWithSnapshotAsync(S7CommPlusClient snapshotClient, IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
@@ -685,7 +684,10 @@ namespace S7CommPlusDriver
             var subscription = await SubscribeAlarmsAsync(languageIds, alarmTextLanguageId, textLists, options, cancellationToken).ConfigureAwait(false);
             try
             {
-                var activeAlarms = await snapshotClient.GetActiveAlarmsCoreAsync(alarmTextLanguageId, CreateTextListResolver(textLists), cancellationToken).ConfigureAwait(false);
+                var activeAlarms = await snapshotClient.GetActiveAlarmsCoreAsync(
+                    subscription.AlarmTextLanguageId,
+                    CreateTextListResolver(textLists),
+                    cancellationToken).ConfigureAwait(false);
                 return new S7CommPlusAlarmSubscriptionWithSnapshot(activeAlarms, subscription);
             }
             catch
@@ -696,7 +698,7 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
-        /// Creates a live alarm subscription. Pass an empty language collection to request all alarm text languages.
+        /// Creates a live alarm subscription. An empty language collection selects the first three languages advertised by the CPU.
         /// The <paramref name="alarmTextLanguageId"/> selects the language exposed through the legacy
         /// <see cref="S7CommPlusAlarm.AlarmTexts"/> property; use 0 to expose the first returned language there and
         /// inspect <see cref="S7CommPlusAlarm.AlarmTextsByLanguage"/> for the full set.
@@ -707,7 +709,7 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
-        /// Creates a live alarm subscription. Pass an empty language collection to request all alarm text languages.
+        /// Creates a live alarm subscription. An empty language collection selects the first three languages advertised by the CPU.
         /// Text-list placeholders are resolved through the supplied catalog.
         /// </summary>
         public async Task<S7CommPlusAlarmSubscription> SubscribeAlarmsAsync(IEnumerable<int> languageIds, int alarmTextLanguageId, S7CommPlusTextListCatalog textLists, S7CommPlusSubscriptionOptions options = null, CancellationToken cancellationToken = default)
@@ -724,13 +726,36 @@ namespace S7CommPlusDriver
 
             var subscriptionOptions = (options ?? new S7CommPlusSubscriptionOptions()).Clone();
             subscriptionOptions.Validate(requireCycleTime: false);
-            var subscription = new S7CommPlusAlarmSubscription(alarmTextLanguageId, CreateTextListResolver(textLists));
+            S7CommPlusAlarmSubscription subscription = null;
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
+                if (languageIdList.Count == 0)
+                {
+                    S7CommPlusCpuCultureInfo cultureInfo = null;
+                    var cultureError = await RunWithTimeoutAsync(
+                        "GetCpuCultureInfo",
+                        () => _session.GetCpuCultureInfo(out cultureInfo),
+                        _options.RequestTimeout,
+                        cancellationToken).ConfigureAwait(false);
+                    ThrowIfError("GetCpuCultureInfo", cultureError);
+                    languageIdList = cultureInfo?.LanguageIds
+                        .Where(languageId => languageId > 0)
+                        .Take(DefaultAlarmLanguageCount)
+                        .ToList()
+                        ?? new List<int>();
+                }
+
+                var effectiveAlarmTextLanguageId = alarmTextLanguageId != 0
+                    ? alarmTextLanguageId
+                    : languageIdList.FirstOrDefault();
+                subscription = new S7CommPlusAlarmSubscription(
+                    languageIdList,
+                    effectiveAlarmTextLanguageId,
+                    CreateTextListResolver(textLists));
                 var languageIdsUint = languageIdList.Select(languageId => checked((uint)languageId)).ToArray();
                 uint subscriptionObjectId = 0;
                 var error = await RunWithTimeoutAsync(
@@ -750,7 +775,7 @@ namespace S7CommPlusDriver
                 {
                     SetState(S7CommPlusConnectionState.Faulted, ex);
                 }
-                subscription.MarkFaulted(ex);
+                subscription?.MarkFaulted(ex);
                 throw;
             }
             finally

@@ -336,10 +336,12 @@ physical PLC connection and routes notifications by PLC subscription object id.
 Use a second client only when you explicitly want a second physical PLC
 connection, for example for true parallel large metadata transfers.
 
-Use `SubscribeAlarmsAsync()` or `GetActiveAlarmsAsync()` without a language id
-to request every alarm text language returned by the PLC. The compatibility
-`AlarmTexts` property contains the selected or first returned language, while
-`AlarmTextsByLanguage` contains the full set.
+`SubscribeAlarmsAsync()` without a language id reads the CPU language catalog
+and explicitly requests its first three languages, avoiding PLCs that reject an
+empty all-language subscription filter. `GetActiveAlarmsAsync()` without a
+language id still requests every language returned by the PLC. The compatibility
+`AlarmTexts` property contains the selected or first CPU language, while
+`AlarmTextsByLanguage` contains every language returned for that request.
 
 Alarm snapshots require explicit connection ownership: create another
 `S7CommPlusClient` and pass it to `SubscribeAlarmsWithSnapshotAsync` when you

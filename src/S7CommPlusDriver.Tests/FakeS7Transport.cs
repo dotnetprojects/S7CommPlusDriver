@@ -15,6 +15,7 @@ namespace S7CommPlusDriver.Tests
         public int EmptyReceiveDelayMilliseconds { get; set; }
         public List<byte[]> Sent { get; } = new List<byte[]>();
         public (string Address, int Port, int ConnectTimeout, int ReceiveTimeout, int SendTimeout) LastConnect { get; private set; }
+        public (int ReceiveTimeout, int SendTimeout)? UpdatedTimeouts { get; private set; }
 
         public void EnqueueReceive(byte[] data)
         {
@@ -27,6 +28,11 @@ namespace S7CommPlusDriver.Tests
             LastConnect = (address, port, connectTimeoutMilliseconds, receiveTimeoutMilliseconds, sendTimeoutMilliseconds);
             Connected = ConnectError == 0;
             return ConnectError;
+        }
+
+        public void SetTimeouts(int receiveTimeoutMilliseconds, int sendTimeoutMilliseconds)
+        {
+            UpdatedTimeouts = (receiveTimeoutMilliseconds, sendTimeoutMilliseconds);
         }
 
         public int Send(byte[] buffer)

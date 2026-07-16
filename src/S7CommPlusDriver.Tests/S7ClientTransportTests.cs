@@ -25,6 +25,23 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void UpdatingTimeoutsPropagatesToExistingTransport()
+        {
+            var transport = new FakeS7Transport();
+            var client = new S7Client(() => transport)
+            {
+                RecvTimeout = 222,
+                SendTimeout = 333
+            };
+
+            client.SetTransportTimeouts(120000, 120000);
+
+            Assert.Equal(120000, client.RecvTimeout);
+            Assert.Equal(120000, client.SendTimeout);
+            Assert.Equal((120000, 120000), transport.UpdatedTimeouts);
+        }
+
+        [Fact]
         public void ConnectAcceptsConnectionConfirmForShortRemoteTsap()
         {
             var transport = new FakeS7Transport { EmptyReceiveDelayMilliseconds = 500 };

@@ -342,13 +342,18 @@ namespace S7CommPlusDriver
         private readonly Func<string, long, int, string> _textListResolver;
         private EventHandler<S7CommPlusAlarmNotificationEventArgs> _notificationReceived;
 
-        internal S7CommPlusAlarmSubscription(int alarmTextLanguageId)
-            : this(alarmTextLanguageId, null)
+        /// <summary>
+        /// Creates the local subscription facade with the exact language selection sent to the PLC.
+        /// </summary>
+        /// <param name="languageIds">Explicit subscribed LCIDs, or an empty collection when the PLC wildcard was unavoidable.</param>
+        /// <param name="alarmTextLanguageId">LCID exposed through the compatibility single-language alarm text property.</param>
+        /// <param name="textListResolver">Optional resolver for TIA text-list placeholders embedded in alarm text.</param>
+        internal S7CommPlusAlarmSubscription(
+            IEnumerable<int> languageIds,
+            int alarmTextLanguageId,
+            Func<string, long, int, string> textListResolver)
         {
-        }
-
-        internal S7CommPlusAlarmSubscription(int alarmTextLanguageId, Func<string, long, int, string> textListResolver)
-        {
+            LanguageIds = (languageIds ?? Enumerable.Empty<int>()).Distinct().ToList().AsReadOnly();
             AlarmTextLanguageId = alarmTextLanguageId;
             _textListResolver = textListResolver;
         }
@@ -384,11 +389,24 @@ namespace S7CommPlusDriver
             }
         }
 
-        public int AlarmTextLanguageId { get; }
         /// <summary>
-        /// True when the subscription requested every alarm text language instead of one LCID.
+        /// Gets the explicit CPU language IDs requested when the PLC subscription was created.
         /// </summary>
-        public bool ReceivesAllAlarmTextLanguages => AlarmTextLanguageId == 0;
+        /// <remarks>
+        /// An empty list means that the PLC wildcard was used because the CPU did not advertise any languages.
+        /// Parameterless subscriptions normally contain up to the first three CPU languages.
+        /// </remarks>
+        public IReadOnlyList<int> LanguageIds { get; }
+
+        /// <summary>
+        /// Gets the language used by the compatibility <see cref="S7CommPlusAlarm.AlarmTexts"/> property.
+        /// </summary>
+        public int AlarmTextLanguageId { get; }
+
+        /// <summary>
+        /// Gets whether the subscription used the PLC wildcard instead of explicit language IDs.
+        /// </summary>
+        public bool ReceivesAllAlarmTextLanguages => LanguageIds.Count == 0;
 
         internal void Publish(Notification notification)
         {

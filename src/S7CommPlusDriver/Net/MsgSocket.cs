@@ -173,6 +173,10 @@ namespace S7CommPlusDriver
 			set
 			{
 				_ReadTimeout = value;
+				if (TCPSocket != null)
+				{
+					TCPSocket.ReceiveTimeout = value;
+				}
 			}
 		}
 
@@ -185,6 +189,10 @@ namespace S7CommPlusDriver
 			set
 			{
 				_WriteTimeout = value;
+				if (TCPSocket != null)
+				{
+					TCPSocket.SendTimeout = value;
+				}
 			}
 
 		}

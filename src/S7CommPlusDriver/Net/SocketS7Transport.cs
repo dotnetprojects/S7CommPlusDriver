@@ -17,6 +17,22 @@ namespace S7CommPlusDriver
             return _socket.Connect(address, port);
         }
 
+        /// <summary>
+        /// Applies request-phase deadlines to the current socket after its shorter connection-phase deadlines are no longer needed.
+        /// </summary>
+        /// <param name="receiveTimeoutMilliseconds">Maximum wait for a socket receive.</param>
+        /// <param name="sendTimeoutMilliseconds">Maximum wait for a socket send.</param>
+        public void SetTimeouts(int receiveTimeoutMilliseconds, int sendTimeoutMilliseconds)
+        {
+            if (_socket == null)
+            {
+                return;
+            }
+
+            _socket.ReadTimeout = receiveTimeoutMilliseconds;
+            _socket.WriteTimeout = sendTimeoutMilliseconds;
+        }
+
         public int Send(byte[] buffer)
         {
             return _socket?.Send(buffer, buffer.Length) ?? S7Consts.errTCPNotConnected;

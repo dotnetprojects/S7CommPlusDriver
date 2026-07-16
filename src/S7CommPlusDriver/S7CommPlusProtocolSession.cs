@@ -951,10 +951,36 @@ namespace S7CommPlusDriver
                 : ConnectLegacyChallenge(options);
             if (result == 0)
             {
+                ApplyRequestTimeout(options.RequestTimeoutMilliseconds);
                 m_NegotiatedSecurityMode = securityMode;
                 options.NegotiatedSecurityMode = securityMode;
             }
             return result;
+        }
+
+        /// <summary>
+        /// Switches the connected protocol and transport from connection-phase deadlines to the configured request deadline.
+        /// </summary>
+        /// <param name="timeoutMilliseconds">The request timeout used for complete S7CommPlus responses and socket I/O.</param>
+        private void ApplyRequestTimeout(int timeoutMilliseconds)
+        {
+            m_ReadTimeout = timeoutMilliseconds;
+            m_client?.SetTransportTimeouts(timeoutMilliseconds, timeoutMilliseconds);
+        }
+
+        /// <summary>
+        /// Exercises the post-handshake timeout transition without opening a network connection.
+        /// </summary>
+        /// <param name="connectTimeoutMilliseconds">The initial timeout installed while preparing the transport.</param>
+        /// <param name="requestTimeoutMilliseconds">The timeout that must replace it after the handshake.</param>
+        /// <returns>The effective protocol, receive, and send timeouts after the transition.</returns>
+        internal (int ProtocolReadTimeout, int TransportReceiveTimeout, int TransportSendTimeout) DebugApplyRequestTimeoutForTests(
+            int connectTimeoutMilliseconds,
+            int requestTimeoutMilliseconds)
+        {
+            PrepareClient("127.0.0.1", connectTimeoutMilliseconds, 102, 0x0600, null);
+            ApplyRequestTimeout(requestTimeoutMilliseconds);
+            return (m_ReadTimeout, m_client.RecvTimeout, m_client.SendTimeout);
         }
 
         private void PrepareClient(string address, int timeoutMs, int port, ushort localTsap, byte[] remoteTsap)

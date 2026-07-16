@@ -1520,6 +1520,8 @@ namespace S7CommPlusDriver.Tests
 
             Assert.Equal(new uint[] { 1031, 1033 }, capturedLanguages);
             Assert.Equal(1033, subscription.AlarmTextLanguageId);
+            Assert.Equal(new[] { 1031, 1033 }, subscription.LanguageIds);
+            Assert.Equal(0, fake.GetCpuCultureInfoCount);
             Assert.Equal(1, fake.AlarmSubscriptionCreateCount);
             Assert.Equal(1, fake.AlarmSubscriptionDeleteCount);
             Assert.Equal(0, fake.DisconnectCount);
@@ -1527,11 +1529,12 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
-        public async Task AlarmSubscriptionWithoutLanguageIdRequestsAllLanguages()
+        public async Task AlarmSubscriptionWithoutLanguageIdUsesFirstThreeCpuLanguages()
         {
             uint[]? capturedLanguages = null;
             var fake = new FakeS7CommPlusSession
             {
+                CpuCultureInfoHandler = () => (0, new S7CommPlusCpuCultureInfo(new[] { 1031, 2057, 1036, 1040 })),
                 CreateAlarmSubscriptionHandler = (languages, _) =>
                 {
                     capturedLanguages = languages;
@@ -1552,9 +1555,11 @@ namespace S7CommPlusDriver.Tests
                 });
             await subscription.StopAsync();
 
-            Assert.Empty(capturedLanguages!);
-            Assert.True(subscription.ReceivesAllAlarmTextLanguages);
-            Assert.Equal(0, subscription.AlarmTextLanguageId);
+            Assert.Equal(new uint[] { 1031, 2057, 1036 }, capturedLanguages);
+            Assert.Equal(new[] { 1031, 2057, 1036 }, subscription.LanguageIds);
+            Assert.False(subscription.ReceivesAllAlarmTextLanguages);
+            Assert.Equal(1031, subscription.AlarmTextLanguageId);
+            Assert.Equal(1, fake.GetCpuCultureInfoCount);
         }
 
         [Fact]
@@ -1628,11 +1633,12 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
-        public async Task AlarmSnapshotWithoutLanguageIdRequestsAllLanguages()
+        public async Task AlarmSnapshotWithoutLanguageIdUsesCpuPrimaryLanguage()
         {
             uint[]? capturedLanguages = null;
             var subscriptionFake = new FakeS7CommPlusSession
             {
+                CpuCultureInfoHandler = () => (0, new S7CommPlusCpuCultureInfo(new[] { 1031, 2057 })),
                 CreateAlarmSubscriptionHandler = (languages, _) =>
                 {
                     capturedLanguages = languages;
@@ -1655,9 +1661,10 @@ namespace S7CommPlusDriver.Tests
                 });
             await result.Subscription.StopAsync();
 
-            Assert.Empty(capturedLanguages!);
-            Assert.Equal(0, snapshotFake.LastActiveAlarmsLanguageId);
-            Assert.True(result.Subscription.ReceivesAllAlarmTextLanguages);
+            Assert.Equal(new uint[] { 1031, 2057 }, capturedLanguages);
+            Assert.Equal(1031, snapshotFake.LastActiveAlarmsLanguageId);
+            Assert.Equal(new[] { 1031, 2057 }, result.Subscription.LanguageIds);
+            Assert.False(result.Subscription.ReceivesAllAlarmTextLanguages);
         }
 
         private static S7CommPlusClient CreateClient(FakeS7CommPlusSession fake, int requestTimeoutMs = 5000, bool writeEnabled = false)

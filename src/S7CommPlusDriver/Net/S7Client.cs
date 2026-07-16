@@ -810,6 +810,18 @@ namespace S7CommPlusDriver
 			}
 		}
 
+		/// <summary>
+		/// Replaces the handshake deadlines in both the client configuration and the already-created transport.
+		/// </summary>
+		/// <param name="receiveTimeoutMilliseconds">Maximum wait for request response data.</param>
+		/// <param name="sendTimeoutMilliseconds">Maximum wait for request transmission.</param>
+		internal void SetTransportTimeouts(int receiveTimeoutMilliseconds, int sendTimeoutMilliseconds)
+		{
+			_RecvTimeout = receiveTimeoutMilliseconds;
+			_SendTimeout = sendTimeoutMilliseconds;
+			Socket?.SetTimeouts(receiveTimeoutMilliseconds, sendTimeoutMilliseconds);
+		}
+
 		public bool Connected
 		{
 			get

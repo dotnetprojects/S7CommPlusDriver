@@ -16,6 +16,7 @@ namespace S7CommPlusDriver.Tests
         public int ReadCount { get; private set; }
         public int BrowseVariablesCount { get; private set; }
         public int GetSymbolCommentsCount { get; private set; }
+        public int GetCpuCultureInfoCount { get; private set; }
         public int MaxConcurrentReads { get; private set; }
         public int ActiveReads;
         public int CpuOperatingStateWriteCount { get; private set; }
@@ -200,6 +201,7 @@ namespace S7CommPlusDriver.Tests
 
         public int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo)
         {
+            GetCpuCultureInfoCount++;
             var result = CpuCultureInfoHandler?.Invoke() ?? (0, new S7CommPlusCpuCultureInfo(new[] { 1033 }));
             cultureInfo = result.CultureInfo;
             return result.Error;

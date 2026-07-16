@@ -9,6 +9,18 @@ namespace S7CommPlusDriver.Tests
     public sealed class S7CommPlusProtocolSessionReceiveTests
     {
         [Fact]
+        public void RequestTimeoutReplacesHandshakeTimeoutAfterConnection()
+        {
+            var connection = new S7CommPlusProtocolSession();
+
+            var timeouts = connection.DebugApplyRequestTimeoutForTests(5000, 120000);
+
+            Assert.Equal(120000, timeouts.ProtocolReadTimeout);
+            Assert.Equal(120000, timeouts.TransportReceiveTimeout);
+            Assert.Equal(120000, timeouts.TransportSendTimeout);
+        }
+
+        [Fact]
         public void MalformedPduPublishesReceiveError()
         {
             var connection = new S7CommPlusProtocolSession();
