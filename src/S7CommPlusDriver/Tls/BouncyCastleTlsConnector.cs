@@ -77,7 +77,7 @@ namespace S7CommPlusDriver.Tls
         public byte[] GetOmsExporterSecret()
         {
             ThrowIfDisposed();
-            return _tlsClient.Context.ExportKeyingMaterial(OmsExporterLabel, null, OmsExporterSecretLength);
+            return _tlsClient.GetOmsExporterSecret();
         }
 
         public void Dispose()
@@ -90,6 +90,7 @@ namespace S7CommPlusDriver.Tls
             _disposed = true;
             _recordStream.Complete();
             _decryptedData.CompleteAdding();
+            _tlsClient.ClearOmsExporterSecret();
             _protocol.Close();
         }
 
@@ -131,12 +132,33 @@ namespace S7CommPlusDriver.Tls
 
         private sealed class PlcTlsClient : DefaultTlsClient
         {
+            private byte[] _omsExporterSecret;
+
             public PlcTlsClient()
                 : base(new BcTlsCrypto(new SecureRandom()))
             {
             }
 
             public TlsClientContext Context { get; private set; }
+
+            public byte[] GetOmsExporterSecret()
+            {
+                if (_omsExporterSecret == null)
+                {
+                    throw new InvalidOperationException("OMS exporter secret is unavailable before the TLS handshake completes.");
+                }
+
+                return (byte[])_omsExporterSecret.Clone();
+            }
+
+            public void ClearOmsExporterSecret()
+            {
+                if (_omsExporterSecret != null)
+                {
+                    Array.Clear(_omsExporterSecret, 0, _omsExporterSecret.Length);
+                    _omsExporterSecret = null;
+                }
+            }
 
             public override void Init(TlsClientContext context)
             {
@@ -161,6 +183,18 @@ namespace S7CommPlusDriver.Tls
             public override TlsAuthentication GetAuthentication()
             {
                 return new AcceptAnyServerCertificateAuthentication();
+            }
+
+            public override void NotifyHandshakeComplete()
+            {
+                base.NotifyHandshakeComplete();
+
+                // Bouncy Castle clears the TLS exporter master secret as soon as this callback returns.
+                // Export and retain the OMS material while the handshake secret is still available.
+                _omsExporterSecret = Context.ExportKeyingMaterial(
+                    OmsExporterLabel,
+                    null,
+                    OmsExporterSecretLength);
             }
         }
 
