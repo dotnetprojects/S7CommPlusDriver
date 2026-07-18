@@ -6,9 +6,9 @@
 [![Release](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/dotnetprojects/S7CommPlusDriver.svg)](LICENSE)
 
-Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with optional legacy challenge authentication for pre-V17/pre-TLS CPUs on `net8.0` and later.
+Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication available for pre-V17/pre-TLS CPUs on `net8.0` and `net9.0`. The package targets `net6.0`, `net8.0`, and `net9.0`.
 
-The public API for new applications is `S7CommPlusClient`. Low-level protocol/session types are internal implementation details; production code should use the client surface.
+The supported high-level API for new applications is `S7CommPlusClient`. Lower-level protocol and transport types remain available for compatibility and diagnostics, but production code should use the client surface.
 
 ## Acknowledgements
 
@@ -21,7 +21,7 @@ write protection.
 
 ## What The Production Client Provides
 
-- Async connect, disconnect, browse, read, write, active-alarm, subscription, block metadata, CPU metadata/control, online block-view, and legitimation methods
+- Async connect, disconnect, browse, bulk symbol resolution, read, write, active-alarm, subscription, block and symbol-comment metadata, CPU metadata/control, online block-view, and legitimation methods
 - Serialized request execution for safe concurrent callers
 - Typed exceptions with PLC endpoint, operation, error code, and transient/non-transient classification
 - Connection-state and communication-error events
@@ -42,7 +42,7 @@ if the PLC rejects it, reconnects with legacy challenge authentication:
 - S7-1500 firmware V2.9 or newer
 - Software controllers supported by the upstream protocol implementation
 
-The PLC project must also be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer.
+For TLS, the PLC project must be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer. Legacy challenge mode is intended for older projects and CPUs without that TLS configuration.
 
 For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
 `net8.0`/`net9.0` falls back to legacy authentication. Set
@@ -54,7 +54,7 @@ builds remain TLS-only and fail fast if legacy mode is requested.
 
 TLS communication uses the managed BouncyCastle backend by default. The older OpenSSL backend remains available through `S7CommPlusClientOptions.TlsBackend = S7CommPlusTlsBackend.OpenSsl`, but it depends on native runtime files and may be less portable across PLC firmware/OpenSSL combinations.
 
-The package includes the required native OpenSSL runtime files for supported platforms and copies them to the output directory when the OpenSSL backend is selected. If OpenSSL is installed system-wide, make sure the matching native binaries are available on the process path.
+The package includes native OpenSSL runtime files for Windows x86, x64, and ARM64, plus macOS ARM64. Its build target preserves those runtime-specific assets in the application output. If you select the OpenSSL backend on another platform, compatible OpenSSL 3 native libraries must be available to the process.
 
 Windows runtime files include:
 
@@ -163,6 +163,34 @@ var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
 Arrays of structures are always traversed because their readable member fields
 cannot be represented by one primitive value.
 
+### Resolving many symbols efficiently
+
+Use `GetTagsBySymbolsAsync` to resolve a large configured tag set with one PLC
+catalog browse. The result is a case-sensitive dictionary; symbols not found in
+the current PLC program are omitted. Fully indexed primitive-array symbols are
+resolved from the aggregate array metadata, including non-zero lower bounds and
+multidimensional arrays:
+
+```csharp
+var symbols = new[]
+{
+    "MyDb.MyValue",
+    "MyDb.Payload[3]",
+    "MyDb.Matrix[1,2]"
+};
+
+var tagsBySymbol = await client.GetTagsBySymbolsAsync(symbols);
+var read = await client.ReadAsync(tagsBySymbol.Values);
+```
+
+The client retains this symbol catalog across reconnects. When the PLC program
+structure changes, invalidate it before rebuilding application tag caches:
+
+```csharp
+await client.InvalidateSymbolCatalogAsync();
+var refreshedTags = await client.GetTagsBySymbolsAsync(symbols);
+```
+
 The built-in connection defaults match Siemens S7CommPlus HMI communication:
 ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
 `S7CommPlusDefaults.LocalTsap` (`0x0600`), and remote TSAP
@@ -170,6 +198,23 @@ ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
 captures sometimes use `S7CommPlusDefaults.RemoteTsapEs`
 (`SIMATIC-ROOT-ES`). Remote TSAP values are validated as ASCII COTP
 parameters before a socket is opened.
+
+## CPU Runtime Status and Control
+
+The client exposes the CPU operating state, scan-cycle measurements, and memory
+usage in addition to the general CPU information and culture catalog:
+
+```csharp
+var state = await client.GetCpuStateAsync();
+var cycleTime = await client.GetCpuCycleTimeAsync();
+var memory = await client.GetCpuMemoryUsageAsync();
+
+Console.WriteLine($"{state.OperatingState}: {cycleTime.CurrentMilliseconds} ms");
+```
+
+`StartCpuAsync` and `StopCpuAsync` change PLC state, so they use the same safety
+gate as tag writes and require `WriteEnabled = true`. They are never retried
+automatically.
 
 ## Password Legitimation
 
@@ -284,6 +329,26 @@ var structure = await client.BrowseBlockStructureAsync();
 var content = await client.GetBlockContentAsync(blocks[0].RelationId);
 ```
 
+Localized engineering comments can be loaded independently of block code. The
+returned catalog maps a browsed `VarInfo` to all comments supplied by the PLC,
+keyed by Windows locale identifier (LCID):
+
+```csharp
+var comments = await client.GetSymbolCommentsAsync(blocks[0].RelationId);
+
+foreach (var variable in await client.BrowseAsync())
+{
+    if (comments.TryGetComments(variable, out var localized))
+    {
+        Console.WriteLine($"{variable.Name}: {localized.GetValueOrDefault(1033)}");
+    }
+}
+```
+
+Cache one `S7CommPlusSymbolCommentCatalog` per block or absolute I/Q/M relation
+ID while processing a browse. Array indices are normalized to the declaration
+comment for data-block symbols; absolute-area access sequences remain exact.
+
 `OpenBlockOnlineViewAsync` creates a disposable `S7CommPlusTisWatchSubscription`
 for advanced block-watch scenarios. This API is lower level than tag reads and
 requires a caller-provided `S7CommPlusTisWatchRequest` that matches the block
@@ -291,10 +356,10 @@ watch points and result model.
 
 ## Subscriptions
 
-Subscriptions are exposed as long-running, disposable objects. They own the
-client operation pipeline while active because notification frames arrive on the
-same PLC session as normal request/response traffic. Stop or dispose a
-subscription before issuing other reads or writes on the same client.
+Subscriptions are exposed as long-running, disposable objects. Notification
+frames arrive on the same PLC session as normal request/response traffic, and
+the client serializes foreground requests while routing notifications by PLC
+subscription object ID.
 
 ```csharp
 var tag = await client.GetTagBySymbolAsync("MyDb.MyValue");
@@ -398,8 +463,6 @@ Legacy integrity keys expire even when requests are still flowing; normal reads 
 See [Acknowledgements](#acknowledgements) for the HarpoS7 dependency and
 attribution. This project remains LGPL-3.0-or-later unless noted otherwise.
 
-Legacy packet-capture notes, auth frame variants, and live PLC observations are tracked in `docs/legacy-s7commplus-memory.md`.
-
 Recent legacy auth work parses `ServerSessionVersion` from the CreateObject
 response where available, so S7-1500 V3.x authentication-frame selection is
 response-driven before falling back to capture-compatible heuristics.
@@ -456,7 +519,9 @@ $env:S7COMMPLUS_LIVE_HOST = "10.0.110.120"
 dotnet test src\S7CommPlusDriver.Tests\S7CommPlusDriver.Tests.csproj --filter LivePlcReadOnlySmokeTest
 ```
 
-By default the live test only connects, reads CPU info, browses, and disconnects. To read explicit tags, provide semicolon-separated tag symbols:
+By default the live test connects, reads CPU and culture information, loads PLC
+text lists, browses, and disconnects. To read explicit tags, provide
+semicolon-separated tag symbols:
 
 ```powershell
 $env:S7COMMPLUS_LIVE_TAGS = "MyDb.MyValue;OtherDb.Counter"
@@ -466,6 +531,15 @@ To exercise legacy auth or auto fallback in the live test:
 
 ```powershell
 $env:S7COMMPLUS_LIVE_SECURITY_MODE = "LegacyChallenge" # or "Auto"
+```
+
+TLS backend and timeout overrides are also available when validating a specific
+configuration:
+
+```powershell
+$env:S7COMMPLUS_LIVE_TLS_BACKEND = "BouncyCastle" # or "OpenSsl"
+$env:S7COMMPLUS_LIVE_REQUEST_TIMEOUT_SECONDS = "15"
+$env:S7COMMPLUS_LIVE_CONNECT_TIMEOUT_SECONDS = "10"
 ```
 
 Never use the live smoke test for writes.

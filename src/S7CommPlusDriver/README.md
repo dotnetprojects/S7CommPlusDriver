@@ -8,15 +8,15 @@ Install from [NuGet](https://www.nuget.org/packages/DotNetProjects.S7CommPlusDri
 dotnet add package DotNetProjects.S7CommPlusDriver
 ```
 
-Use `S7CommPlusClient` for new applications. It provides async connect, browse, read, write, alarm, subscription, CPU metadata/control, block metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
+Use `S7CommPlusClient` for new applications. It provides async connect, browse, bulk symbol resolution, read, write, alarm, subscription, CPU metadata/control, block and symbol-comment metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
 
-TLS is the default security mode, using the managed BouncyCastle TLS backend unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net8.0` and later, older S7-1200/1500 CPUs can use `S7CommPlusSecurityMode.LegacyChallenge` or `Auto` for HarpoS7-derived legacy challenge authentication. `net6.0` remains TLS-only.
+The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net8.0` and `net9.0`, the default security mode is `Auto`: it tries TLS first and reconnects with HarpoS7-derived legacy challenge authentication if the PLC rejects TLS. Set the mode to `Tls` to prohibit fallback, or `LegacyChallenge` to skip the TLS attempt. `net6.0` remains TLS-only.
 
 Default connection parameters are exposed through `S7CommPlusDefaults`: ISO-on-TCP port `102`, local TSAP `0x0600`, HMI remote TSAP `SIMATIC-ROOT-HMI`, and engineering remote TSAP `SIMATIC-ROOT-ES`. Remote TSAP values are validated as ASCII COTP parameters before connecting.
 
 ## Older PLCs / Legacy Challenge Auth
 
-Siemens OMS names the old non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge` and keeps TLS as the default, so there is no silent security downgrade.
+Siemens OMS names the old non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Because `Auto` is the `net8.0`/`net9.0` default, applications that must prohibit fallback should explicitly use `S7CommPlusSecurityMode.Tls`.
 
 ```csharp
 await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
@@ -60,6 +60,16 @@ var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
     ExpandPrimitiveArrayElements = true
 });
 ```
+
+## Bulk Symbol Resolution and Comments
+
+`GetTagsBySymbolsAsync(symbols)` resolves a configured tag set with one catalog browse and returns a case-sensitive dictionary of the symbols found. It also resolves fully indexed primitive-array elements from aggregate array metadata. The catalog is retained across reconnects; call `InvalidateSymbolCatalogAsync()` after detecting a PLC program-structure change.
+
+`GetSymbolCommentsAsync(relationId)` loads multilingual engineering comments for one data block or absolute I/Q/M area without downloading block code. Use `S7CommPlusSymbolCommentCatalog.TryGetComments(variable, out comments)` to map a browsed `VarInfo` to its LCID-keyed comments, and cache one returned catalog per relation ID while processing a browse.
+
+## CPU Runtime Status and Control
+
+`GetCpuStateAsync()`, `GetCpuCycleTimeAsync()`, and `GetCpuMemoryUsageAsync()` expose current runtime status. `StartCpuAsync()` and `StopCpuAsync()` change PLC state, require `WriteEnabled = true`, and are never retried automatically.
 
 ## Subscriptions
 
