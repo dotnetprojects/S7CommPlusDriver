@@ -109,6 +109,21 @@ if (read.Items[0].IsSuccess)
 await client.DisconnectAsync();
 ```
 
+### Per-operation timeouts
+
+`RequestTimeout` remains the default for ordinary requests, while browse APIs use `BrowseTimeout`. The effective timeout now governs the complete client operation, each protocol response wait, and the connected socket receive/send deadlines. This is important for large symbol catalogs, where a long outer browse deadline alone cannot prevent a shorter protocol wait from failing first.
+
+Use `ExecuteWithTimeoutAsync` when one call needs a different deadline without changing later requests or creating another client:
+
+```csharp
+var resolvedTags = await client.ExecuteWithTimeoutAsync(
+    TimeSpan.FromMinutes(2),
+    cancellationToken => client.GetTagsBySymbolsAsync(symbols, cancellationToken),
+    cancellationToken);
+```
+
+The override is isolated to the current asynchronous execution context. Concurrent callers can choose different timeouts, and the configured `RequestTimeout` is restored after each request. Connect, disconnect, and subscription-notification waits retain their dedicated timeout settings.
+
 `GetCpuCultureInfoAsync()` reads the CPU text-container LCIDs and exposes both
 the raw language IDs and resolved .NET cultures:
 

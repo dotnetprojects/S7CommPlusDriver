@@ -33,6 +33,8 @@ namespace S7CommPlusDriver.Tests
         public int TisWatchSubscriptionWaitCount { get; private set; }
         public int TisWatchSubscriptionDeleteCount { get; private set; }
         public int LastActiveAlarmsLanguageId { get; private set; }
+        public int RequestTimeoutMilliseconds { get; private set; }
+        public List<int> RequestTimeoutHistory { get; } = new List<int>();
         public string LastErrorDetail { get; set; } = "";
         public List<uint> CreatedTagSubscriptionIds { get; } = new List<uint>();
         public List<uint> CreatedAlarmSubscriptionIds { get; } = new List<uint>();
@@ -83,9 +85,16 @@ namespace S7CommPlusDriver.Tests
         public int Connect(S7CommPlusClientOptions options)
         {
             ConnectCount++;
+            SetRequestTimeout(options.RequestTimeoutMilliseconds);
             var error = ConnectHandler?.Invoke(options) ?? 0;
             IsConnected = error == 0;
             return error;
+        }
+
+        public void SetRequestTimeout(int timeoutMilliseconds)
+        {
+            RequestTimeoutMilliseconds = timeoutMilliseconds;
+            RequestTimeoutHistory.Add(timeoutMilliseconds);
         }
 
         public int Disconnect(int timeoutMilliseconds)

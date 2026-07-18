@@ -35,6 +35,19 @@ Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. 
 
 Legacy integrity keys expire even on active connections; ordinary reads do not extend their lifetime. The driver renews them every 25 minutes by default. Use `LegacySessionKeyRefreshEnabled` and `LegacySessionKeyRefreshInterval` to change this behavior. The renewal is an internal session-control exchange, not a PLC tag write, and works while `WriteEnabled` remains `false`.
 
+## Per-operation timeouts
+
+Ordinary requests use `RequestTimeout`, and browse operations use `BrowseTimeout`. The selected timeout applies consistently to the client task, protocol response wait, and live socket timeouts. A caller can override any individual request without changing the client defaults:
+
+```csharp
+var tags = await client.ExecuteWithTimeoutAsync(
+    TimeSpan.FromMinutes(2),
+    cancellationToken => client.GetTagsBySymbolsAsync(symbols, cancellationToken),
+    cancellationToken);
+```
+
+The override is async-context-local and the configured request timeout is restored afterward. Connection lifecycle and subscription notification waits continue to use their specialized timeout settings.
+
 ## Browsing Primitive Arrays
 
 `BrowseAsync()` returns one `VarInfo` for each primitive array instead of allocating an item for every indexed element. `VarInfo.ArrayElementCount` contains the total size and `VarInfo.ArrayDimensions` preserves every declared lower bound and dimension length. Arrays of structures remain expanded so their readable fields are still discoverable.

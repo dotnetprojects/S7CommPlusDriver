@@ -9,6 +9,8 @@ namespace S7CommPlusDriver
     {
         bool IsConnected { get; }
         string LastErrorDetail { get; }
+        int RequestTimeoutMilliseconds { get; }
+        void SetRequestTimeout(int timeoutMilliseconds);
         int Connect(S7CommPlusClientOptions options);
         int Disconnect(int timeoutMilliseconds);
         int CloseTransport(int timeoutMilliseconds);

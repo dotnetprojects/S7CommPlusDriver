@@ -471,6 +471,97 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task BrowseTimeoutControlsProtocolWaitAndRestoresRequestTimeout()
+        {
+            var timeoutDuringBrowse = 0;
+            var fake = new FakeS7CommPlusSession();
+            fake.BrowseVariablesHandler = () =>
+            {
+                timeoutDuringBrowse = fake.RequestTimeoutMilliseconds;
+                Task.Delay(60).Wait();
+                return (0, new List<VarInfo>());
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 20, browseTimeoutMs: 200);
+
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(200, timeoutDuringBrowse);
+            Assert.Equal(20, fake.RequestTimeoutMilliseconds);
+            Assert.Contains(200, fake.RequestTimeoutHistory);
+        }
+
+        [Fact]
+        public async Task ExecuteWithTimeoutOverridesOneRequestAndRestoresConfiguredTimeout()
+        {
+            var timeoutDuringRequest = 0;
+            var fake = new FakeS7CommPlusSession();
+            fake.CpuInfoHandler = () =>
+            {
+                timeoutDuringRequest = fake.RequestTimeoutMilliseconds;
+                Task.Delay(60).Wait();
+                return (0, new S7CommPlusCpuInfo { PlcName = "TestCpu" });
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 20);
+
+            var cpuInfo = await client.ExecuteWithTimeoutAsync(
+                TimeSpan.FromMilliseconds(200),
+                cancellationToken => client.GetCpuInfoAsync(cancellationToken));
+
+            Assert.Equal("TestCpu", cpuInfo.PlcName);
+            Assert.Equal(200, timeoutDuringRequest);
+            Assert.Equal(20, fake.RequestTimeoutMilliseconds);
+        }
+
+        [Fact]
+        public async Task ConcurrentTimeoutScopesKeepIndependentDeadlines()
+        {
+            var observedTimeouts = new List<int>();
+            var observedTimeoutsLock = new object();
+            var fake = new FakeS7CommPlusSession();
+            fake.CpuInfoHandler = () =>
+            {
+                lock (observedTimeoutsLock)
+                {
+                    observedTimeouts.Add(fake.RequestTimeoutMilliseconds);
+                }
+                return (0, new S7CommPlusCpuInfo { PlcName = "TestCpu" });
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 20);
+
+            await Task.WhenAll(
+                client.ExecuteWithTimeoutAsync(
+                    TimeSpan.FromMilliseconds(111),
+                    cancellationToken => client.GetCpuInfoAsync(cancellationToken)),
+                client.ExecuteWithTimeoutAsync(
+                    TimeSpan.FromMilliseconds(222),
+                    cancellationToken => client.GetCpuInfoAsync(cancellationToken)));
+
+            Assert.Contains(111, observedTimeouts);
+            Assert.Contains(222, observedTimeouts);
+            Assert.Equal(20, fake.RequestTimeoutMilliseconds);
+        }
+
+        [Fact]
+        public async Task ExecuteWithTimeoutSupportsRequestsWithoutResults()
+        {
+            var timeoutDuringRequest = 0;
+            var fake = new FakeS7CommPlusSession();
+            fake.SetCpuOperatingStateHandler = _ =>
+            {
+                timeoutDuringRequest = fake.RequestTimeoutMilliseconds;
+                return 0;
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 20, writeEnabled: true);
+
+            await client.ExecuteWithTimeoutAsync(
+                TimeSpan.FromMilliseconds(200),
+                cancellationToken => client.StartCpuAsync(cancellationToken));
+
+            Assert.Equal(200, timeoutDuringRequest);
+            Assert.Equal(20, fake.RequestTimeoutMilliseconds);
+        }
+
+        [Fact]
         public async Task ReadReconnectsOnceAfterTransientDisconnect()
         {
             var fake = new FakeS7CommPlusSession();
@@ -1667,7 +1758,11 @@ namespace S7CommPlusDriver.Tests
             Assert.False(result.Subscription.ReceivesAllAlarmTextLanguages);
         }
 
-        private static S7CommPlusClient CreateClient(FakeS7CommPlusSession fake, int requestTimeoutMs = 5000, bool writeEnabled = false)
+        private static S7CommPlusClient CreateClient(
+            FakeS7CommPlusSession fake,
+            int requestTimeoutMs = 5000,
+            bool writeEnabled = false,
+            int? browseTimeoutMs = null)
         {
             return new S7CommPlusClient(
                 new S7CommPlusClientOptions
@@ -1675,7 +1770,7 @@ namespace S7CommPlusDriver.Tests
                     Address = "127.0.0.1",
                     WriteEnabled = writeEnabled,
                     RequestTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
-                    BrowseTimeout = TimeSpan.FromMilliseconds(requestTimeoutMs),
+                    BrowseTimeout = TimeSpan.FromMilliseconds(browseTimeoutMs ?? requestTimeoutMs),
                     ConnectTimeout = TimeSpan.FromMilliseconds(500),
                     DisconnectTimeout = TimeSpan.FromMilliseconds(100)
                 },

@@ -32,6 +32,13 @@ namespace S7CommPlusDriver
 
         string IS7CommPlusSession.LastErrorDetail => m_LastErrorDetail;
 
+        int IS7CommPlusSession.RequestTimeoutMilliseconds => m_ReadTimeout;
+
+        void IS7CommPlusSession.SetRequestTimeout(int timeoutMilliseconds)
+        {
+            ApplyRequestTimeout(timeoutMilliseconds);
+        }
+
         int IS7CommPlusSession.Disconnect(int timeoutMilliseconds)
         {
             return TryDisconnect(timeoutMilliseconds);

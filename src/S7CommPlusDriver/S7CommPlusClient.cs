@@ -19,6 +19,7 @@ namespace S7CommPlusDriver
         private readonly S7CommPlusClientOptions _options;
         private readonly Func<IS7CommPlusSession> _sessionFactory;
         private readonly SemaphoreSlim _operationGate = new SemaphoreSlim(1, 1);
+        private readonly AsyncLocal<TimeSpan?> _operationTimeout = new AsyncLocal<TimeSpan?>();
         private IS7CommPlusSession _session;
         private bool _disposed;
         private S7CommPlusConnectionState _state = S7CommPlusConnectionState.Disconnected;
@@ -44,6 +45,76 @@ namespace S7CommPlusDriver
         public S7CommPlusConnectionState State => _state;
         public bool IsConnected => _session?.IsConnected == true && _state == S7CommPlusConnectionState.Connected;
         public S7CommPlusClientOptions Options => _options.Clone();
+
+        /// <summary>
+        /// Executes one or more client requests with an operation-specific timeout instead of their configured defaults.
+        /// </summary>
+        /// <typeparam name="T">The result returned by the client request.</typeparam>
+        /// <param name="timeout">The deadline applied to each client request executed by <paramref name="operation"/>.</param>
+        /// <param name="operation">Invokes the desired API on this client with the supplied cancellation token.</param>
+        /// <param name="cancellationToken">Cancels the operation independently of its timeout.</param>
+        /// <returns>The result produced by <paramref name="operation"/>.</returns>
+        /// <remarks>
+        /// The override flows only through the current asynchronous execution context, so concurrent callers can safely choose
+        /// different deadlines. For each request the driver updates the client-side deadline, protocol response wait, and live
+        /// transport receive/send timeouts, then restores <see cref="S7CommPlusClientOptions.RequestTimeout"/>. Connect and
+        /// disconnect retain their dedicated configured timeouts.
+        /// </remarks>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="timeout"/> is not positive or exceeds the protocol limit.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
+        public async Task<T> ExecuteWithTimeoutAsync<T>(
+            TimeSpan timeout,
+            Func<CancellationToken, Task<T>> operation,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateOperationTimeout(timeout);
+            if (operation == null)
+            {
+                throw new ArgumentNullException(nameof(operation));
+            }
+
+            ThrowIfDisposed();
+            var previousTimeout = _operationTimeout.Value;
+            _operationTimeout.Value = timeout;
+            try
+            {
+                return await operation(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _operationTimeout.Value = previousTimeout;
+            }
+        }
+
+        /// <summary>
+        /// Executes one or more client requests with an operation-specific timeout instead of their configured defaults.
+        /// </summary>
+        /// <param name="timeout">The deadline applied to each client request executed by <paramref name="operation"/>.</param>
+        /// <param name="operation">Invokes the desired API on this client with the supplied cancellation token.</param>
+        /// <param name="cancellationToken">Cancels the operation independently of its timeout.</param>
+        /// <returns>A task that completes when <paramref name="operation"/> finishes.</returns>
+        /// <inheritdoc cref="ExecuteWithTimeoutAsync{T}(TimeSpan, Func{CancellationToken, Task{T}}, CancellationToken)" path="remarks"/>
+        /// <exception cref="ArgumentOutOfRangeException"><paramref name="timeout"/> is not positive or exceeds the protocol limit.</exception>
+        /// <exception cref="ArgumentNullException"><paramref name="operation"/> is <see langword="null"/>.</exception>
+        public async Task ExecuteWithTimeoutAsync(
+            TimeSpan timeout,
+            Func<CancellationToken, Task> operation,
+            CancellationToken cancellationToken = default)
+        {
+            if (operation == null)
+            {
+                throw new ArgumentNullException(nameof(operation));
+            }
+
+            await ExecuteWithTimeoutAsync(
+                timeout,
+                async token =>
+                {
+                    await operation(token).ConfigureAwait(false);
+                    return true;
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
 
         public async Task ConnectAsync(CancellationToken cancellationToken = default)
         {
@@ -525,6 +596,7 @@ namespace S7CommPlusDriver
                 .Select((tag, index) => new KeyValuePair<uint, PlcTag>((uint)(index + 1), tag))
                 .ToDictionary(pair => pair.Key, pair => pair.Value);
             var subscription = new S7CommPlusTagSubscription(tagsByReferenceId);
+            var operationTimeout = _operationTimeout.Value ?? _options.RequestTimeout;
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -532,10 +604,10 @@ namespace S7CommPlusDriver
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 uint subscriptionObjectId = 0;
-                var error = await RunWithTimeoutAsync(
+                var error = await RunOperationAttemptAsync(
                     "CreateTagSubscription",
-                    () => _session.CreateTagSubscription(tagList, subscriptionOptions.CycleTimeMilliseconds, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
-                    _options.RequestTimeout,
+                    session => session.CreateTagSubscription(tagList, subscriptionOptions.CycleTimeMilliseconds, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
+                    operationTimeout,
                     cancellationToken).ConfigureAwait(false);
                 ThrowIfError("CreateTagSubscription", error);
 
@@ -570,6 +642,7 @@ namespace S7CommPlusDriver
             var subscriptionOptions = (options ?? new S7CommPlusSubscriptionOptions()).Clone();
             subscriptionOptions.Validate(requireCycleTime: false);
             var subscription = new S7CommPlusTisWatchSubscription(watchRequest.ResultModel);
+            var operationTimeout = _operationTimeout.Value ?? _options.RequestTimeout;
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -577,10 +650,10 @@ namespace S7CommPlusDriver
                 ThrowIfDisposed();
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 uint subscriptionObjectId = 0;
-                var error = await RunWithTimeoutAsync(
+                var error = await RunOperationAttemptAsync(
                     "CreateTisWatchSubscription",
-                    () => _session.CreateTisWatchSubscription(watchRequest, out subscriptionObjectId),
-                    _options.RequestTimeout,
+                    session => session.CreateTisWatchSubscription(watchRequest, out subscriptionObjectId),
+                    operationTimeout,
                     cancellationToken).ConfigureAwait(false);
                 var operation = String.IsNullOrWhiteSpace(watchRequest.LastLifecycleStage)
                     ? "CreateTisWatchSubscription"
@@ -727,6 +800,7 @@ namespace S7CommPlusDriver
             var subscriptionOptions = (options ?? new S7CommPlusSubscriptionOptions()).Clone();
             subscriptionOptions.Validate(requireCycleTime: false);
             S7CommPlusAlarmSubscription subscription = null;
+            var operationTimeout = _operationTimeout.Value ?? _options.RequestTimeout;
 
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
@@ -736,10 +810,10 @@ namespace S7CommPlusDriver
                 if (languageIdList.Count == 0)
                 {
                     S7CommPlusCpuCultureInfo cultureInfo = null;
-                    var cultureError = await RunWithTimeoutAsync(
+                    var cultureError = await RunOperationAttemptAsync(
                         "GetCpuCultureInfo",
-                        () => _session.GetCpuCultureInfo(out cultureInfo),
-                        _options.RequestTimeout,
+                        session => session.GetCpuCultureInfo(out cultureInfo),
+                        operationTimeout,
                         cancellationToken).ConfigureAwait(false);
                     ThrowIfError("GetCpuCultureInfo", cultureError);
                     languageIdList = cultureInfo?.LanguageIds
@@ -758,10 +832,10 @@ namespace S7CommPlusDriver
                     CreateTextListResolver(textLists));
                 var languageIdsUint = languageIdList.Select(languageId => checked((uint)languageId)).ToArray();
                 uint subscriptionObjectId = 0;
-                var error = await RunWithTimeoutAsync(
+                var error = await RunOperationAttemptAsync(
                     "CreateAlarmSubscription",
-                    () => _session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
-                    _options.RequestTimeout,
+                    session => session.CreateAlarmSubscription(languageIdsUint, subscriptionOptions.InitialCreditLimit, out subscriptionObjectId),
+                    operationTimeout,
                     cancellationToken).ConfigureAwait(false);
                 ThrowIfAlarmSubscriptionError("CreateAlarmSubscription", error);
 
@@ -1135,20 +1209,21 @@ namespace S7CommPlusDriver
         private async Task<T> ExecuteOperationAsync<T>(string operation, bool allowReconnect, Func<IS7CommPlusSession, T> operationFunc, TimeSpan timeout, CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
+            var effectiveTimeout = _operationTimeout.Value ?? timeout;
             await _operationGate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
                 await EnsureConnectedCoreAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
+                    return await RunOperationAttemptAsync(operation, operationFunc, effectiveTimeout, cancellationToken).ConfigureAwait(false);
                 }
                 catch (S7CommPlusException ex) when (allowReconnect && _options.AutoReconnect && ex.IsTransient)
                 {
                     RaiseCommunicationError(ex);
                     _options.Logger.LogWarning(ex, "Transient {Operation} failure for {Endpoint}; reconnecting and retrying once.", operation, Endpoint);
                     await ReconnectCoreAsync(cancellationToken).ConfigureAwait(false);
-                    return await RunWithTimeoutAsync(operation, () => operationFunc(_session), timeout, cancellationToken).ConfigureAwait(false);
+                    return await RunOperationAttemptAsync(operation, operationFunc, effectiveTimeout, cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (S7CommPlusException ex)
@@ -1164,6 +1239,53 @@ namespace S7CommPlusDriver
             {
                 _operationGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Applies one request deadline to the protocol and transport for a serialized operation attempt, then restores the configured default.
+        /// </summary>
+        private async Task<T> RunOperationAttemptAsync<T>(
+            string operation,
+            Func<IS7CommPlusSession, T> operationFunc,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            var session = _session;
+            var previousTimeoutMilliseconds = session.RequestTimeoutMilliseconds;
+            var timeoutMilliseconds = ValidateOperationTimeout(timeout);
+            if (previousTimeoutMilliseconds != timeoutMilliseconds)
+            {
+                session.SetRequestTimeout(timeoutMilliseconds);
+            }
+
+            try
+            {
+                return await RunWithTimeoutAsync(operation, () => operationFunc(session), timeout, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                if (ReferenceEquals(_session, session) && previousTimeoutMilliseconds != timeoutMilliseconds)
+                {
+                    session.SetRequestTimeout(previousTimeoutMilliseconds);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Converts a public operation timeout to the positive millisecond range supported by protocol and socket APIs.
+        /// </summary>
+        private static int ValidateOperationTimeout(TimeSpan timeout)
+        {
+            var totalMilliseconds = timeout.TotalMilliseconds;
+            if (double.IsNaN(totalMilliseconds)
+                || double.IsInfinity(totalMilliseconds)
+                || totalMilliseconds <= 0
+                || totalMilliseconds > int.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeout), timeout, $"Timeout must be between 1 ms and {int.MaxValue} ms.");
+            }
+
+            return Math.Max(1, (int)Math.Ceiling(totalMilliseconds));
         }
 
         private async Task EnsureConnectedCoreAsync(CancellationToken cancellationToken)
