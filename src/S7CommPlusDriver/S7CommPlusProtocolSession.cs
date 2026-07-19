@@ -606,9 +606,12 @@ namespace S7CommPlusDriver
             return m_LastError;
         }
 
-        private static int GetMaxS7CommPlusPayloadSize(int legacyDigestLength)
+        private int GetMaxS7CommPlusPayloadSize(int legacyDigestLength)
         {
-            return S7CommPlusProtocolConstants.DefaultIsoTpduSize
+            int negotiatedTpduSize = m_client?.PduSizeNegotiated > 0
+                ? m_client.PduSizeNegotiated
+                : S7CommPlusProtocolConstants.DefaultIsoTpduSize;
+            return negotiatedTpduSize
                 - S7CommPlusProtocolConstants.TpktHeaderLength
                 - S7CommPlusProtocolConstants.CotpHeaderLength
                 - S7CommPlusProtocolConstants.TlsRecordHeaderLength
@@ -618,34 +621,45 @@ namespace S7CommPlusDriver
                 - S7CommPlusProtocolConstants.S7CommPlusTrailerLength;
         }
 
-        private int GetLegacySingleFramePayloadLimit(byte protocolVersion)
+        private int GetSingleFramePayloadLimit(byte protocolVersion)
         {
-            if (!ShouldUseLegacyDigest(protocolVersion))
-            {
-                return int.MaxValue;
-            }
-
-            return GetMaxS7CommPlusPayloadSize(LegacyDigestFieldLength);
+            int legacyDigestLength = ShouldUseLegacyDigest(protocolVersion) ? LegacyDigestFieldLength : 0;
+            return GetMaxS7CommPlusPayloadSize(legacyDigestLength);
         }
 
-        private bool ExceedsLegacySingleFramePayload(GetMultiVariablesRequest request, int maxPayloadSize)
+        private static bool ExceedsSingleFramePayload(IS7pRequest request, int maxPayloadSize)
         {
-            if (maxPayloadSize == int.MaxValue)
+            if (maxPayloadSize <= 0)
             {
-                return false;
+                return true;
             }
 
-            var probe = new GetMultiVariablesRequest(ProtocolVersion.V3)
-            {
-                SessionId = UInt32.MaxValue,
-                SequenceNumber = UInt16.MaxValue,
-                IntegrityId = UInt32.MaxValue
-            };
-            probe.AddressList.AddRange(request.AddressList);
+            return GetSerializedRequestLengthForBatching(request) > maxPayloadSize;
+        }
 
-            using var stream = new MemoryStream();
-            probe.Serialize(stream);
-            return stream.Length > maxPayloadSize;
+        private static long GetSerializedRequestLengthForBatching(IS7pRequest request)
+        {
+            uint sessionId = request.SessionId;
+            ushort sequenceNumber = request.SequenceNumber;
+            uint integrityId = request.IntegrityId;
+            try
+            {
+                // The integrity id is VLQ encoded, so use its widest representation when
+                // deciding whether an item still fits before the real request is numbered.
+                request.SessionId = UInt32.MaxValue;
+                request.SequenceNumber = UInt16.MaxValue;
+                request.IntegrityId = UInt32.MaxValue;
+
+                using var stream = new MemoryStream();
+                request.Serialize(stream);
+                return stream.Length;
+            }
+            finally
+            {
+                request.SessionId = sessionId;
+                request.SequenceNumber = sequenceNumber;
+                request.IntegrityId = integrityId;
+            }
         }
 
         private void OnDataReceived(byte[] PDU, int len)
@@ -852,7 +866,17 @@ namespace S7CommPlusDriver
         {
             var request = new GetMultiVariablesRequest(ProtocolVersion.V3);
             request.AddressList.AddRange(addresses);
-            return ExceedsLegacySingleFramePayload(request, GetMaxS7CommPlusPayloadSize(LegacyDigestFieldLength));
+            return ExceedsSingleFramePayload(request, GetMaxS7CommPlusPayloadSize(LegacyDigestFieldLength));
+        }
+
+        internal (int ItemCount, long SerializedLength) DebugCreateWriteRequestBatchForTests(
+            IReadOnlyList<ItemAddress> addresses,
+            IReadOnlyList<PValue> values,
+            int maxItems,
+            int maxPayloadSize)
+        {
+            var request = CreateWriteRequestBatch(addresses, values, 0, maxItems, maxPayloadSize, out int itemCount);
+            return (itemCount, GetSerializedRequestLengthForBatching(request));
         }
 
         internal int DebugSendLegacyPayloadForTests(byte[] payload)
@@ -1334,11 +1358,11 @@ namespace S7CommPlusDriver
                 return 0;
             }
 
-            // Split request into chunks, taking the MaxTags per request into account
+            // Split requests by both the PLC's item limit and the negotiated TPDU payload.
             int chunk_startIndex = 0;
             int count_perChunk = 0;
             int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax);
-            int maxLegacyPayloadSize = GetLegacySingleFramePayloadLimit(ProtocolVersion.V3);
+            int maxPayloadSize = GetSingleFramePayloadLimit(ProtocolVersion.V2);
             do
             {
                 int res;
@@ -1349,7 +1373,7 @@ namespace S7CommPlusDriver
                 while (count_perChunk < maxTagsPerRequest && (chunk_startIndex + count_perChunk) < addresslist.Count)
                 {
                     getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + count_perChunk]);
-                    if (count_perChunk > 0 && ExceedsLegacySingleFramePayload(getMultiVarReq, maxLegacyPayloadSize))
+                    if (count_perChunk > 0 && ExceedsSingleFramePayload(getMultiVarReq, maxPayloadSize))
                     {
                         getMultiVarReq.AddressList.RemoveAt(getMultiVarReq.AddressList.Count - 1);
                         break;
@@ -1413,22 +1437,20 @@ namespace S7CommPlusDriver
                 return 0;
             }
 
-            // Split request into chunks, taking the MaxTags per request into account
+            // Split requests by both the PLC's item limit and the negotiated TPDU payload.
             int chunk_startIndex = 0;
             int count_perChunk = 0;
             int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerWriteRequestMax);
+            int maxPayloadSize = GetSingleFramePayloadLimit(ProtocolVersion.V2);
             do
             {
-                var setMultiVarReq = new SetMultiVariablesRequest(ProtocolVersion.V2);
-                setMultiVarReq.AddressListVar.Clear();
-                setMultiVarReq.ValueList.Clear();
-                count_perChunk = 0;
-                while (count_perChunk < maxTagsPerRequest && (chunk_startIndex + count_perChunk) < addresslist.Count)
-                {
-                    setMultiVarReq.AddressListVar.Add(addresslist[chunk_startIndex + count_perChunk]);
-                    setMultiVarReq.ValueList.Add(values[chunk_startIndex + count_perChunk]);
-                    count_perChunk++;
-                }
+                var setMultiVarReq = CreateWriteRequestBatch(
+                    addresslist,
+                    values,
+                    chunk_startIndex,
+                    maxTagsPerRequest,
+                    maxPayloadSize,
+                    out count_perChunk);
 
                 res = SendS7plusFunctionObjectAndWait(setMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1457,6 +1479,32 @@ namespace S7CommPlusDriver
             } while (chunk_startIndex < addresslist.Count);
 
             return m_LastError;
+        }
+
+        private static SetMultiVariablesRequest CreateWriteRequestBatch(
+            IReadOnlyList<ItemAddress> addresses,
+            IReadOnlyList<PValue> values,
+            int startIndex,
+            int maxItems,
+            int maxPayloadSize,
+            out int itemCount)
+        {
+            var request = new SetMultiVariablesRequest(ProtocolVersion.V2);
+            itemCount = 0;
+            while (itemCount < maxItems && startIndex + itemCount < addresses.Count)
+            {
+                request.AddressListVar.Add(addresses[startIndex + itemCount]);
+                request.ValueList.Add(values[startIndex + itemCount]);
+                if (itemCount > 0 && ExceedsSingleFramePayload(request, maxPayloadSize))
+                {
+                    request.AddressListVar.RemoveAt(request.AddressListVar.Count - 1);
+                    request.ValueList.RemoveAt(request.ValueList.Count - 1);
+                    break;
+                }
+                itemCount++;
+            }
+
+            return request;
         }
 
         public int SetPlcOperatingState(Int32 state)

@@ -8,6 +8,7 @@
 #endregion
 
 using OpenSsl;
+using S7CommPlusDriver.Internal;
 using S7CommPlusDriver.Tls;
 using System;
 using System.IO;
@@ -458,9 +459,38 @@ namespace S7CommPlusDriver
 				{
 					if (Size < IsoHSize || LastPDUType != (byte)0xD0) // 0xD0 = CC Connection confirm
 						_LastError = S7Consts.errIsoConnect;
+					else
+						_PDULength = GetNegotiatedTpduSize(Size);
 				}
 			}
 			return _LastError;
+		}
+
+		private int GetNegotiatedTpduSize(int packetSize)
+		{
+			const int cotpParametersOffset = 11;
+			const byte tpduSizeParameter = 0xC0;
+			int cotpEnd = Math.Min(packetSize, 5 + PDU[4]);
+			int position = cotpParametersOffset;
+
+			while (position + 2 <= cotpEnd)
+			{
+				byte parameterCode = PDU[position++];
+				int parameterLength = PDU[position++];
+				if (position + parameterLength > cotpEnd)
+					break;
+
+				if (parameterCode == tpduSizeParameter && parameterLength == 1)
+				{
+					int exponent = PDU[position];
+					if (exponent >= 7 && exponent < 31)
+						return Math.Min(1 << exponent, S7CommPlusProtocolConstants.DefaultIsoTpduSize);
+				}
+
+				position += parameterLength;
+			}
+
+			return S7CommPlusProtocolConstants.DefaultIsoTpduSize;
 		}
 
 		public byte[] getOMSExporterSecret()
@@ -493,6 +523,7 @@ namespace S7CommPlusDriver
 		public int Connect()
 		{
 			_LastError = 0;
+			_PDULength = 0;
 			Time_ms = 0;
 			int Elapsed = Environment.TickCount;
 			if (!Connected)

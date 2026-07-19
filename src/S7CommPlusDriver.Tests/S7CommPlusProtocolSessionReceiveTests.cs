@@ -208,6 +208,53 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void WriteBatchStopsBeforeSerializedPayloadExceedsLimit()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = Enumerable.Range(1, 3)
+                .Select(i => new ItemAddress($"8A0E{i:X4}.1"))
+                .ToArray();
+            var values = Enumerable.Range(1, 3)
+                .Select(_ => (PValue)new ValueBlob(0, new byte[600]))
+                .ToArray();
+
+            var batch = connection.DebugCreateWriteRequestBatchForTests(addresses, values, 3, 987);
+
+            Assert.Equal(1, batch.ItemCount);
+            Assert.InRange(batch.SerializedLength, 1, 987);
+        }
+
+        [Fact]
+        public void WriteBatchStillAllowsOneIntrinsicallyOversizedItem()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = new[] { new ItemAddress("8A0E0001.1") };
+            var values = new PValue[] { new ValueBlob(0, new byte[600]) };
+
+            var batch = connection.DebugCreateWriteRequestBatchForTests(addresses, values, 20, 128);
+
+            Assert.Equal(1, batch.ItemCount);
+            Assert.True(batch.SerializedLength > 128);
+        }
+
+        [Fact]
+        public void WriteBatchAlsoHonorsPlcItemLimit()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = Enumerable.Range(1, 5)
+                .Select(i => new ItemAddress($"8A0E{i:X4}.1"))
+                .ToArray();
+            var values = Enumerable.Range(1, 5)
+                .Select(i => (PValue)new ValueDInt(i))
+                .ToArray();
+
+            var batch = connection.DebugCreateWriteRequestBatchForTests(addresses, values, 3, 987);
+
+            Assert.Equal(3, batch.ItemCount);
+            Assert.InRange(batch.SerializedLength, 1, 987);
+        }
+
+        [Fact]
         public void OversizedLegacyPayloadIsRejectedBeforeFragmentation()
         {
             var connection = new S7CommPlusProtocolSession();

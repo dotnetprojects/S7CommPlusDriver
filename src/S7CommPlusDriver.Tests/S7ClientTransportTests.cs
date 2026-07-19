@@ -1,3 +1,4 @@
+using S7CommPlusDriver.Internal;
 using Xunit;
 
 namespace S7CommPlusDriver.Tests
@@ -58,6 +59,25 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(0, error);
             Assert.Single(transport.Sent);
             Assert.Equal(35, transport.Sent[0].Length);
+            Assert.Equal(S7CommPlusProtocolConstants.DefaultIsoTpduSize, client.PduSizeNegotiated);
+        }
+
+        [Fact]
+        public void ConnectReadsNegotiatedTpduSizeFromConnectionConfirm()
+        {
+            var transport = new FakeS7Transport { EmptyReceiveDelayMilliseconds = 500 };
+            transport.EnqueueReceive(new byte[] { 0x03, 0x00, 0x00, 0x0E });
+            transport.EnqueueReceive(new byte[] { 0x09, 0xD0, 0x00 });
+            transport.EnqueueReceive(new byte[] { 0x00, 0x00, 0x01, 0x00, 0xC0, 0x01, 0x09 });
+
+            var client = new S7Client(() => transport);
+            client.SetConnectionParams("1.2.3.4", 0x0600, System.Text.Encoding.ASCII.GetBytes(S7CommPlusDefaults.RemoteTsapEs));
+
+            var error = client.Connect();
+            client.Disconnect(50);
+
+            Assert.Equal(0, error);
+            Assert.Equal(512, client.PduSizeNegotiated);
         }
 
         [Fact]
