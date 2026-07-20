@@ -52,6 +52,8 @@ The override is async-context-local and the configured request timeout is restor
 
 `BrowseAsync()` returns one `VarInfo` for each primitive array instead of allocating an item for every indexed element. `VarInfo.ArrayElementCount` contains the total size and `VarInfo.ArrayDimensions` preserves every declared lower bound and dimension length. Arrays of structures remain expanded so their readable fields are still discoverable.
 
+Arrays of `String`, `Date_And_Time`, and packed `DTL` values support both complete-array and indexed symbolic reads. `DTL` arrays are returned as `PlcTagDTLArray`, including parallel nanosecond and packed-interface-timestamp values.
+
 Use the compatibility option only when individual indexed browse items are required:
 
 ```csharp

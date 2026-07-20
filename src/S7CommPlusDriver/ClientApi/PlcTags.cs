@@ -188,6 +188,8 @@ namespace S7CommPlusDriver.ClientApi
                 case Softdatatype.S7COMMP_SOFTDATATYPE_LDT:
                     return new PlcTagLDT(name, address, softdatatype);
                 case Softdatatype.S7COMMP_SOFTDATATYPE_DTL:
+                    if (Is1Dim)
+                        return new PlcTagDTLArray(name, address, softdatatype);
                     return new PlcTagDTL(name, address, softdatatype);
 
                 case Softdatatype.S7COMMP_SOFTDATATYPE_REMOTE:

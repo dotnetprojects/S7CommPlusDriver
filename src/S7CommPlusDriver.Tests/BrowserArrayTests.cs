@@ -1,4 +1,5 @@
 using S7CommPlusDriver.Internal;
+using S7CommPlusDriver.ClientApi;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -138,6 +139,70 @@ namespace S7CommPlusDriver.Tests
                 Assert.Equal(0U, variable.SymbolCrc);
                 Assert.True(variable.ContainsIndexedArray);
                 Assert.Equal(0U, S7CommPlusProtocolSession.CreateResolvedPlcTag(variable).Address.SymbolCrc);
+            });
+        }
+
+        [Fact]
+        public void DtlArrayRemainsAnOpaqueAggregateDespiteItsTypeRelation()
+        {
+            const uint rootTypeRelationId = 100;
+            const uint dtlTypeRelationId = 200;
+            var rootType = CreateTypeObject(
+                rootTypeRelationId,
+                "Timestamps",
+                Softdatatype.S7COMMP_SOFTDATATYPE_DTL,
+                new POffsetInfoType_Struct1Dim
+                {
+                    ArrayLowerBounds = 1,
+                    ArrayElementCount = 2,
+                    RelationId = dtlTypeRelationId,
+                });
+
+            var browser = new Browser(expandPrimitiveArrayElements: false);
+            browser.AddBlockNode(eNodeType.Root, "Data", 0x8A0E0001, rootTypeRelationId);
+            browser.SetTypeInfoContainerObjects(new List<PObject> { rootType });
+            browser.BuildTree();
+            browser.BuildFlatList();
+
+            var variable = Assert.Single(browser.GetVarInfoList());
+            Assert.Equal("Data.Timestamps", variable.Name);
+            Assert.Equal(Softdatatype.S7COMMP_SOFTDATATYPE_DTL, variable.Softdatatype);
+            Assert.Equal(2U, variable.ArrayElementCount);
+            Assert.Equal(1, Assert.Single(variable.ArrayDimensions).LowerBound);
+            var tag = Assert.IsType<PlcTagDTLArray>(S7CommPlusProtocolSession.CreateResolvedPlcTag(variable));
+            Assert.Equal(new[] { "8A0E0001.2A.0.1", "8A0E0001.2A.1.1" }, tag.AggregateElements.Select(element => element.Address.GetAccessString()));
+        }
+
+        [Fact]
+        public void ExpandedDtlArrayReturnsAddressableDtlElementsInsteadOfInternalFields()
+        {
+            const uint rootTypeRelationId = 100;
+            var rootType = CreateTypeObject(
+                rootTypeRelationId,
+                "Timestamps",
+                Softdatatype.S7COMMP_SOFTDATATYPE_DTL,
+                new POffsetInfoType_Struct1Dim
+                {
+                    ArrayLowerBounds = -1,
+                    ArrayElementCount = 2,
+                    RelationId = 200,
+                });
+
+            var browser = new Browser(expandPrimitiveArrayElements: true);
+            browser.AddBlockNode(eNodeType.Root, "Data", 0x8A0E0001, rootTypeRelationId);
+            browser.SetTypeInfoContainerObjects(new List<PObject> { rootType });
+            browser.BuildTree();
+            browser.BuildFlatList();
+
+            Assert.Equal(
+                new[] { "Data.Timestamps[-1]", "Data.Timestamps[0]" },
+                browser.GetVarInfoList().Select(variable => variable.Name));
+            Assert.All(browser.GetVarInfoList(), variable =>
+            {
+                Assert.Equal(Softdatatype.S7COMMP_SOFTDATATYPE_DTL, variable.Softdatatype);
+                Assert.True(variable.ContainsIndexedArray);
+                Assert.Equal(0U, variable.SymbolCrc);
+                Assert.EndsWith(".1", variable.AccessSequence);
             });
         }
 

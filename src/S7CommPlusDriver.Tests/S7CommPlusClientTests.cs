@@ -65,6 +65,60 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public async Task ComplexAggregateArraysReadThroughScalarElementAddresses()
+        {
+            var expectedDateTimes = new[]
+            {
+                new DateTime(2026, 7, 20, 15, 10, 48, 120),
+                new DateTime(1999, 12, 31, 23, 59, 58, 990),
+            };
+            var expectedDtls = new[]
+            {
+                new DateTime(2026, 7, 20, 15, 10, 48),
+                new DateTime(2025, 1, 2, 3, 4, 5),
+            };
+            var fake = new FakeS7CommPlusSession
+            {
+                ReadHandler = addresses =>
+                {
+                    Assert.Equal(
+                        new[]
+                        {
+                            "8A0E0001.10.0", "8A0E0001.10.1",
+                            "8A0E0001.11.0", "8A0E0001.11.1",
+                            "8A0E0001.12.0.1", "8A0E0001.12.1.1",
+                        },
+                        addresses.Select(address => address.GetAccessString()));
+                    return (
+                        0,
+                        new List<object?>
+                        {
+                            CreateStringValue("first"),
+                            CreateStringValue("second"),
+                            CreateDateAndTimeValue(expectedDateTimes[0]),
+                            CreateDateAndTimeValue(expectedDateTimes[1]),
+                            CreateDtlValue(expectedDtls[0], 123_456_789, 11),
+                            CreateDtlValue(expectedDtls[1], 987_654_321, 22),
+                        },
+                        new List<ulong> { 0, 0, 0, 0, 0, 0 });
+                },
+            };
+            var strings = Assert.IsType<PlcTagStringArray>(CreateAggregateTag(Softdatatype.S7COMMP_SOFTDATATYPE_STRING, "DB.Strings", "8A0E0001.10"));
+            var dateAndTimes = Assert.IsType<PlcTagDateAndTimeArray>(CreateAggregateTag(Softdatatype.S7COMMP_SOFTDATATYPE_DATEANDTIME, "DB.DateAndTimes", "8A0E0001.11"));
+            var dtls = Assert.IsType<PlcTagDTLArray>(CreateAggregateTag(Softdatatype.S7COMMP_SOFTDATATYPE_DTL, "DB.Dtls", "8A0E0001.12"));
+            var client = CreateClient(fake);
+
+            var result = await client.ReadAsync(new PlcTag[] { strings, dateAndTimes, dtls });
+
+            Assert.All(result.Items, item => Assert.True(item.IsSuccess));
+            Assert.Equal(new[] { "first", "second" }, strings.Value);
+            Assert.Equal(expectedDateTimes, dateAndTimes.Value);
+            Assert.Equal(expectedDtls, dtls.Value);
+            Assert.Equal(new uint[] { 123_456_789, 987_654_321 }, dtls.ValueNanosecond);
+            Assert.Equal(new ulong[] { 11, 22 }, dtls.DTLInterfaceTimestamps);
+        }
+
+        [Fact]
         public async Task AggregateReadSplitsExpandedElementsAtDefaultPlcLimit()
         {
             var nextValue = 0U;
@@ -1820,6 +1874,67 @@ namespace S7CommPlusDriver.Tests
                     Softdatatype.S7COMMP_SOFTDATATYPE_UDINT))
                 .ToArray());
             return aggregate;
+        }
+
+        private static PlcTag CreateAggregateTag(uint softdatatype, string name, string accessSequence)
+        {
+            return S7CommPlusProtocolSession.CreateResolvedPlcTag(new VarInfo
+            {
+                Name = name,
+                AccessSequence = accessSequence,
+                Softdatatype = softdatatype,
+                ArrayElementCount = 2,
+                ArrayDimensions = new[] { new S7CommPlusArrayDimension(1, 2) },
+            });
+        }
+
+        private static ValueUSIntArray CreateStringValue(string value)
+        {
+            var bytes = Encoding.GetEncoding("ISO-8859-1").GetBytes(value);
+            return new ValueUSIntArray(new[] { checked((byte)bytes.Length), checked((byte)bytes.Length) }.Concat(bytes).ToArray());
+        }
+
+        private static ValueUSIntArray CreateDateAndTimeValue(DateTime value)
+        {
+            var year = value.Year < 2000 ? value.Year - 1900 : value.Year - 2000;
+            return new ValueUSIntArray(new[]
+            {
+                ToBcd(year),
+                ToBcd(value.Month),
+                ToBcd(value.Day),
+                ToBcd(value.Hour),
+                ToBcd(value.Minute),
+                ToBcd(value.Second),
+                ToBcd(value.Millisecond / 10),
+                checked((byte)((value.Millisecond % 10) << 4)),
+            });
+        }
+
+        private static ValueStruct CreateDtlValue(DateTime value, uint nanoseconds, ulong interfaceTimestamp)
+        {
+            var bytes = new byte[12];
+            bytes[0] = (byte)(value.Year >> 8);
+            bytes[1] = (byte)value.Year;
+            bytes[2] = (byte)value.Month;
+            bytes[3] = (byte)value.Day;
+            bytes[5] = (byte)value.Hour;
+            bytes[6] = (byte)value.Minute;
+            bytes[7] = (byte)value.Second;
+            bytes[8] = (byte)(nanoseconds >> 24);
+            bytes[9] = (byte)(nanoseconds >> 16);
+            bytes[10] = (byte)(nanoseconds >> 8);
+            bytes[11] = (byte)nanoseconds;
+            var result = new ValueStruct(0x02000043)
+            {
+                PackedStructInterfaceTimestamp = interfaceTimestamp,
+            };
+            result.AddStructElement(0x02000043, new ValueByteArray(bytes));
+            return result;
+        }
+
+        private static byte ToBcd(int value)
+        {
+            return checked((byte)(((value / 10) << 4) | (value % 10)));
         }
 
         private static S7CommPlusSubscriptionOptions FastSubscriptionOptions()

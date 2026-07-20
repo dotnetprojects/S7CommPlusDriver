@@ -163,6 +163,12 @@ var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
 Arrays of structures are always traversed because their readable member fields
 cannot be represented by one primitive value.
 
+`String`, `Date_And_Time`, and packed `DTL` arrays can be resolved and read both
+as complete arrays and as indexed elements. The client expands these requests
+into scalar wire addresses when the PLC does not accept the declaration address;
+`PlcTagDTLArray` exposes the flattened `Value`, `ValueNanosecond`, and
+`DTLInterfaceTimestamps` arrays.
+
 ### Resolving many symbols efficiently
 
 Use `GetTagsBySymbolsAsync` to resolve a large configured tag set with one PLC

@@ -122,6 +122,10 @@ namespace S7CommPlusDriver
                 case eNodeType.Array:
                     names += node.Name;
                     accessIds += "." + String.Format("{0:X}", node.AccessId);
+                    if (node.Vte?.OffsetInfoType.HasRelation() == true)
+                    {
+                        accessIds += ".1";
+                    }
                     nextCrcPath = ReplaceLastCrcSegmentWithArray(node, crcPath);
                     break;
                 case eNodeType.StructArray:
@@ -411,7 +415,8 @@ namespace S7CommPlusDriver
                         ArrayElementCount = ioit.GetArrayElementCount();
                         ArrayLowerBounds = ioit.GetArrayLowerBounds();
 
-                        if (!vte.OffsetInfoType.HasRelation() && !m_expandPrimitiveArrayElements)
+                        if ((!vte.OffsetInfoType.HasRelation() || IsOpaqueSystemDatatype(vte.Softdatatype))
+                            && !m_expandPrimitiveArrayElements)
                         {
                             subnode.NodeType = eNodeType.PrimitiveArray;
                             element_index++;
@@ -422,7 +427,7 @@ namespace S7CommPlusDriver
                         for (uint i = 0; i < ArrayElementCount; i++)
                         {
                             // Handle Struct/FB Array separate: Has an additional ID between array index and access-LID.
-                            if (vte.OffsetInfoType.HasRelation())
+                            if (vte.OffsetInfoType.HasRelation() && !IsOpaqueSystemDatatype(vte.Softdatatype))
                             {
                                 var arraynode = new Node
                                 {
@@ -480,7 +485,8 @@ namespace S7CommPlusDriver
                         MdimArrayElementCount = ioit.GetMdimArrayElementCount();
                         MdimArrayLowerBounds = ioit.GetMdimArrayLowerBounds();
 
-                        if (!vte.OffsetInfoType.HasRelation() && !m_expandPrimitiveArrayElements)
+                        if ((!vte.OffsetInfoType.HasRelation() || IsOpaqueSystemDatatype(vte.Softdatatype))
+                            && !m_expandPrimitiveArrayElements)
                         {
                             subnode.NodeType = eNodeType.PrimitiveArray;
                             element_index++;
@@ -522,7 +528,7 @@ namespace S7CommPlusDriver
                                 }
                             }
 
-                            if (vte.OffsetInfoType.HasRelation())
+                            if (vte.OffsetInfoType.HasRelation() && !IsOpaqueSystemDatatype(vte.Softdatatype))
                             {
                                 var arraynode = new Node
                                 {
@@ -766,6 +772,15 @@ namespace S7CommPlusDriver
                 default:
                     return 0;
             }
+        }
+
+        /// <summary>
+        /// Identifies system datatypes whose relation describes their packed wire representation rather than user-addressable fields.
+        /// Such values remain scalar leaves even when their PLC metadata carries a relation id.
+        /// </summary>
+        private static bool IsOpaqueSystemDatatype(uint softdatatype)
+        {
+            return softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL;
         }
 
         private bool IsSoftdatatypeSupported(uint softdatatype)

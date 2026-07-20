@@ -3,6 +3,7 @@ using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Reflection;
 
 namespace S7CommPlusDriver.ClientApi
@@ -90,7 +91,7 @@ namespace S7CommPlusDriver.ClientApi
         /// Publishes a completed set of scalar element reads as one aggregate value and mirrors it into a compatible typed array tag.
         /// </summary>
         /// <param name="itemError">The first element error, or zero when every element succeeded.</param>
-        internal void CompleteAggregateRead(ulong itemError)
+        internal virtual void CompleteAggregateRead(ulong itemError)
         {
             LastReadError = itemError;
             if (itemError != 0 || m_AggregateElements.Count == 0)
@@ -128,7 +129,7 @@ namespace S7CommPlusDriver.ClientApi
         /// Unsupported native array types intentionally keep their explicitly populated element values unchanged.
         /// </summary>
         /// <exception cref="InvalidOperationException">A typed parent array does not contain exactly one value per aggregate element.</exception>
-        internal void PrepareAggregateWrite()
+        internal virtual void PrepareAggregateWrite()
         {
             if (m_AggregateElements.Count == 0)
             {
@@ -2408,6 +2409,155 @@ namespace S7CommPlusDriver.ClientApi
             }
             s += "</Value>";
             return ResultString(this, s);
+        }
+    }
+
+    /// <summary>
+    /// Represents an array of Siemens DTL values. DTL arrays are transferred as individually addressed packed structures because
+    /// controllers do not consistently accept the array declaration address itself.
+    /// </summary>
+    public class PlcTagDTLArray : PlcTag
+    {
+        private DateTime[] m_Value = Array.Empty<DateTime>();
+        private uint[] m_ValueNanosecond = Array.Empty<uint>();
+        private ulong[] m_DTLInterfaceTimestamps = Array.Empty<ulong>();
+
+        /// <summary>Gets or sets the date/time portion of every DTL element.</summary>
+        public DateTime[] Value
+        {
+            get => m_Value;
+            set => m_Value = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        /// <summary>Gets or sets the nanosecond portion of every DTL element.</summary>
+        public uint[] ValueNanosecond
+        {
+            get => m_ValueNanosecond;
+            set => m_ValueNanosecond = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        /// <summary>
+        /// Gets or sets the packed-structure interface timestamp used by each DTL element. Values learned while reading can be
+        /// retained for a subsequent write.
+        /// </summary>
+        public ulong[] DTLInterfaceTimestamps
+        {
+            get => m_DTLInterfaceTimestamps;
+            set => m_DTLInterfaceTimestamps = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public PlcTagDTLArray(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype)
+        {
+        }
+
+        public override void ProcessReadResult(object valueObj, ulong error)
+        {
+            LastReadError = error;
+            if (CheckErrorAndType(error, valueObj, typeof(ValueStructArray)) != 0)
+            {
+                Quality = PlcTagQC.TAG_QUALITY_BAD;
+                return;
+            }
+
+            var structValues = ((ValueStructArray)valueObj).GetValue();
+            var elementTags = new PlcTagDTL[structValues.Length];
+            for (var index = 0; index < structValues.Length; index++)
+            {
+                var elementTag = new PlcTagDTL($"{Name}[#{index}]", Address, Datatype);
+                elementTag.ProcessReadResult(structValues[index], 0);
+                if (elementTag.Quality != PlcTagQC.TAG_QUALITY_GOOD)
+                {
+                    Quality = PlcTagQC.TAG_QUALITY_BAD;
+                    return;
+                }
+                elementTags[index] = elementTag;
+            }
+
+            CopyElementValues(elementTags);
+            Quality = PlcTagQC.TAG_QUALITY_GOOD;
+        }
+
+        internal override PValue GetWriteValue()
+        {
+            NormalizeAndValidateCompanionArrays();
+            var structValues = new ValueStruct[Value.Length];
+            for (var index = 0; index < Value.Length; index++)
+            {
+                var elementTag = CreateElementForWrite(index);
+                structValues[index] = (ValueStruct)elementTag.GetWriteValue();
+            }
+            return new ValueStructArray(structValues);
+        }
+
+        internal override void CompleteAggregateRead(ulong itemError)
+        {
+            base.CompleteAggregateRead(itemError);
+            if (itemError != 0 || Quality != PlcTagQC.TAG_QUALITY_GOOD)
+            {
+                return;
+            }
+
+            CopyElementValues(AggregateElements.Cast<PlcTagDTL>().ToArray());
+        }
+
+        internal override void PrepareAggregateWrite()
+        {
+            NormalizeAndValidateCompanionArrays();
+            base.PrepareAggregateWrite();
+            for (var index = 0; index < AggregateElements.Count; index++)
+            {
+                var element = (PlcTagDTL)AggregateElements[index];
+                element.ValueNanosecond = ValueNanosecond[index];
+                if (DTLInterfaceTimestamps.Length > 0)
+                {
+                    element.DTLInterfaceTimestamp = DTLInterfaceTimestamps[index];
+                }
+            }
+        }
+
+        public override string ToString()
+        {
+            var values = AggregateElements.Count > 0
+                ? AggregateElements.Cast<PlcTagDTL>().Select(element => element.ToString())
+                : Value.Select(value => value.ToString());
+            return ResultString(this, $"<Value type=\"DTLArray\" size=\"{Value.Length}\">{string.Join(string.Empty, values.Select(value => $"<Value>{value}</Value>"))}</Value>");
+        }
+
+        private PlcTagDTL CreateElementForWrite(int index)
+        {
+            var element = new PlcTagDTL($"{Name}[#{index}]", Address, Datatype)
+            {
+                Value = Value[index],
+                ValueNanosecond = ValueNanosecond[index],
+            };
+            if (DTLInterfaceTimestamps.Length > 0)
+            {
+                element.DTLInterfaceTimestamp = DTLInterfaceTimestamps[index];
+            }
+            return element;
+        }
+
+        private void CopyElementValues(IReadOnlyList<PlcTagDTL> elements)
+        {
+            Value = elements.Select(element => element.Value).ToArray();
+            ValueNanosecond = elements.Select(element => element.ValueNanosecond).ToArray();
+            DTLInterfaceTimestamps = elements.Select(element => element.DTLInterfaceTimestamp).ToArray();
+        }
+
+        private void NormalizeAndValidateCompanionArrays()
+        {
+            if (ValueNanosecond.Length == 0 && Value.Length > 0)
+            {
+                ValueNanosecond = new uint[Value.Length];
+            }
+            if (ValueNanosecond.Length != Value.Length)
+            {
+                throw new InvalidOperationException($"DTL array tag '{Name}' requires one nanosecond value per date/time value.");
+            }
+            if (DTLInterfaceTimestamps.Length != 0 && DTLInterfaceTimestamps.Length != Value.Length)
+            {
+                throw new InvalidOperationException($"DTL array tag '{Name}' requires either zero or one interface timestamp per element.");
+            }
         }
     }
 

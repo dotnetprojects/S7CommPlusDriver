@@ -1982,7 +1982,10 @@ namespace S7CommPlusDriver
             var elementTags = GetAggregateArrayElementAccessIds(varType)
                 .Select(accessId =>
                 {
-                    var elementAddress = CreateAggregateArrayElementAddress(varInfo.AccessSequence, accessId);
+                    var elementAddress = CreateAggregateArrayElementAddress(
+                        varInfo.AccessSequence,
+                        accessId,
+                        varType.OffsetInfoType.HasRelation());
                     return PlcTags.TagFactory($"{varInfo.Name}[#{accessId}]", elementAddress, varType.Softdatatype);
                 })
                 .Where(elementTag => elementTag != null)
@@ -2017,7 +2020,10 @@ namespace S7CommPlusDriver
             var elementTags = GetAggregateArrayElementAccessIds(varInfo)
                 .Select(accessId => PlcTags.TagFactory(
                     $"{varInfo.Name}[#{accessId}]",
-                    CreateAggregateArrayElementAddress(varInfo.AccessSequence, accessId),
+                    CreateAggregateArrayElementAddress(
+                        varInfo.AccessSequence,
+                        accessId,
+                        RequiresArrayElementRelationSelector(varInfo.Softdatatype)),
                     varInfo.Softdatatype))
                 .Where(elementTag => elementTag != null)
                 .ToList();
@@ -2126,12 +2132,21 @@ namespace S7CommPlusDriver
         /// </summary>
         /// <param name="aggregateAccessSequence">Resolved low-level access sequence of the aggregate array.</param>
         /// <param name="accessId">Linear element access ID in PLC storage order.</param>
+        /// <param name="requiresRelationSelector">Whether the packed system datatype requires the protocol's literal relation selector.</param>
         /// <returns>An element address with a zero symbol CRC.</returns>
-        internal static ItemAddress CreateAggregateArrayElementAddress(string aggregateAccessSequence, uint accessId)
+        internal static ItemAddress CreateAggregateArrayElementAddress(
+            string aggregateAccessSequence,
+            uint accessId,
+            bool requiresRelationSelector = false)
         {
             if (string.IsNullOrWhiteSpace(aggregateAccessSequence)) throw new ArgumentException("An aggregate access sequence is required.", nameof(aggregateAccessSequence));
 
-            return new ItemAddress($"{aggregateAccessSequence}.{accessId:X}");
+            return new ItemAddress($"{aggregateAccessSequence}.{accessId:X}{(requiresRelationSelector ? ".1" : string.Empty)}");
+        }
+
+        private static bool RequiresArrayElementRelationSelector(uint softdatatype)
+        {
+            return softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL;
         }
 
         /// <summary>
@@ -2206,7 +2221,10 @@ namespace S7CommPlusDriver
 
             tag = PlcTags.TagFactory(
                 requestedSymbol,
-                CreateAggregateArrayElementAddress(aggregateVariable.AccessSequence, accessId),
+                CreateAggregateArrayElementAddress(
+                    aggregateVariable.AccessSequence,
+                    accessId,
+                    RequiresArrayElementRelationSelector(aggregateVariable.Softdatatype)),
                 aggregateVariable.Softdatatype);
             return tag != null;
         }

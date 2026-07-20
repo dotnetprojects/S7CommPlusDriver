@@ -3492,6 +3492,10 @@ namespace S7CommPlusDriver
     {
         private readonly ValueStruct[] _values;
 
+        internal ValueStructArray(ValueStruct[] values) : this(values, FLAGS_ARRAY)
+        {
+        }
+
         /// <summary>
         /// Initializes a Struct array while preserving its collection-shape flags.
         /// </summary>
