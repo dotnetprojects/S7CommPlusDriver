@@ -191,6 +191,41 @@ await client.InvalidateSymbolCatalogAsync();
 var refreshedTags = await client.GetTagsBySymbolsAsync(symbols);
 ```
 
+Applications that know their complete configured symbol set can avoid retaining
+the full PLC catalog. Read and verify the program hash first, then create a
+compact accessor catalog whose entries contain only the datatype and wire
+addresses required by those symbols:
+
+```csharp
+var structure = await client.GetPlcStructureXmlAsync();
+var accessors = await client.CreateTagAccessorCatalogAsync(
+    symbols,
+    structure.ProgramChangeMarker.StructureHash);
+var tags = accessors.CreateTags(symbols);
+```
+
+The compact catalog also records requested symbols that were not present, so
+`CoversSymbols` can distinguish a known-missing tag from a tag added after the
+catalog was built. It can be persisted without retaining `VarInfo` objects:
+
+```csharp
+await using (var output = File.Create(cachePath))
+{
+    accessors.WriteTo(output);
+}
+
+await using var input = File.OpenRead(cachePath);
+var cachedAccessors = S7CommPlusTagAccessorCatalog.ReadFrom(
+    input,
+    structure.ProgramChangeMarker.StructureHash);
+```
+
+`ReadFrom` rejects malformed files, unsupported format versions, and program
+hash mismatches. Each `CreateTags` call returns an independent set of mutable
+`PlcTag` objects. If an application already has the matching `BrowseAsync`
+result, `S7CommPlusClient.CreateTagAccessorCatalog` creates the same compact
+catalog locally without another PLC request.
+
 The built-in connection defaults match Siemens S7CommPlus HMI communication:
 ISO-on-TCP port `S7CommPlusDefaults.IsoTcpPort` (`102`), local TSAP
 `S7CommPlusDefaults.LocalTsap` (`0x0600`), and remote TSAP

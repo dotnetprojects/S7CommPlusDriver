@@ -204,10 +204,96 @@ namespace S7CommPlusDriver
             IEnumerable<string> symbols,
             CancellationToken cancellationToken = default)
         {
-            if (symbols == null)
+            var requestedSymbols = NormalizeRequestedSymbols(symbols);
+            if (requestedSymbols.Count == 0)
             {
-                throw new ArgumentNullException(nameof(symbols));
+                return Task.FromResult<IReadOnlyDictionary<string, PlcTag>>(
+                    new Dictionary<string, PlcTag>(StringComparer.Ordinal));
             }
+
+            return ExecuteReadOperationAsync("GetTagsBySymbols", session =>
+            {
+                var symbolCatalog = GetOrCreateSymbolCatalog(session);
+                return ResolveTagsBySymbols(symbolCatalog, requestedSymbols);
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Creates a compact accessor catalog from an existing PLC browse result without retaining the complete symbol metadata.
+        /// </summary>
+        /// <param name="variables">The aggregate <see cref="BrowseAsync(CancellationToken)"/> result from the matching PLC program.</param>
+        /// <param name="symbols">Fully qualified symbols that the compact catalog must cover, including desired missing results.</param>
+        /// <param name="programStructureHash">The verified structure hash returned by <see cref="GetPlcStructureXmlAsync(CancellationToken)"/>.</param>
+        /// <returns>An immutable catalog that can create fresh mutable accessors and be persisted through its stream API.</returns>
+        /// <exception cref="ArgumentNullException">A required argument is <see langword="null"/>.</exception>
+        /// <exception cref="ArgumentException">A symbol is invalid.</exception>
+        public static S7CommPlusTagAccessorCatalog CreateTagAccessorCatalog(
+            IEnumerable<VarInfo> variables,
+            IEnumerable<string> symbols,
+            string programStructureHash)
+        {
+            if (variables == null) throw new ArgumentNullException(nameof(variables));
+            if (programStructureHash == null) throw new ArgumentNullException(nameof(programStructureHash));
+            if (string.IsNullOrWhiteSpace(programStructureHash))
+            {
+                throw new ArgumentException("A verified PLC program-structure hash is required.", nameof(programStructureHash));
+            }
+
+            var requestedSymbols = NormalizeRequestedSymbols(symbols);
+            var symbolCatalog = CreateSymbolCatalog(variables);
+            var resolvedTags = ResolveTagsBySymbols(symbolCatalog, requestedSymbols);
+            return new S7CommPlusTagAccessorCatalog(programStructureHash, requestedSymbols, resolvedTags);
+        }
+
+        /// <summary>
+        /// Browses the current PLC once and returns compact accessors for a complete configured symbol set without retaining the
+        /// full symbol catalog on this client.
+        /// </summary>
+        /// <param name="symbols">Fully qualified symbols that the compact catalog must cover.</param>
+        /// <param name="programStructureHash">The verified PLC structure hash associated with the browse.</param>
+        /// <param name="cancellationToken">Cancels the browse and its client-side timeout wait.</param>
+        /// <returns>An immutable, persistable accessor catalog containing resolved and known-missing symbols.</returns>
+        /// <remarks>
+        /// Unlike <see cref="GetTagsBySymbolsAsync(IEnumerable{string}, CancellationToken)"/>, this operation never stores the full
+        /// <see cref="VarInfo"/> lookup in the client. It is intended for applications that resolve their complete tag set at once.
+        /// </remarks>
+        public Task<S7CommPlusTagAccessorCatalog> CreateTagAccessorCatalogAsync(
+            IEnumerable<string> symbols,
+            string programStructureHash,
+            CancellationToken cancellationToken = default)
+        {
+            if (programStructureHash == null) throw new ArgumentNullException(nameof(programStructureHash));
+            if (string.IsNullOrWhiteSpace(programStructureHash))
+            {
+                throw new ArgumentException("A verified PLC program-structure hash is required.", nameof(programStructureHash));
+            }
+            var requestedSymbols = NormalizeRequestedSymbols(symbols);
+            if (requestedSymbols.Count == 0)
+            {
+                return Task.FromResult(new S7CommPlusTagAccessorCatalog(
+                    programStructureHash,
+                    requestedSymbols,
+                    new Dictionary<string, PlcTag>(StringComparer.Ordinal)));
+            }
+
+            return ExecuteReadOperationAsync("CreateTagAccessorCatalog", session =>
+            {
+                var error = session.BrowseVariables(false, out var variables);
+                ThrowIfError("CreateTagAccessorCatalog", error);
+                var symbolCatalog = CreateSymbolCatalog(variables ?? Enumerable.Empty<VarInfo>());
+                var resolvedTags = ResolveTagsBySymbols(symbolCatalog, requestedSymbols);
+                return new S7CommPlusTagAccessorCatalog(programStructureHash, requestedSymbols, resolvedTags);
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
+        /// <summary>
+        /// Validates and deduplicates public symbol input while retaining deterministic first-occurrence order.
+        /// </summary>
+        /// <param name="symbols">The caller-provided symbol sequence.</param>
+        /// <returns>A case-sensitive collection containing every distinct requested symbol.</returns>
+        private static IReadOnlyCollection<string> NormalizeRequestedSymbols(IEnumerable<string> symbols)
+        {
+            if (symbols == null) throw new ArgumentNullException(nameof(symbols));
 
             var requestedSymbols = new HashSet<string>(StringComparer.Ordinal);
             foreach (var symbol in symbols)
@@ -218,33 +304,50 @@ namespace S7CommPlusDriver
                 }
                 requestedSymbols.Add(symbol);
             }
-            if (requestedSymbols.Count == 0)
-            {
-                return Task.FromResult<IReadOnlyDictionary<string, PlcTag>>(
-                    new Dictionary<string, PlcTag>(StringComparer.Ordinal));
-            }
+            return requestedSymbols;
+        }
 
-            return ExecuteReadOperationAsync("GetTagsBySymbols", session =>
+        /// <summary>Builds the case-sensitive symbol lookup shared by retained and one-shot catalog resolution.</summary>
+        /// <param name="variables">The aggregate PLC browse metadata.</param>
+        /// <returns>A lookup containing the first valid browse item for every symbolic name.</returns>
+        private static IReadOnlyDictionary<string, VarInfo> CreateSymbolCatalog(IEnumerable<VarInfo> variables)
+        {
+            var symbolCatalog = new Dictionary<string, VarInfo>(StringComparer.Ordinal);
+            foreach (var variable in variables)
             {
-                var symbolCatalog = GetOrCreateSymbolCatalog(session);
-                var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
-                foreach (var requestedSymbol in requestedSymbols)
+                if (variable != null && !string.IsNullOrWhiteSpace(variable.Name))
                 {
-                    if (symbolCatalog.TryGetValue(requestedSymbol, out var variable))
+                    symbolCatalog.TryAdd(variable.Name, variable);
+                }
+            }
+            return symbolCatalog;
+        }
+
+        /// <summary>Creates mutable tags for exact symbols and indexed aggregate-array elements from one shared lookup.</summary>
+        /// <param name="symbolCatalog">The complete case-sensitive PLC symbol lookup.</param>
+        /// <param name="requestedSymbols">The normalized symbols to resolve.</param>
+        /// <returns>A mapping that omits absent and unsupported symbols.</returns>
+        private static IReadOnlyDictionary<string, PlcTag> ResolveTagsBySymbols(
+            IReadOnlyDictionary<string, VarInfo> symbolCatalog,
+            IEnumerable<string> requestedSymbols)
+        {
+            var resolvedTags = new Dictionary<string, PlcTag>(StringComparer.Ordinal);
+            foreach (var requestedSymbol in requestedSymbols)
+            {
+                if (symbolCatalog.TryGetValue(requestedSymbol, out var variable))
+                {
+                    var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+                    if (tag != null)
                     {
-                        var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
-                        if (tag != null)
-                        {
-                            resolvedTags.Add(requestedSymbol, tag);
-                        }
-                    }
-                    else if (TryResolveAggregateArrayElement(symbolCatalog, requestedSymbol, out var elementTag))
-                    {
-                        resolvedTags.Add(requestedSymbol, elementTag);
+                        resolvedTags.Add(requestedSymbol, tag);
                     }
                 }
-                return (IReadOnlyDictionary<string, PlcTag>)resolvedTags;
-            }, _options.BrowseTimeout, cancellationToken);
+                else if (TryResolveAggregateArrayElement(symbolCatalog, requestedSymbol, out var elementTag))
+                {
+                    resolvedTags.Add(requestedSymbol, elementTag);
+                }
+            }
+            return resolvedTags;
         }
 
         /// <summary>
@@ -1160,15 +1263,7 @@ namespace S7CommPlusDriver
 
             var error = session.BrowseVariables(false, out var variables);
             ThrowIfError("GetTagsBySymbols", error);
-            var symbolCatalog = new Dictionary<string, VarInfo>(StringComparer.Ordinal);
-            foreach (var variable in variables ?? Enumerable.Empty<VarInfo>())
-            {
-                if (variable != null && !string.IsNullOrWhiteSpace(variable.Name))
-                {
-                    symbolCatalog.TryAdd(variable.Name, variable);
-                }
-            }
-            _symbolCatalog = symbolCatalog;
+            _symbolCatalog = CreateSymbolCatalog(variables ?? Enumerable.Empty<VarInfo>());
             return _symbolCatalog;
         }
 

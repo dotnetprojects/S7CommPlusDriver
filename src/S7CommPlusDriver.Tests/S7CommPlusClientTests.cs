@@ -436,6 +436,31 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(2, fake.BrowseVariablesCount);
         }
 
+        /// <summary>Ensures the one-shot accessor-catalog API does not seed the client's retained full-symbol cache.</summary>
+        [Fact]
+        public async Task OneShotAccessorCatalogDoesNotRetainFullSymbolBrowse()
+        {
+            var fake = new FakeS7CommPlusSession
+            {
+                BrowseVariablesHandler = () => (0, new List<VarInfo>
+                {
+                    new VarInfo
+                    {
+                        Name = "DB.Value",
+                        AccessSequence = "8A0E0001.F",
+                        Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_INT,
+                    },
+                }),
+            };
+            var client = CreateClient(fake);
+
+            var catalog = await client.CreateTagAccessorCatalogAsync(new[] { "DB.Value" }, "HASH");
+            await client.GetTagsBySymbolsAsync(new[] { "DB.Value" });
+
+            Assert.Equal(1, catalog.ResolvedSymbolCount);
+            Assert.Equal(2, fake.BrowseVariablesCount);
+        }
+
         [Fact]
         public async Task DisconnectIsIdempotent()
         {
