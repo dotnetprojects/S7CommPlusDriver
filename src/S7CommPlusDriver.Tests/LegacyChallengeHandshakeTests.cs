@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Xunit;
+using Convert = S7CommPlusDriver.RuntimeCompatibility;
 
 namespace S7CommPlusDriver.Tests
 {

@@ -317,7 +317,10 @@ namespace S7CommPlusDriver
             {
                 if (variable != null && !string.IsNullOrWhiteSpace(variable.Name))
                 {
-                    symbolCatalog.TryAdd(variable.Name, variable);
+                    if (!symbolCatalog.ContainsKey(variable.Name))
+                    {
+                        symbolCatalog.Add(variable.Name, variable);
+                    }
                 }
             }
             return symbolCatalog;
@@ -1183,7 +1186,7 @@ namespace S7CommPlusDriver
         {
             var values = new List<object>(requestTags.Count);
             var itemErrors = new List<ulong>(requestTags.Count);
-            foreach (var batch in requestTags.Chunk(_tagsPerReadRequestMax))
+            foreach (var batch in RuntimeCompatibility.Chunk(requestTags, _tagsPerReadRequestMax))
             {
                 var error = session.ReadValues(batch.Select(tag => tag.Address).ToList(), out var batchValues, out var batchErrors);
                 ThrowIfError("ReadTags", error);
@@ -1207,7 +1210,7 @@ namespace S7CommPlusDriver
             IReadOnlyCollection<PlcTag> requestTags)
         {
             var itemErrors = new List<ulong>(requestTags.Count);
-            foreach (var batch in requestTags.Chunk(_tagsPerWriteRequestMax))
+            foreach (var batch in RuntimeCompatibility.Chunk(requestTags, _tagsPerWriteRequestMax))
             {
                 var error = session.WriteValues(
                     batch.Select(tag => tag.Address).ToList(),
@@ -1726,7 +1729,7 @@ namespace S7CommPlusDriver
         {
             try
             {
-                return await Task.Run(func).WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+                return await RuntimeCompatibility.WaitAsync(Task.Run(func), timeout, cancellationToken).ConfigureAwait(false);
             }
             catch (TimeoutException ex)
             {

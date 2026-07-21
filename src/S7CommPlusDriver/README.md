@@ -10,13 +10,13 @@ dotnet add package DotNetProjects.S7CommPlusDriver
 
 Use `S7CommPlusClient` for new applications. It provides async connect, browse, bulk symbol resolution, read, write, alarm, subscription, CPU metadata/control, block and symbol-comment metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
 
-The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net8.0` and `net9.0`, the default security mode is `Auto`: it tries TLS first and reconnects with HarpoS7-derived legacy challenge authentication if the PLC rejects TLS. Set the mode to `Tls` to prohibit fallback, or `LegacyChallenge` to skip the TLS attempt. `net6.0` remains TLS-only.
+The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net48`, `net8.0`, and `net9.0`, the default security mode is `Auto`: it tries TLS first and reconnects with HarpoS7-derived legacy challenge authentication if the PLC rejects TLS. Set the mode to `Tls` to prohibit fallback, or `LegacyChallenge` to skip the TLS attempt. `net6.0` remains TLS-only. .NET Framework 4.8 uses the managed BouncyCastle backend because the native OpenSSL resolver requires modern .NET.
 
 Default connection parameters are exposed through `S7CommPlusDefaults`: ISO-on-TCP port `102`, local TSAP `0x0600`, HMI remote TSAP `SIMATIC-ROOT-HMI`, and engineering remote TSAP `SIMATIC-ROOT-ES`. Remote TSAP values are validated as ASCII COTP parameters before connecting.
 
 ## Older PLCs / Legacy Challenge Auth
 
-Siemens OMS names the old non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Because `Auto` is the `net8.0`/`net9.0` default, applications that must prohibit fallback should explicitly use `S7CommPlusSecurityMode.Tls`.
+Siemens OMS names the old non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Because `Auto` is the `net48`/`net8.0`/`net9.0` default, applications that must prohibit fallback should explicitly use `S7CommPlusSecurityMode.Tls`.
 
 ```csharp
 await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
@@ -31,7 +31,7 @@ var cpuInfo = await client.GetCpuInfoAsync();
 await client.DisconnectAsync();
 ```
 
-Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation references the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages for challenge/key/digest primitives on `net8.0` and `net9.0`, while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.
+Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation references the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages for challenge/key/digest primitives on `net48`, `net8.0`, and `net9.0`, while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.
 
 Legacy integrity keys expire even on active connections; ordinary reads do not extend their lifetime. The driver renews them every 25 minutes by default. Use `LegacySessionKeyRefreshEnabled` and `LegacySessionKeyRefreshInterval` to change this behavior. The renewal is an internal session-control exchange, not a PLC tag write, and works while `WriteEnabled` remains `false`.
 

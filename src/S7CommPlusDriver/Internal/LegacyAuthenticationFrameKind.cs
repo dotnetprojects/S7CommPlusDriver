@@ -1,4 +1,4 @@
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
 namespace S7CommPlusDriver.Internal
 {
     internal enum LegacyAuthenticationFrameKind

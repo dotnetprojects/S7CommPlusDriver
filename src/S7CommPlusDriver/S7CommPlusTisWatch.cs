@@ -246,7 +246,7 @@ namespace S7CommPlusDriver
             if (String.IsNullOrWhiteSpace(type))
                 return "";
 
-            var decoded = type.Replace("&quot;", "\"", StringComparison.OrdinalIgnoreCase);
+            var decoded = RuntimeCompatibility.ReplaceOrdinalIgnoreCase(type, "&quot;", "\"");
             var end = decoded.LastIndexOf('"');
             if (end >= 0 && end + 1 < decoded.Length)
             {
@@ -275,7 +275,7 @@ namespace S7CommPlusDriver
             try
             {
                 var ticks = checked((long)(nanosecondsSinceUnixEpoch / 100UL));
-                var date = DateTimeOffset.UnixEpoch.AddTicks(ticks);
+                var date = RuntimeCompatibility.UnixEpoch.AddTicks(ticks);
                 var remainder = nanosecondsSinceUnixEpoch % 1_000_000_000UL;
                 return remainder == 0
                     ? date.ToString("LDT#yyyy-MM-dd-HH:mm:ss", CultureInfo.InvariantCulture)

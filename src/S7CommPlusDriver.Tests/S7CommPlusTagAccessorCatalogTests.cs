@@ -91,10 +91,10 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(
                 new[] { "8A0E0001.F.0", "8A0E0001.F.1", "8A0E0001.F.2", "8A0E0001.F.8", "8A0E0001.F.9", "8A0E0001.F.A" },
                 first.AggregateElements.Select(element => element.Address.GetAccessString()));
-            Assert.All(first.AggregateElements.Zip(second.AggregateElements), pair =>
+            Assert.All(first.AggregateElements.Zip(second.AggregateElements, (firstElement, secondElement) => (firstElement, secondElement)), pair =>
             {
-                Assert.NotSame(pair.First, pair.Second);
-                Assert.NotSame(pair.First.Address, pair.Second.Address);
+                Assert.NotSame(pair.firstElement, pair.secondElement);
+                Assert.NotSame(pair.firstElement.Address, pair.secondElement.Address);
             });
         }
 

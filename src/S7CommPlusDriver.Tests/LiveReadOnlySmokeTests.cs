@@ -65,7 +65,7 @@ namespace S7CommPlusDriver.Tests
             var tagNames = Environment.GetEnvironmentVariable("S7COMMPLUS_LIVE_TAGS");
             if (!string.IsNullOrWhiteSpace(tagNames))
             {
-                var requested = tagNames.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var requested = RuntimeCompatibility.SplitAndTrim(tagNames, ';');
                 var tagTasks = requested.Select(symbol => client.GetTagBySymbolAsync(symbol)).ToArray();
                 var tags = await Task.WhenAll(tagTasks);
                 var readResult = await client.ReadAsync(tags);
@@ -85,7 +85,7 @@ namespace S7CommPlusDriver.Tests
                 return;
             }
 
-            var hosts = hostsValue.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var hosts = RuntimeCompatibility.SplitAndTrim(hostsValue, ';');
             Assert.NotEmpty(hosts);
 
             var duration = ReadOptionalTimeout("S7COMMPLUS_LEGACY_LIFETIME_MINUTES", TimeSpan.FromMinutes(40), TimeSpan.FromMinutes);
@@ -110,13 +110,13 @@ namespace S7CommPlusDriver.Tests
                 return;
             }
 
-            var hosts = hostsValue.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var hosts = RuntimeCompatibility.SplitAndTrim(hostsValue, ';');
             Assert.NotEmpty(hosts);
 
             var duration = ReadOptionalTimeout("S7COMMPLUS_LEGACY_REFRESH_TEST_SECONDS", TimeSpan.FromMinutes(3));
             var refreshInterval = ReadOptionalTimeout("S7COMMPLUS_LEGACY_REFRESH_INTERVAL_SECONDS", TimeSpan.FromSeconds(30));
             var activeReadInterval = ReadOptionalTimeout("S7COMMPLUS_LEGACY_ACTIVE_READ_SECONDS", TimeSpan.FromSeconds(5));
-            Assert.True(duration >= refreshInterval * 2, "The refresh test must cover at least two key-renewal intervals.");
+            Assert.True(duration >= TimeSpan.FromTicks(refreshInterval.Ticks * 2), "The refresh test must cover at least two key-renewal intervals.");
 
             _output.WriteLine($"Starting read-only legacy key refresh test for {string.Join(", ", hosts)}; duration={duration}, refresh interval={refreshInterval}.");
             await Task.WhenAll(hosts.Select(host => TestLegacyKeyLifetimeAsync(

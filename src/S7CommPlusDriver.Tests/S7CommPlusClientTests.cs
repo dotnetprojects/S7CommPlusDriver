@@ -756,13 +756,23 @@ namespace S7CommPlusDriver.Tests
         {
             const string xml = "<?xml version=\"1.0\" encoding=\"utf-8\"?><PlcContentInfo><Entity Id=\"Target\" /></PlcContentInfo>";
             using var compressed = new MemoryStream();
+#if NETFRAMEWORK
+            compressed.WriteByte(0x78);
+            compressed.WriteByte(0x9C);
+            using (var zlib = new DeflateStream(compressed, CompressionLevel.Optimal, leaveOpen: true))
+#else
             using (var zlib = new ZLibStream(compressed, CompressionLevel.SmallestSize, leaveOpen: true))
+#endif
             using (var writer = new StreamWriter(zlib))
             {
                 writer.Write(xml);
             }
 
-            var truncated = compressed.ToArray()[..^4];
+#if NETFRAMEWORK
+            compressed.Write(new byte[4], 0, 4);
+#endif
+            var compressedBytes = compressed.ToArray();
+            var truncated = compressedBytes.Take(compressedBytes.Length - 4).ToArray();
             var decompressor = new BlobDecompressor();
 
             var result = decompressor.decompress(truncated, 0);
@@ -1280,7 +1290,7 @@ namespace S7CommPlusDriver.Tests
             subscription.NotificationReceived += (_, args) => received.TrySetResult(args.Notification);
             allowNotifications.Set();
 
-            var notification = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var notification = await RuntimeCompatibility.WaitAsync(received.Task, TimeSpan.FromSeconds(2));
             await subscription.StopAsync();
 
             Assert.Equal((uint)7, notification.SequenceNumber);
@@ -1437,7 +1447,7 @@ namespace S7CommPlusDriver.Tests
             subscription.NotificationReceived += (_, args) => received.TrySetResult(args.Notification);
             allowNotifications.Set();
 
-            var update = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var update = await RuntimeCompatibility.WaitAsync(received.Task, TimeSpan.FromSeconds(2));
             await subscription.StopAsync();
 
             Assert.Equal((uint)123, update.SequenceNumber);
@@ -1508,7 +1518,7 @@ namespace S7CommPlusDriver.Tests
             subscription.NotificationReceived += (_, args) => received.TrySetResult(args.Notification);
             allowNotifications.Set();
 
-            var notification = await received.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var notification = await RuntimeCompatibility.WaitAsync(received.Task, TimeSpan.FromSeconds(2));
             await subscription.StopAsync();
 
             Assert.Single(notification.Items);
@@ -1557,7 +1567,7 @@ namespace S7CommPlusDriver.Tests
             var readTask = client.ReadAsync(new[] { tag });
             await Task.Delay(40);
 
-            var read = await readTask.WaitAsync(TimeSpan.FromSeconds(2));
+            var read = await RuntimeCompatibility.WaitAsync(readTask, TimeSpan.FromSeconds(2));
             await subscription.StopAsync();
 
             Assert.Single(read.Items);
@@ -1649,7 +1659,7 @@ namespace S7CommPlusDriver.Tests
             await using var subscription = await client.SubscribeTagsAsync(new[] { tag }, FastSubscriptionOptions());
             subscription.CommunicationError += (_, args) => error.TrySetResult(args.Exception);
 
-            var ex = await error.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var ex = await RuntimeCompatibility.WaitAsync(error.Task, TimeSpan.FromSeconds(2));
 
             Assert.Equal("WaitForTagSubscriptionNotifications", ex.Operation);
             Assert.Equal(S7CommPlusSubscriptionState.Faulted, subscription.State);
@@ -1750,7 +1760,7 @@ namespace S7CommPlusDriver.Tests
                 });
             subscription.CommunicationError += (_, args) => error.TrySetResult(args.Exception);
 
-            var ex = await error.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            var ex = await RuntimeCompatibility.WaitAsync(error.Task, TimeSpan.FromSeconds(2));
 
             Assert.Equal("WaitForAlarmNotifications", ex.Operation);
             Assert.Equal(S7Consts.errTCPNotConnected, ex.ErrorCode);

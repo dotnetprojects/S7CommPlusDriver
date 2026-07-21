@@ -1,4 +1,4 @@
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
 using HarpoS7;
 using HarpoS7.Utilities.Auth;
 using System;

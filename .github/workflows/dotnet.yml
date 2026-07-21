@@ -31,6 +31,20 @@ jobs:
         dotnet build src/S7CommPlusDriver
         dotnet build src/DriverTest
         dotnet build src/S7CommPlusGUIBrowser
+    - name: Test .NET 8
+      run: dotnet test src/S7CommPlusDriver.Tests/S7CommPlusDriver.Tests.csproj --configuration Release --framework net8.0
     - uses: actions/upload-artifact@v4
       with:
         path: src/S7CommPlusDriver/bin/Debug/*.nupkg
+
+  net48-tests:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 9.0.x
+    - name: Test .NET Framework 4.8
+      run: dotnet test src/S7CommPlusDriver.Tests/S7CommPlusDriver.Tests.csproj --configuration Release --framework net48

@@ -411,7 +411,7 @@ namespace S7CommPlusDriver
             if (String.IsNullOrWhiteSpace(type))
                 return false;
 
-            var decoded = type.Replace("&quot;", "\"", StringComparison.OrdinalIgnoreCase);
+            var decoded = RuntimeCompatibility.ReplaceOrdinalIgnoreCase(type, "&quot;", "\"");
             return decoded.IndexOf("Bool", StringComparison.OrdinalIgnoreCase) >= 0 ||
                    decoded.IndexOf("Boolean", StringComparison.OrdinalIgnoreCase) >= 0;
         }

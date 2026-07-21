@@ -95,8 +95,8 @@ namespace S7CommPlusDriver
         private static uint CreateClientRid()
         {
             Span<byte> bytes = stackalloc byte[4];
-            RandomNumberGenerator.Fill(bytes);
-            var value = BitConverter.ToUInt32(bytes);
+            RuntimeCompatibility.FillRandom(bytes);
+            var value = System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(bytes);
             return value == 0 ? 1u : value;
         }
 

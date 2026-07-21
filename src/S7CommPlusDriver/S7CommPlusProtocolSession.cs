@@ -58,7 +58,7 @@ namespace S7CommPlusDriver
         private UInt32 m_IntegrityId_Set = 0;
         private bool m_LegacyDigestActive;
         private byte[] m_LegacySessionKey;
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
         private long m_LegacyDigestTraceSequence;
 #endif
         private ValueStruct m_ServerSessionVersion;
@@ -280,10 +280,10 @@ namespace S7CommPlusDriver
 
         private int WaitForExpectedResponse(IS7pRequest request, int timeout)
         {
-            var deadline = Environment.TickCount64 + Math.Max(1, timeout);
-            while (Environment.TickCount64 < deadline)
+            var deadline = RuntimeCompatibility.TickCount64 + Math.Max(1, timeout);
+            while (RuntimeCompatibility.TickCount64 < deadline)
             {
-                var remaining = (int)Math.Min(50, Math.Max(1, deadline - Environment.TickCount64));
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - RuntimeCompatibility.TickCount64));
                 var result = DispatchOneReceivedPdu(remaining, request, 0, out var responsePdu, out _);
                 if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout)
                 {
@@ -306,15 +306,15 @@ namespace S7CommPlusDriver
         private int WaitForNotification(uint subscriptionObjectId, int timeout, out Notification notification)
         {
             notification = null;
-            var deadline = Environment.TickCount64 + Math.Max(1, timeout);
-            while (Environment.TickCount64 < deadline)
+            var deadline = RuntimeCompatibility.TickCount64 + Math.Max(1, timeout);
+            while (RuntimeCompatibility.TickCount64 < deadline)
             {
                 if (TryDequeueNotification(subscriptionObjectId, out notification))
                 {
                     return 0;
                 }
 
-                var remaining = (int)Math.Min(50, Math.Max(1, deadline - Environment.TickCount64));
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - RuntimeCompatibility.TickCount64));
                 var result = DispatchOneReceivedPdu(remaining, null, subscriptionObjectId, out _, out notification);
                 if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout)
                 {

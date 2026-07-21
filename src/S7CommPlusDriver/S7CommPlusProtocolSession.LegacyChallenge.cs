@@ -7,7 +7,7 @@ using System.Threading;
 using S7CommPlusDriver.Internal;
 using Microsoft.Extensions.Logging;
 
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
 using HarpoS7;
 using HarpoS7.Auth;
 using HarpoS7.Integrity;
@@ -24,7 +24,7 @@ namespace S7CommPlusDriver
         private const int LegacyDigestLength = LegacyOmsConstants.PacketDigestLength;
         private const int LegacyDigestFieldLength = LegacyOmsConstants.PacketDigestFieldLength;
 
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
         private Timer m_LegacySessionKeyRefreshTimer;
         private int m_LegacySessionKeyRefreshGeneration;
         private int m_LegacySessionKeyRefreshIntervalMilliseconds;
@@ -538,11 +538,11 @@ namespace S7CommPlusDriver
                 AppendJson(json, "matchedByDriver", matched);
                 AppendJson(json, "currentBodyMatches", receivedDigest.SequenceEqual(currentBodyDigest));
                 AppendJson(json, "accumulatedBodyMatches", receivedDigest.SequenceEqual(accumulatedDigest));
-                AppendJson(json, "receivedDigest", Convert.ToHexString(receivedDigest));
-                AppendJson(json, "currentBodyDigest", Convert.ToHexString(currentBodyDigest));
-                AppendJson(json, "accumulatedBodyDigest", Convert.ToHexString(accumulatedDigest));
-                AppendJson(json, "bodySha256", Convert.ToHexString(SHA256.HashData(pdu.AsSpan(bodyOffset, bodyLength))));
-                AppendJson(json, "accumulatedSha256", Convert.ToHexString(SHA256.HashData(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength))));
+                AppendJson(json, "receivedDigest", RuntimeCompatibility.ToHexString(receivedDigest));
+                AppendJson(json, "currentBodyDigest", RuntimeCompatibility.ToHexString(currentBodyDigest));
+                AppendJson(json, "accumulatedBodyDigest", RuntimeCompatibility.ToHexString(accumulatedDigest));
+                AppendJson(json, "bodySha256", RuntimeCompatibility.ToHexString(RuntimeCompatibility.Sha256(pdu.AsSpan(bodyOffset, bodyLength))));
+                AppendJson(json, "accumulatedSha256", RuntimeCompatibility.ToHexString(RuntimeCompatibility.Sha256(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength))));
                 if (string.Equals(
                     Environment.GetEnvironmentVariable("S7COMMPLUS_LEGACY_DIGEST_TRACE_BRUTE_SUFFIX"),
                     "1",
@@ -567,9 +567,9 @@ namespace S7CommPlusDriver
                 }
                 if (includeRaw)
                 {
-                    AppendJson(json, "pduHex", Convert.ToHexString(pdu.AsSpan(0, pduLength)));
-                    AppendJson(json, "bodyHex", Convert.ToHexString(pdu.AsSpan(bodyOffset, bodyLength)));
-                    AppendJson(json, "accumulatedHex", Convert.ToHexString(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength)));
+                    AppendJson(json, "pduHex", RuntimeCompatibility.ToHexString(pdu.AsSpan(0, pduLength)));
+                    AppendJson(json, "bodyHex", RuntimeCompatibility.ToHexString(pdu.AsSpan(bodyOffset, bodyLength)));
+                    AppendJson(json, "accumulatedHex", RuntimeCompatibility.ToHexString(accumulatedData.AsSpan(accumulatedDataOffset, accumulatedDataLength)));
                 }
 
                 if (json[json.Length - 1] == ',')

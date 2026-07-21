@@ -29,9 +29,12 @@ namespace OpenSsl
         const string SSLDLLNAME = "libssl-3";
         static Native()
         {
+#if !NETFRAMEWORK
             NativeLibrary.SetDllImportResolver(Assembly.GetExecutingAssembly(), DllImportResolver);
+#endif
         }
 
+#if !NETFRAMEWORK
         private static IntPtr DllImportResolver(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
         {
             if (libraryName == DLLNAME)
@@ -63,7 +66,6 @@ namespace OpenSsl
             // Otherwise, fallback to default import resolver.
             return IntPtr.Zero;
         }
-
         private static IntPtr LoadRuntimeNativeLibrary(Assembly assembly, DllImportSearchPath? searchPath, string runtimeIdentifier, string fileName)
         {
             var path = RuntimeNativePath(assembly, runtimeIdentifier, fileName);
@@ -90,6 +92,7 @@ namespace OpenSsl
 
             return Path.Combine(assemblyDirectory, "runtimes", runtimeIdentifier, "native", fileName);
         }
+#endif
 
         #region Delegates
 

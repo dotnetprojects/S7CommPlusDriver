@@ -137,7 +137,7 @@ namespace S7CommPlusDriver
 
             try
             {
-                await _completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await RuntimeCompatibility.WaitAsync(_completion, cancellationToken).ConfigureAwait(false);
             }
             catch when (State == S7CommPlusSubscriptionState.Faulted || FaultException != null)
             {

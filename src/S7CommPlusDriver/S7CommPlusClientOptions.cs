@@ -29,7 +29,7 @@ namespace S7CommPlusDriver
         /// the shorter default leaves margin before PLC-side expiration.
         /// </summary>
         public TimeSpan LegacySessionKeyRefreshInterval { get; set; } = TimeSpan.FromMinutes(25);
-#if NET8_0_OR_GREATER
+#if HARPOS7_LEGACY_AUTH
         public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Auto;
 #else
         public S7CommPlusSecurityMode SecurityMode { get; set; } = S7CommPlusSecurityMode.Tls;
@@ -84,7 +84,14 @@ namespace S7CommPlusDriver
             {
                 throw new ArgumentOutOfRangeException(nameof(TlsBackend), "TLS backend is not supported.");
             }
-#if !NET8_0_OR_GREATER
+#if NETFRAMEWORK
+            if (TlsBackend == S7CommPlusTlsBackend.OpenSsl)
+            {
+                throw new PlatformNotSupportedException(
+                    "The native OpenSSL backend is not supported on .NET Framework. Use the BouncyCastle backend.");
+            }
+#endif
+#if !HARPOS7_LEGACY_AUTH
             if (SecurityMode != S7CommPlusSecurityMode.Tls)
             {
                 throw new S7CommPlusUnsupportedSecurityModeException(

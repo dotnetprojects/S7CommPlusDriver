@@ -6,13 +6,13 @@
 [![Release](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/dotnetprojects/S7CommPlusDriver.svg)](LICENSE)
 
-Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication available for pre-V17/pre-TLS CPUs on `net8.0` and `net9.0`. The package targets `net6.0`, `net8.0`, and `net9.0`.
+Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication available for pre-V17/pre-TLS CPUs on .NET Framework 4.8, `net8.0`, and `net9.0`. The package targets `net48`, `net6.0`, `net8.0`, and `net9.0`.
 
 The supported high-level API for new applications is `S7CommPlusClient`. Lower-level protocol and transport types remain available for compatibility and diagnostics, but production code should use the client surface.
 
 ## Acknowledgements
 
-Legacy challenge authentication on `net8.0` and `net9.0` uses the
+Legacy challenge authentication on `net48`, `net8.0`, and `net9.0` uses the
 MIT-licensed [HarpoS7](https://github.com/bonk-dev/HarpoS7) project through
 the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages. HarpoS7 provides the
 challenge, public-key, and packet-digest primitives; S7CommPlusDriver provides
@@ -35,7 +35,7 @@ write protection.
 
 ### PLC / CPU
 
-The net8.0/net9.0 default first tries secure PG/HMI communication over TLS and,
+The `net48`/`net8.0`/`net9.0` default first tries secure PG/HMI communication over TLS and,
 if the PLC rejects it, reconnects with legacy challenge authentication:
 
 - S7-1200 firmware V4.3 or newer, TLS 1.3 from V4.5
@@ -45,7 +45,7 @@ if the PLC rejects it, reconnects with legacy challenge authentication:
 For TLS, the PLC project must be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer. Legacy challenge mode is intended for older projects and CPUs without that TLS configuration.
 
 For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
-`net8.0`/`net9.0` falls back to legacy authentication. Set
+`net48`/`net8.0`/`net9.0` falls back to legacy authentication. Set
 `S7CommPlusSecurityMode.LegacyChallenge` to skip the initial TLS attempt. Legacy
 mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0`
 builds remain TLS-only and fail fast if legacy mode is requested.
@@ -477,7 +477,7 @@ protection is unchanged: subscriptions do not enable PLC signal writes.
 
 ## Older PLCs / Legacy Challenge Auth
 
-On net8.0/net9.0, `Auto` is the default: it tries TLS first and reconnects with
+On `net48`/`net8.0`/`net9.0`, `Auto` is the default: it tries TLS first and reconnects with
 the older Siemens challenge authentication when TLS is rejected. Applications
 that must never downgrade should explicitly set `SecurityMode` to `Tls`.
 To force legacy mode and skip the initial TLS attempt:

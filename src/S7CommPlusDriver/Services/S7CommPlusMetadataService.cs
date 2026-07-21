@@ -1110,9 +1110,9 @@ namespace S7CommPlusDriver
             if (res != 0)
                 return res;
             var data = ((ValueBlob)pValueMlfbSerial).GetValue();
-            var mlfb = Encoding.ASCII.GetString(data[8..27]);
+            var mlfb = Encoding.ASCII.GetString(data, 8, 19);
             //space
-            var serial = Encoding.ASCII.GetString(data[28..44]);
+            var serial = Encoding.ASCII.GetString(data, 28, 16);
             //nulbyte
             var hardware = data[46];
             var firmware = new Version(data[47], data[48], data[49], data[50]);

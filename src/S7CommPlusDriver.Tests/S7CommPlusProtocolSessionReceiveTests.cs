@@ -274,7 +274,7 @@ namespace S7CommPlusDriver.Tests
             pdu[2] = (byte)(dataLength >> 8);
             pdu[3] = (byte)dataLength;
             pdu[4] = 32;
-            HMACSHA256.HashData(sessionKey, digestInput, pdu.AsSpan(5, 32));
+            RuntimeCompatibility.HmacSha256(sessionKey, digestInput, pdu.AsSpan(5, 32));
             body.CopyTo(pdu, 37);
             if (hasTrailer)
             {
