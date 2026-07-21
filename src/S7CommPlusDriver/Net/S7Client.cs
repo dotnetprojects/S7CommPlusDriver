@@ -218,9 +218,13 @@ namespace S7CommPlusDriver
 			}
 		}
 
+		/// <summary>
+		/// Closes the active transport and TLS resources, then prevents the finalizer from repeating cleanup.
+		/// </summary>
 		public void Dispose()
 		{
-			SslDeactivate();
+			Disconnect();
+			GC.SuppressFinalize(this);
 		}
 		#endregion
 
@@ -318,17 +322,34 @@ namespace S7CommPlusDriver
 			return _LastError;
 		}
 
+		/// <summary>
+		/// Receives one transport fragment through a stable reference so concurrent disconnect can detach the client
+		/// transport without causing a null-reference race in the receive thread.
+		/// </summary>
+		/// <param name="Buffer">Destination buffer for the received bytes.</param>
+		/// <param name="Start">Zero-based destination offset.</param>
+		/// <param name="Size">Number of bytes expected from the transport.</param>
 		private void RecvPacket(byte[] Buffer, int Start, int Size)
 		{
-			if (Connected)
-				_LastError = Socket.Receive(Buffer, Start, Size);
+			var socket = Socket;
+			if (socket != null && socket.Connected)
+				_LastError = socket.Receive(Buffer, Start, Size);
 			else
 				_LastError = S7Consts.errTCPNotConnected;
 		}
 
+		/// <summary>
+		/// Sends one transport fragment through a stable reference so concurrent disconnect reports a connection error
+		/// instead of dereferencing a transport that has just been detached.
+		/// </summary>
+		/// <param name="Buffer">Buffer containing the bytes to transmit.</param>
+		/// <param name="Len">Number of bytes to transmit.</param>
 		private void SendPacket(byte[] Buffer, int Len)
 		{
-			_LastError = Socket.Send(Buffer, Len);
+			var socket = Socket;
+			_LastError = socket != null
+				? socket.Send(Buffer, Len)
+				: S7Consts.errTCPNotConnected;
 		}
 
 		private void SendPacket(byte[] Buffer)
@@ -566,16 +587,27 @@ namespace S7CommPlusDriver
 			return 0;
 		}
 
+		/// <summary>
+		/// Closes the active transport and waits up to the default shutdown timeout for the receive thread to finish.
+		/// </summary>
+		/// <returns>Zero when cleanup completed, or an S7 client error when the receive thread did not stop in time.</returns>
 		public int Disconnect()
 		{
 			return Disconnect(DefaultTimeout);
 		}
 
+		/// <summary>
+		/// Atomically detaches and closes the active transport before waiting for the receive thread, making repeated or
+		/// concurrent cleanup safe while still allowing a later <see cref="Connect"/> call to create a fresh transport.
+		/// </summary>
+		/// <param name="timeoutMilliseconds">Maximum time to wait for the receive thread to stop.</param>
+		/// <returns>Zero when cleanup completed, or an S7 client error when the receive thread did not stop in time.</returns>
 		public int Disconnect(int timeoutMilliseconds)
 		{
 			m_runThread_DoStop = true;
 			_LastError = 0;
-			Socket?.Close();
+			var socket = Interlocked.Exchange(ref Socket, null);
+			socket?.Close();
 			if (m_runThread != null && m_runThread.IsAlive)
 			{
 				if (!m_runThread.Join(Math.Max(1, timeoutMilliseconds)))

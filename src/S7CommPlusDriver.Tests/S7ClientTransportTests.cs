@@ -3,6 +3,9 @@ using Xunit;
 
 namespace S7CommPlusDriver.Tests
 {
+    /// <summary>
+    /// Verifies transport creation, timeout propagation, negotiation, and cleanup behavior of the low-level S7 client.
+    /// </summary>
     public sealed class S7ClientTransportTests
     {
         [Fact]
@@ -80,15 +83,21 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(512, client.PduSizeNegotiated);
         }
 
+        /// <summary>
+        /// Ensures repeated disconnect and disposal paths share one idempotent transport cleanup.
+        /// </summary>
         [Fact]
-        public void DisconnectClosesInjectedTransport()
+        public void DisconnectClosesInjectedTransportOnlyOnce()
         {
             var transport = new FakeS7Transport { Connected = true };
             var client = new S7Client(() => transport);
 
             var error = client.Disconnect(50);
+            var repeatedError = client.Disconnect(50);
+            client.Dispose();
 
             Assert.Equal(0, error);
+            Assert.Equal(0, repeatedError);
             Assert.Equal(1, transport.CloseCount);
             Assert.False(transport.Connected);
         }
