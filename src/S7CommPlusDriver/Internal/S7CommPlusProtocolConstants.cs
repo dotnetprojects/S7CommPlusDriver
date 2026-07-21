@@ -20,7 +20,6 @@ namespace S7CommPlusDriver.Internal
         public const ushort GetVarSubstreamedRequestUnknown1 = 0x0001;
 
         public const uint SubscriptionRelationIdStart = 0x7fffc001;
-        public const uint AlarmSubscriptionRefRelationIdStart = 0x51010001;
         public const uint TisSubscriptionRefRelationIdStart = 0x51020001;
         public const short DefaultSubscriptionCreditLimit = 10;
         public const short DefaultSubscriptionCreditLimitStep = 5;

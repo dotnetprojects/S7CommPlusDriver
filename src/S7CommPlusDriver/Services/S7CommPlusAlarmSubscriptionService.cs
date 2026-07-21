@@ -39,8 +39,7 @@ namespace S7CommPlusDriver
         // await subscription.Completion;
         // await subscription.DisposeAsync();
 
-        uint m_AlarmSubscriptionRelationId = S7CommPlusProtocolConstants.SubscriptionRelationIdStart;
-        uint m_AlarmSubscriptionRefRelationId = S7CommPlusProtocolConstants.AlarmSubscriptionRefRelationIdStart;
+        private uint _alarmSubscriptionRelationId = S7CommPlusProtocolConstants.SubscriptionRelationIdStart;
         private readonly Dictionary<uint, AlarmSubscriptionState> _subscriptions = new Dictionary<uint, AlarmSubscriptionState>();
 
         private sealed class AlarmSubscriptionState
@@ -60,8 +59,7 @@ namespace S7CommPlusDriver
             int res;
             languageIds ??= Array.Empty<uint>();
             var state = new AlarmSubscriptionState { NextCreditLimit = initialCreditLimit };
-            var subscriptionRelationId = m_AlarmSubscriptionRelationId++;
-            var subscriptionRefRelationId = m_AlarmSubscriptionRefRelationId++;
+            var subscriptionRelationId = _alarmSubscriptionRelationId++;
             PObject subsobj = new PObject();
             subsobj.ClassId = Ids.ClassSubscription;
             subsobj.RelationId = subscriptionRelationId;
@@ -80,7 +78,9 @@ namespace S7CommPlusDriver
             subsobj.AddAttribute(Ids.SubscriptionTicks, new ValueUInt(S7CommPlusProtocolConstants.SubscriptionTicksUnlimited));
             PObject asrefsobj = new PObject();
             asrefsobj.ClassId = Ids.AlarmSubscriptionRef_Class_Rid;
-            asrefsobj.RelationId = subscriptionRefRelationId;
+            // Alarm-reference relation IDs are global on the PLC rather than scoped to one client session. Asking the
+            // PLC to allocate the ID prevents independent HMI clients from repeatedly colliding on a fixed relation ID.
+            asrefsobj.RelationId = Ids.GetNewRIDOnServer;
             asrefsobj.AddAttribute(Ids.ObjectVariableTypeName, new ValueWString(S7CommPlusProtocolConstants.AlarmSubscriptionName));
             asrefsobj.AddAttribute(Ids.SubscriptionReferenceMode, new ValueUSInt(S7CommPlusProtocolConstants.AlarmSubscriptionTriggerAndTransmitMode));
             asrefsobj.AddAttribute(Ids.AlarmSubSystem_AlarmDomain, new ValueUIntArray(new ushort[10] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, S7CommPlusProtocolConstants.ValueArrayFlag));
