@@ -50,6 +50,26 @@ For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
 mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0`
 builds remain TLS-only and fail fast if legacy mode is requested.
 
+Most legacy PLCs report a complete Siemens public-key fingerprint. If a PLC
+reports only its two-character key family, the driver automatically tries
+compatible keys from the bundled `HarpoS7.PublicKeys` catalog on fresh
+connections and remembers the successful key for reconnects. This fallback can
+be disabled:
+
+```csharp
+var options = new S7CommPlusClientOptions
+{
+    Address = "10.0.110.120",
+    SecurityMode = S7CommPlusSecurityMode.LegacyChallenge,
+    LegacyPublicKeyFallbackEnabled = false
+};
+```
+
+Set `LegacyPublicKeyId` to a known 16-character identifier to skip discovery.
+The identifier is not a password or private key. Complete PLC fingerprints,
+explicit identifiers, and custom `LegacyPublicKeyResolver` implementations
+continue to take precedence over automatic fallback.
+
 ### TLS Backend
 
 TLS communication uses the managed BouncyCastle backend by default. The older OpenSSL backend remains available through `S7CommPlusClientOptions.TlsBackend = S7CommPlusTlsBackend.OpenSsl`, but it depends on native runtime files and may be less portable across PLC firmware/OpenSSL combinations.
@@ -560,9 +580,15 @@ $env:S7COMMPLUS_LIVE_HOST = "10.0.110.120"
 dotnet test src\S7CommPlusDriver.Tests\S7CommPlusDriver.Tests.csproj --filter LivePlcReadOnlySmokeTest
 ```
 
-By default the live test connects, reads CPU and culture information, loads PLC
-text lists, browses, and disconnects. To read explicit tags, provide
-semicolon-separated tag symbols:
+By default the live test connects, reads CPU information, browses, and
+disconnects. To include culture information and PLC text lists on firmware
+that supports those APIs, enable extended metadata:
+
+```powershell
+$env:S7COMMPLUS_LIVE_EXTENDED_METADATA = "true"
+```
+
+To read explicit tags, provide semicolon-separated tag symbols:
 
 ```powershell
 $env:S7COMMPLUS_LIVE_TAGS = "MyDb.MyValue;OtherDb.Counter"
@@ -572,6 +598,7 @@ To exercise legacy auth or auto fallback in the live test:
 
 ```powershell
 $env:S7COMMPLUS_LIVE_SECURITY_MODE = "LegacyChallenge" # or "Auto"
+$env:S7COMMPLUS_LIVE_PUBLIC_KEY_ID = "181B7B0847D11694" # optional: skips automatic discovery
 ```
 
 TLS backend and timeout overrides are also available when validating a specific
@@ -579,9 +606,13 @@ configuration:
 
 ```powershell
 $env:S7COMMPLUS_LIVE_TLS_BACKEND = "BouncyCastle" # or "OpenSsl"
+$env:S7COMMPLUS_LIVE_PORT = "102"
 $env:S7COMMPLUS_LIVE_REQUEST_TIMEOUT_SECONDS = "15"
 $env:S7COMMPLUS_LIVE_CONNECT_TIMEOUT_SECONDS = "10"
 ```
+
+Set `S7COMMPLUS_LIVE_RECONNECT=true` to replace the protocol session and verify
+that reconnect state, including a discovered legacy public key, is retained.
 
 Never use the live smoke test for writes.
 

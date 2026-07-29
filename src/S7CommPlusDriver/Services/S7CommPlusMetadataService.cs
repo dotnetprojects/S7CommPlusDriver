@@ -1122,12 +1122,12 @@ namespace S7CommPlusDriver
             res = RunGetVarSubstreamedRequest(Ids.ReleaseMngmtRoot_Rid, 8342, out var pValueVersionsAndName);
             if (res != 0)
                 return res;
-            var versionsAndName = ((ValueWStringArray)pValueVersionsAndName).GetValue();
+            var projectName = GetOptionalCpuProjectName(pValueVersionsAndName);
 
             cpuInfo = new S7CommPlusCpuInfo()
             {
                 PlcName = cpuName,
-                ProjectName = versionsAndName[2],
+                ProjectName = projectName,
                 VersionTia = version1,
                 Version2 = version2,
                 CpuMlfb = mlfb,
@@ -1136,6 +1136,19 @@ namespace S7CommPlusDriver
             };
 
             return 0;
+        }
+
+        internal static string GetOptionalCpuProjectName(PValue value)
+        {
+            if (value is not ValueWStringArray array)
+            {
+                return null;
+            }
+
+            var versionsAndName = array.GetValue();
+            return versionsAndName != null && versionsAndName.Length > 2
+                ? versionsAndName[2]
+                : null;
         }
     }
 }

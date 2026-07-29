@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
@@ -32,15 +33,19 @@ namespace S7CommPlusDriver
         private byte[] m_LegacySessionPublicKey;
         private ILogger m_LegacySessionKeyRefreshLogger;
         private string m_LegacySessionKeyRefreshEndpoint;
+        private IReadOnlyList<string> m_LegacyPublicKeyFallbackFingerprints;
+        private string m_LegacyAttemptedPublicKeyFingerprint;
 
         private int ConnectLegacyChallenge(S7CommPlusClientOptions options)
         {
+            m_LegacyPublicKeyFallbackFingerprints = null;
+            m_LegacyAttemptedPublicKeyFingerprint = null;
             var usesEngineeringTsap = string.Equals(options.RemoteTsap, LegacyOmsConstants.EngineeringTsap, StringComparison.Ordinal);
-            var res = ConnectLegacyChallengeCore(options, LegacyServerSessionRole.EngineeringSystem);
+            var res = ConnectLegacyChallengeWithPublicKeyFallback(options, LegacyServerSessionRole.EngineeringSystem);
             if (res == S7Consts.errS7CommPlusLegacyAuthentication)
             {
                 options.Logger.LogDebug("Legacy S7CommPlus ES session role was rejected by PLC {Address}:{Port}; retrying HMI session role.", options.Address, options.Port);
-                res = ConnectLegacyChallengeCore(options, LegacyServerSessionRole.Hmi);
+                res = ConnectLegacyChallengeWithPublicKeyFallback(options, LegacyServerSessionRole.Hmi);
             }
 
             if (res != 0 && !usesEngineeringTsap && string.Equals(options.RemoteTsap, LegacyOmsConstants.HmiTsap, StringComparison.Ordinal))
@@ -53,19 +58,92 @@ namespace S7CommPlusDriver
                     options.Port,
                     res,
                     engineeringOptions.RemoteTsap);
-                res = ConnectLegacyChallengeCore(engineeringOptions, LegacyServerSessionRole.EngineeringSystem);
+                res = ConnectLegacyChallengeWithPublicKeyFallback(engineeringOptions, LegacyServerSessionRole.EngineeringSystem);
                 if (res == S7Consts.errS7CommPlusLegacyAuthentication)
                 {
                     options.Logger.LogDebug("Legacy S7CommPlus alternate ES session role was rejected by PLC {Address}:{Port}; retrying HMI session role on alternate TSAP.", options.Address, options.Port);
-                    res = ConnectLegacyChallengeCore(engineeringOptions, LegacyServerSessionRole.Hmi);
+                    res = ConnectLegacyChallengeWithPublicKeyFallback(engineeringOptions, LegacyServerSessionRole.Hmi);
                 }
+            }
+
+            if (res == 0 &&
+                options.LegacyPublicKeyResolver == null &&
+                string.IsNullOrWhiteSpace(options.LegacyPublicKeyId) &&
+                !string.IsNullOrWhiteSpace(m_LegacyAttemptedPublicKeyFingerprint))
+            {
+                // The client keeps this options instance across protocol-session
+                // replacements, so the discovered key survives auto reconnects.
+                options.LegacyPublicKeyFingerprintOverride =
+                    m_LegacyAttemptedPublicKeyFingerprint;
             }
 
             return res;
         }
 
+        private int ConnectLegacyChallengeWithPublicKeyFallback(
+            S7CommPlusClientOptions options,
+            LegacyServerSessionRole serverSessionRole)
+        {
+            if (!string.IsNullOrWhiteSpace(options.LegacyPublicKeyFingerprintOverride) &&
+                string.IsNullOrWhiteSpace(options.LegacyPublicKeyId) &&
+                options.LegacyPublicKeyResolver == null &&
+                m_LegacyPublicKeyFallbackFingerprints == null)
+            {
+                var cachedFingerprint =
+                    options.LegacyPublicKeyFingerprintOverride;
+                var cachedResult =
+                    ConnectLegacyChallengeCore(options, serverSessionRole);
+                if (cachedResult != S7Consts.errS7CommPlusLegacyAuthentication)
+                {
+                    return cachedResult;
+                }
+
+                options.Logger.LogDebug(
+                    "Cached legacy S7CommPlus public key {Fingerprint} was rejected by PLC {Address}:{Port}; rediscovering a compatible key.",
+                    cachedFingerprint,
+                    options.Address,
+                    options.Port);
+                options.LegacyPublicKeyFingerprintOverride = null;
+                m_LegacyPublicKeyFallbackFingerprints = null;
+            }
+
+            var candidateIndex = 0;
+            while (true)
+            {
+                var attemptOptions = options;
+                if (m_LegacyPublicKeyFallbackFingerprints != null)
+                {
+                    attemptOptions = options.Clone();
+                    attemptOptions.LegacyPublicKeyFingerprintOverride =
+                        m_LegacyPublicKeyFallbackFingerprints[candidateIndex];
+                }
+
+                var result = ConnectLegacyChallengeCore(attemptOptions, serverSessionRole);
+                if (result == 0)
+                {
+                    return result;
+                }
+                if (result != S7Consts.errS7CommPlusLegacyAuthentication ||
+                    m_LegacyPublicKeyFallbackFingerprints == null ||
+                    ++candidateIndex >= m_LegacyPublicKeyFallbackFingerprints.Count)
+                {
+                    return result;
+                }
+
+                options.Logger.LogDebug(
+                    "Legacy S7CommPlus public key {Fingerprint} was rejected by PLC {Address}:{Port}; retrying candidate {CandidateNumber} of {CandidateCount} on a fresh connection.",
+                    m_LegacyPublicKeyFallbackFingerprints[candidateIndex - 1],
+                    options.Address,
+                    options.Port,
+                    candidateIndex + 1,
+                    m_LegacyPublicKeyFallbackFingerprints.Count);
+                Thread.Sleep(250);
+            }
+        }
+
         private int ConnectLegacyChallengeCore(S7CommPlusClientOptions options, LegacyServerSessionRole serverSessionRole)
         {
+            m_LegacyAttemptedPublicKeyFingerprint = null;
             if (options.ConnectTimeoutMilliseconds > 0)
             {
                 m_ReadTimeout = Math.Min(
@@ -132,11 +210,37 @@ namespace S7CommPlusDriver
             }
 
             var serverSessionVersion = TryGetServerSession(createObjRes);
-            res = SendLegacyAuthenticationRequest(challenge.SessionId, challenge.AuthenticationFrameKind, keyFamily, keyBlob, sessionKey, publicKey, serverSessionVersion, serverSessionRole);
+            var isAutomaticPublicKeyAttempt =
+                options.LegacyPublicKeyResolver == null &&
+                string.IsNullOrWhiteSpace(options.LegacyPublicKeyId) &&
+                (m_LegacyPublicKeyFallbackFingerprints != null ||
+                 !string.IsNullOrWhiteSpace(options.LegacyPublicKeyFingerprintOverride));
+            var authenticationReadTimeout = m_ReadTimeout;
+            if (isAutomaticPublicKeyAttempt)
+            {
+                m_ReadTimeout = Math.Min(m_ReadTimeout, 1_000);
+                m_client.SetTransportTimeouts(m_ReadTimeout, m_ReadTimeout);
+            }
+            try
+            {
+                res = SendLegacyAuthenticationRequest(challenge.SessionId, challenge.AuthenticationFrameKind, keyFamily, keyBlob, sessionKey, publicKey, serverSessionVersion, serverSessionRole);
+            }
+            finally
+            {
+                m_ReadTimeout = authenticationReadTimeout;
+            }
             if (res != 0)
             {
                 m_client.Disconnect();
-                return res;
+                return isAutomaticPublicKeyAttempt
+                    ? S7Consts.errS7CommPlusLegacyAuthentication
+                    : res;
+            }
+            if (isAutomaticPublicKeyAttempt)
+            {
+                m_client.SetTransportTimeouts(
+                    options.RequestTimeoutMilliseconds,
+                    options.RequestTimeoutMilliseconds);
             }
             options.Logger.LogDebug("Legacy S7CommPlus authentication request sent to PLC {Address}:{Port}.", options.Address, options.Port);
 
@@ -391,9 +495,47 @@ namespace S7CommPlusDriver
                 publicKey = options.LegacyPublicKeyResolver?.Invoke(challenge.Fingerprint);
                 if (publicKey == null || publicKey.Length == 0)
                 {
+                    var publicKeyFingerprint = options.GetLegacyPublicKeyFingerprint(challenge.Fingerprint);
+                    if (publicKeyFingerprint != null &&
+                        publicKeyFingerprint.Length == 2 &&
+                        options.LegacyPublicKeyFallbackEnabled)
+                    {
+                        var fallbackFingerprints =
+                            LegacyPublicKeyCatalog.GetFingerprints(publicKeyFingerprint);
+                        if (fallbackFingerprints.Count > 0)
+                        {
+                            m_LegacyPublicKeyFallbackFingerprints = fallbackFingerprints;
+                            publicKeyFingerprint = fallbackFingerprints[0];
+                        }
+                        else
+                        {
+                            publicKeyFingerprint = null;
+                        }
+                    }
+                    if (string.IsNullOrWhiteSpace(publicKeyFingerprint) || publicKeyFingerprint.Length == 2)
+                    {
+                        options.Logger.LogDebug(
+                            "Legacy S7CommPlus PLC {Address}:{Port} reported incomplete public-key fingerprint {Fingerprint}, and automatic public-key fallback is {FallbackState}.",
+                            options.Address,
+                            options.Port,
+                            challenge.Fingerprint,
+                            options.LegacyPublicKeyFallbackEnabled ? "unavailable" : "disabled");
+                        return false;
+                    }
+                    if (!string.Equals(publicKeyFingerprint, challenge.Fingerprint, StringComparison.Ordinal))
+                    {
+                        options.Logger.LogDebug(
+                            "Legacy S7CommPlus PLC {Address}:{Port} reported family-only public-key fingerprint {Fingerprint}; using public-key fingerprint {PublicKeyFingerprint}.",
+                            options.Address,
+                            options.Port,
+                            challenge.Fingerprint,
+                            publicKeyFingerprint);
+                    }
+
+                    m_LegacyAttemptedPublicKeyFingerprint = publicKeyFingerprint;
                     var store = new DefaultPublicKeyStore();
-                    publicKey = new byte[store.GetPublicKeyLength(challenge.Fingerprint)];
-                    store.ReadPublicKey(publicKey.AsSpan(), challenge.Fingerprint);
+                    publicKey = new byte[store.GetPublicKeyLength(publicKeyFingerprint)];
+                    store.ReadPublicKey(publicKey.AsSpan(), publicKeyFingerprint);
                 }
 
                 keyFamily = challenge.KeyFamily;

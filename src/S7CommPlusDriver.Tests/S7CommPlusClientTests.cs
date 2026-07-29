@@ -1,5 +1,6 @@
 using S7CommPlusDriver.ClientApi;
 using S7CommPlusDriver.Alarming;
+using S7CommPlusDriver.Internal;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -992,6 +993,89 @@ namespace S7CommPlusDriver.Tests
 
             Assert.True(options.LegacySessionKeyRefreshEnabled);
             Assert.Equal(TimeSpan.FromMinutes(25), options.LegacySessionKeyRefreshInterval);
+        }
+
+        [Fact]
+        public void LegacyPublicKeyIdQualifiesOnlyFamilyOnlyFingerprint()
+        {
+            var options = new S7CommPlusClientOptions
+            {
+                LegacyPublicKeyId = " 181B7B0847D11694 "
+            };
+
+            Assert.Equal("00:181B7B0847D11694", options.GetLegacyPublicKeyFingerprint("00"));
+            Assert.Equal(
+                "00:AAAAAAAAAAAAAAAA",
+                options.GetLegacyPublicKeyFingerprint("00:AAAAAAAAAAAAAAAA"));
+        }
+
+        [Fact]
+        public void LegacyPublicKeyFallbackIsEnabledAndCatalogIsDeterministic()
+        {
+            var options = new S7CommPlusClientOptions();
+            var fingerprints = LegacyPublicKeyCatalog.GetFingerprints("00");
+
+            Assert.True(options.LegacyPublicKeyFallbackEnabled);
+            Assert.NotEmpty(fingerprints);
+            Assert.Contains("00:181B7B0847D11694", fingerprints);
+            Assert.Equal(
+                fingerprints.OrderBy(value => value, StringComparer.Ordinal),
+                fingerprints);
+        }
+
+        [Fact]
+        public async Task DiscoveredLegacyPublicKeySurvivesProtocolSessionReplacement()
+        {
+            const string fingerprint = "00:181B7B0847D11694";
+            var firstSession = new FakeS7CommPlusSession
+            {
+                ConnectHandler = options =>
+                {
+                    options.LegacyPublicKeyFingerprintOverride = fingerprint;
+                    return 0;
+                }
+            };
+            string? secondSessionFingerprint = null;
+            var secondSession = new FakeS7CommPlusSession
+            {
+                ConnectHandler = options =>
+                {
+                    secondSessionFingerprint =
+                        options.LegacyPublicKeyFingerprintOverride;
+                    return 0;
+                }
+            };
+            var sessions = new Queue<IS7CommPlusSession>(
+                new IS7CommPlusSession[] { firstSession, secondSession });
+            await using var client = new S7CommPlusClient(
+                new S7CommPlusClientOptions
+                {
+                    Address = "127.0.0.1",
+                    SecurityMode = S7CommPlusSecurityMode.LegacyChallenge
+                },
+                () => sessions.Dequeue());
+
+            await client.ConnectAsync();
+            await client.DisconnectAsync();
+            await client.ConnectAsync();
+
+            Assert.Equal(fingerprint, secondSessionFingerprint);
+        }
+
+        [Theory]
+        [InlineData("181B7B0847D1169")]
+        [InlineData("181B7B0847D1169XX")]
+        public void LegacyPublicKeyIdMustBeSixteenHexCharacters(string keyId)
+        {
+            var ex = Assert.Throws<ArgumentException>(() => new S7CommPlusClient(
+                new S7CommPlusClientOptions
+                {
+                    Address = "127.0.0.1",
+                    LegacyPublicKeyId = keyId
+                },
+                () => new FakeS7CommPlusSession()));
+
+            Assert.Equal("LegacyPublicKeyId", ex.ParamName);
         }
 
         [Fact]

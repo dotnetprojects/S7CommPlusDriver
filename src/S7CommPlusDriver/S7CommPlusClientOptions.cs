@@ -36,6 +36,31 @@ namespace S7CommPlusDriver
 #endif
         public S7CommPlusTlsBackend TlsBackend { get; set; } = S7CommPlusTlsBackend.BouncyCastle;
         public S7CommPlusSecurityMode? NegotiatedSecurityMode { get; internal set; }
+        /// <summary>
+        /// Gets or sets the optional 16-character Siemens public-key identifier used when a legacy PLC reports
+        /// only its two-character key-family fingerprint, for example <c>00</c>.
+        /// </summary>
+        /// <remarks>
+        /// Most PLCs report a complete fingerprint such as <c>00:181B7B0847D11694</c> and do not require this
+        /// option. The identifier is not a password or private key.
+        /// </remarks>
+        public string LegacyPublicKeyId { get; set; }
+        /// <summary>
+        /// Gets or sets a value indicating whether the driver automatically tries compatible public keys from the
+        /// bundled HarpoS7 catalog when a legacy PLC reports only its two-character key-family fingerprint.
+        /// </summary>
+        /// <remarks>
+        /// Each candidate is attempted on a fresh connection. The successful candidate is remembered for reconnects.
+        /// Disable this only when deterministic failure is preferred over automatic key discovery.
+        /// </remarks>
+        public bool LegacyPublicKeyFallbackEnabled { get; set; } = true;
+        /// <summary>
+        /// Gets or sets an optional custom resolver for legacy Siemens public keys.
+        /// </summary>
+        /// <remarks>
+        /// The resolver receives the fingerprint exactly as reported by the PLC. It takes precedence over
+        /// <see cref="LegacyPublicKeyId"/> and the built-in HarpoS7 public-key store.
+        /// </remarks>
         public Func<string, byte[]> LegacyPublicKeyResolver { get; set; }
         public ILogger Logger { get; set; } = NullLogger.Instance;
 
@@ -45,10 +70,25 @@ namespace S7CommPlusDriver
         internal int BrowseTimeoutMilliseconds => ToPositiveMilliseconds(BrowseTimeout, nameof(BrowseTimeout));
         internal int LegacySessionKeyRefreshIntervalMilliseconds => ToPositiveMilliseconds(LegacySessionKeyRefreshInterval, nameof(LegacySessionKeyRefreshInterval));
         internal byte[] RemoteTsapBytes => Encoding.ASCII.GetBytes(RemoteTsap ?? string.Empty);
+        internal string LegacyPublicKeyFingerprintOverride { get; set; }
 
         internal S7CommPlusClientOptions Clone()
         {
             return (S7CommPlusClientOptions)MemberwiseClone();
+        }
+
+        internal string GetLegacyPublicKeyFingerprint(string plcFingerprint)
+        {
+            if (!string.IsNullOrWhiteSpace(LegacyPublicKeyFingerprintOverride))
+            {
+                return LegacyPublicKeyFingerprintOverride;
+            }
+            if (string.IsNullOrWhiteSpace(LegacyPublicKeyId) || plcFingerprint == null || plcFingerprint.Length != 2)
+            {
+                return plcFingerprint;
+            }
+
+            return $"{plcFingerprint}:{LegacyPublicKeyId.Trim()}";
         }
 
         internal void Validate()
@@ -84,6 +124,12 @@ namespace S7CommPlusDriver
             {
                 throw new ArgumentOutOfRangeException(nameof(TlsBackend), "TLS backend is not supported.");
             }
+            if (!string.IsNullOrWhiteSpace(LegacyPublicKeyId) && !IsLegacyPublicKeyId(LegacyPublicKeyId.Trim()))
+            {
+                throw new ArgumentException(
+                    "Legacy public-key id must contain exactly 16 hexadecimal characters.",
+                    nameof(LegacyPublicKeyId));
+            }
 #if NETFRAMEWORK
             if (TlsBackend == S7CommPlusTlsBackend.OpenSsl)
             {
@@ -109,6 +155,27 @@ namespace S7CommPlusDriver
                 _ = LegacySessionKeyRefreshIntervalMilliseconds;
             }
             Logger ??= NullLogger.Instance;
+        }
+
+        private static bool IsLegacyPublicKeyId(string value)
+        {
+            if (value.Length != 16)
+            {
+                return false;
+            }
+
+            foreach (var character in value)
+            {
+                var isHex = (character >= '0' && character <= '9')
+                    || (character >= 'A' && character <= 'F')
+                    || (character >= 'a' && character <= 'f');
+                if (!isHex)
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private static int ToPositiveMilliseconds(TimeSpan value, string name)

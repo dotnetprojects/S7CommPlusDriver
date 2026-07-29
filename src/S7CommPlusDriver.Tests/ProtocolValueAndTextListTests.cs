@@ -66,6 +66,17 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void CpuProjectNameIsOptionalForOlderFirmware()
+        {
+            Assert.Null(S7CommPlusMetadataService.GetOptionalCpuProjectName(new ValueNull()));
+            Assert.Null(S7CommPlusMetadataService.GetOptionalCpuProjectName(new ValueWStringArray(Array.Empty<string>())));
+            Assert.Equal(
+                "Project",
+                S7CommPlusMetadataService.GetOptionalCpuProjectName(
+                    new ValueWStringArray(new[] { "Version 1", "Version 2", "Project" })));
+        }
+
+        [Fact]
         public void AddressArrayOfS7StringDescriptorsConsumesEveryLength()
         {
             var bytes = new byte[] { 0x20, Datatype.S7String, 0x02, 0x0A, 0x14 };

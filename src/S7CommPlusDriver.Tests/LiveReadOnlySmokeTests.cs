@@ -43,24 +43,32 @@ namespace S7CommPlusDriver.Tests
             await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
             {
                 Address = host,
+                Port = ReadOptionalPort("S7COMMPLUS_LIVE_PORT", S7CommPlusDefaults.IsoTcpPort),
                 SecurityMode = securityMode,
                 TlsBackend = tlsBackend,
+                LegacyPublicKeyId = Environment.GetEnvironmentVariable("S7COMMPLUS_LIVE_PUBLIC_KEY_ID"),
+                Logger = new TestOutputLogger(_output),
                 RequestTimeout = ReadOptionalTimeout("S7COMMPLUS_LIVE_REQUEST_TIMEOUT_SECONDS", TimeSpan.FromSeconds(5)),
                 ConnectTimeout = ReadOptionalTimeout("S7COMMPLUS_LIVE_CONNECT_TIMEOUT_SECONDS", TimeSpan.FromSeconds(5))
             });
             await client.ConnectAsync();
             var cpuInfo = await client.GetCpuInfoAsync();
-            var cultureInfo = await client.GetCpuCultureInfoAsync();
-            var textLists = await client.GetTextListsAsync();
             var vars = await client.BrowseAsync();
 
             Assert.NotNull(cpuInfo);
-            Assert.NotNull(cultureInfo);
-            Assert.NotNull(cultureInfo.LanguageIds);
-            Assert.NotEmpty(cultureInfo.LanguageIds);
-            Assert.NotNull(textLists);
-            Assert.NotEmpty(textLists.TextLists);
-            Assert.NotNull(vars);
+            Assert.NotEmpty(vars);
+
+            if (ReadOptionalBoolean("S7COMMPLUS_LIVE_EXTENDED_METADATA"))
+            {
+                var cultureInfo = await client.GetCpuCultureInfoAsync();
+                var textLists = await client.GetTextListsAsync();
+
+                Assert.NotNull(cultureInfo);
+                Assert.NotNull(cultureInfo.LanguageIds);
+                Assert.NotEmpty(cultureInfo.LanguageIds);
+                Assert.NotNull(textLists);
+                Assert.NotEmpty(textLists.TextLists);
+            }
 
             var tagNames = Environment.GetEnvironmentVariable("S7COMMPLUS_LIVE_TAGS");
             if (!string.IsNullOrWhiteSpace(tagNames))
@@ -71,6 +79,13 @@ namespace S7CommPlusDriver.Tests
                 var readResult = await client.ReadAsync(tags);
                 Assert.NotEmpty(tags);
                 Assert.All(readResult.Items, item => Assert.True(item.IsSuccess, $"Tag {item.Tag.Name} read failed with item error {item.ItemError}."));
+            }
+
+            if (ReadOptionalBoolean("S7COMMPLUS_LIVE_RECONNECT"))
+            {
+                await client.DisconnectAsync();
+                await client.ConnectAsync();
+                Assert.NotNull(await client.GetCpuInfoAsync());
             }
 
             await client.DisconnectAsync();
@@ -250,6 +265,34 @@ namespace S7CommPlusDriver.Tests
                 {
                 }
             }
+        }
+
+        private static int ReadOptionalPort(string environmentVariable, int fallback)
+        {
+            var value = Environment.GetEnvironmentVariable(environmentVariable);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return fallback;
+            }
+
+            Assert.True(
+                int.TryParse(value, out var port) && port > 0 && port <= 65535,
+                $"Invalid {environmentVariable} value '{value}'.");
+            return port;
+        }
+
+        private static bool ReadOptionalBoolean(string environmentVariable)
+        {
+            var value = Environment.GetEnvironmentVariable(environmentVariable);
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+
+            Assert.True(
+                bool.TryParse(value, out var result),
+                $"Invalid {environmentVariable} value '{value}'.");
+            return result;
         }
 
         private static TimeSpan ReadOptionalTimeout(string environmentVariable, TimeSpan fallback)
