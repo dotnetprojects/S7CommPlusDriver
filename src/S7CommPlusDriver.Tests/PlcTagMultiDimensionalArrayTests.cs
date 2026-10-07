@@ -19,6 +19,18 @@ namespace S7CommPlusDriver.Tests
     public sealed class PlcTagMultiDimensionalArrayTests
     {
         [Fact]
+        public void SuccessiveNativeArrayNotificationsRefreshTheShapedValue()
+        {
+            var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo());
+            tag.ProcessReadResult(new ValueIntArray(new short[] { 1, 2, 3, 4, 5, 6 }), 0);
+            Assert.Equal((short)6, Assert.IsType<short[,]>(tag.GetValue())[1, 2]);
+            tag.ProcessReadResult(new ValueIntArray(new short[] { 7, 8, 9, 10, 11, 12 }), 0);
+            Assert.Equal((short)12, Assert.IsType<short[,]>(tag.AggregateValue)[1, 2]);
+            tag.PrepareAggregateWrite();
+            Assert.Equal((short)12, tag.AggregateElements[5].GetValue());
+        }
+
+        [Fact]
         public void InPlaceShapedEditsAreTransferredAtWriteTime()
         {
             var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo());

@@ -710,26 +710,6 @@ namespace S7CommPlusDriver
                 return 0;
             }
 
-            // Fast path: the PLC's item-count limit (maxCandidateCount, derived from
-            // TagsPerReadRequestMax/TagsPerWriteRequestMax) is already negotiated to fit within the
-            // transport's PDU size in the vast majority of deployments, so the whole candidate set
-            // typically fits in a single frame. Optimistically add everything and check once; this
-            // costs a single full serialization instead of the O(log n) probes of the galloping/binary
-            // search below, which is only needed on the (uncommon) path where the optimistic attempt
-            // overflows the payload limit.
-            for (var i = 0; i < maxCandidateCount; i++)
-            {
-                addItemAt(i);
-            }
-            if (!ExceedsSingleFramePayload(request, maxPayloadSize))
-            {
-                return maxCandidateCount;
-            }
-            for (var i = 0; i < maxCandidateCount; i++)
-            {
-                removeLastItem();
-            }
-
             // The first item of a chunk is always included unconditionally, matching the legacy behavior.
             addItemAt(0);
             var added = 1;

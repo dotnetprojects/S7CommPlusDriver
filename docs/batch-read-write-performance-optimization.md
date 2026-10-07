@@ -72,31 +72,19 @@ Findings:
   thread**, and the helper is never called reentrantly, so `[ThreadStatic]` is safe
   without locking. The session is never used concurrently for read and write.
 
-### 3. Optimistic fast path in the batching check (implemented)
+### 3. Bound probes by the fitting prefix
 
-- Adds an optimistic path at the top of `AppendItemsWithinPayloadLimit`: add **all**
-  candidate items of a chunk at once and check the payload limit **once**. If it fits,
-  return immediately.
-- Rationale: the PLC-negotiated item limit (`TagsPerReadRequestMax` /
-  `TagsPerWriteRequestMax`) already usually fits the negotiated PDU payload, so the whole
-  chunk typically fits in a single frame.
-- Effect: reduces full-request serializations per chunk from **O(log n)** (item 1) to
-  **1** in the common case. When the optimistic attempt overflows the limit, the code
-  rolls back and falls back to the galloping/binary-search path from item 1, so behavior
-  stays identical.
-- Covered by the existing split-point regression tests (which exercise the fallback).
-
-### 4. Conditionally skip the payload check
-
-Implemented as part of item 3: because the payload check is only performed when it can
-actually bind (optimistic attempt fails), the expensive search path is skipped entirely
-in the common case.
+The batching search starts with one item and grows geometrically. It does not first
+serialize the whole remaining candidate window. With large variable-sized writes,
+that optimistic probe repeated for every chunk would make total work quadratic even
+when only one or two values fit. `PayloadBoundWritesDoNotSerializeTheWholeRemainingWindow`
+checks that distant values are never serialized for such a chunk.
 
 ## Verification
 
 - Build clean (0 warnings / 0 errors) for **net48** and **net8.0**.
-- Full test suite: **468/468 passing** after each step, including the batch-split
-  regression tests in `S7CommPlusProtocolSessionReceiveTests`.
+- Batch-split and oversized-window regression tests are in
+  `S7CommPlusProtocolSessionReceiveTests`. Run the offline suite on both target frameworks.
 - Debug hooks used to drive the split logic from tests: e.g.
   `DebugCreateWriteRequestBatchForTests` in `S7CommPlusProtocolSession.cs`.
 

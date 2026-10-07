@@ -293,6 +293,28 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void PayloadBoundWritesDoNotSerializeTheWholeRemainingWindow()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = Enumerable.Range(0, 100).Select(i => new ItemAddress($"8A0E0001.{i:X}")).ToArray();
+            var values = Enumerable.Range(0, 100).Select(_ => new CountedPayload()).ToArray();
+            var batch = connection.DebugCreateWriteRequestBatchForTests(addresses, values, 100, 987);
+            Assert.Equal(1, batch.ItemCount);
+            Assert.Equal(0, values[99].SerializeCount);
+            Assert.InRange(values.Sum(value => value.SerializeCount), 1, 6);
+        }
+
+        private sealed class CountedPayload : PValue
+        {
+            internal int SerializeCount;
+            public override int Serialize(Stream buffer)
+            {
+                SerializeCount++;
+                return new ValueUSIntArray(new byte[600]).Serialize(buffer);
+            }
+        }
+
+        [Fact]
         public void LargeLegacyPayloadIsProtectedOnceBeforeTransportFragmentation()
         {
             var connection = new S7CommPlusProtocolSession();

@@ -20,6 +20,7 @@ namespace S7CommPlusDriver.ClientApi
         private IReadOnlyList<PlcTag> m_AggregateElements = Array.Empty<PlcTag>();
         private IReadOnlyList<uint> m_AggregateDimensions = Array.Empty<uint>();
         private object[] m_AggregateSnapshot;
+        private object m_AggregateValue;
         internal IReadOnlyList<uint> AggregateDimensions => m_AggregateDimensions;
 
         public string Name;
@@ -48,7 +49,27 @@ namespace S7CommPlusDriver.ClientApi
         /// <summary>
         /// Gets the typed CLR array assembled from <see cref="AggregateElements"/>, or <see langword="null"/> before a successful read.
         /// </summary>
-        public object AggregateValue { get; private set; }
+        public object AggregateValue
+        {
+            get
+            {
+                // Native array reads (including subscription notifications) update the typed Value directly.
+                if (m_AggregateDimensions.Count > 1 &&
+                    GetType().GetProperty("Value")?.GetValue(this) is Array flat &&
+                    flat.Length == m_AggregateElements.Count &&
+                    (m_AggregateSnapshot == null || !flat.Cast<object>().SequenceEqual(m_AggregateSnapshot)))
+                {
+                    if (m_AggregateSnapshot != null && m_AggregateValue is Array shaped &&
+                        !shaped.Cast<object>().SequenceEqual(m_AggregateSnapshot) &&
+                        !flat.Cast<object>().SequenceEqual(shaped.Cast<object>()))
+                        throw new InvalidOperationException("Both the flat and multidimensional values were changed. Assign one value before writing.");
+                    m_AggregateValue = ReshapeToMultiDimensional(flat.GetType().GetElementType(), flat, m_AggregateDimensions);
+                    m_AggregateSnapshot = flat.Cast<object>().ToArray();
+                }
+                return m_AggregateValue;
+            }
+            private set => m_AggregateValue = value;
+        }
 
         public PlcTag(string name, ItemAddress address, uint softdatatype)
         {
