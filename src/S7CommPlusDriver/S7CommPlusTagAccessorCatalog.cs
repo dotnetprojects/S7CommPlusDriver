@@ -19,7 +19,7 @@ namespace S7CommPlusDriver
     /// </remarks>
     public sealed class S7CommPlusTagAccessorCatalog
     {
-        private const int CurrentFormatVersion = 3;
+        private const int CurrentFormatVersion = 4;
         private const int MinimumSupportedFormatVersion = 1;
         private const int MaximumEntryCount = 2_000_000;
         private const int MaximumAggregateElementCount = 2_000_000;
@@ -323,6 +323,7 @@ namespace S7CommPlusDriver
         {
             private readonly AddressDescriptor _address;
             private readonly IReadOnlyList<TagDescriptor> _aggregateElements;
+            private readonly IReadOnlyList<uint> _dimensions;
 
             /// <summary>Initializes one immutable tag descriptor.</summary>
             /// <param name="name">The symbolic or generated aggregate-element name.</param>
@@ -337,13 +338,14 @@ namespace S7CommPlusDriver
                 uint datatype,
                 AddressDescriptor address,
                 IReadOnlyList<TagDescriptor> aggregateElements,
-                int maxStringLength)
+                int maxStringLength, IReadOnlyList<uint> dimensions)
             {
                 Name = name;
                 Datatype = datatype;
                 _address = address;
                 _aggregateElements = aggregateElements;
                 MaxStringLength = maxStringLength;
+                _dimensions = dimensions;
             }
 
             /// <summary>Gets the symbolic or generated element name.</summary>
@@ -366,7 +368,7 @@ namespace S7CommPlusDriver
                     tag.Datatype,
                     AddressDescriptor.FromAddress(tag.Address),
                     tag.AggregateElements.Select(FromTag).ToArray(),
-                    tag.GetMaxStringLength());
+                    tag.GetMaxStringLength(), tag.AggregateDimensions.ToArray());
             }
 
             /// <summary>Creates a fresh mutable driver tag and recursively recreates aggregate element tags.</summary>
@@ -380,7 +382,7 @@ namespace S7CommPlusDriver
                 }
                 if (_aggregateElements.Count > 0)
                 {
-                    tag.SetAggregateElements(_aggregateElements.Select(element => element.CreateTag()).ToArray());
+                    tag.SetAggregateElements(_aggregateElements.Select(element => element.CreateTag()).ToArray(), _dimensions);
                 }
                 return tag;
             }
@@ -401,6 +403,8 @@ namespace S7CommPlusDriver
                     element.WriteTo(writer);
                 }
                 writer.Write(MaxStringLength);
+                writer.Write(_dimensions.Count);
+                foreach (var dimension in _dimensions) writer.Write(dimension);
             }
 
             /// <summary>Reads and validates one recursive descriptor from the catalog stream.</summary>
@@ -431,7 +435,19 @@ namespace S7CommPlusDriver
                     elements[index] = ReadFrom(reader, depth + 1, formatVersion);
                 }
                 var maxStringLength = formatVersion >= 3 ? reader.ReadInt32() : 0;
-                return new TagDescriptor(name, datatype, address, elements, maxStringLength);
+                var dimensions = new uint[formatVersion >= 4 ? ReadBoundedCount(reader, 6, "dimension") : 0];
+                long total = dimensions.Length == 0 ? 0 : 1;
+                for (var index = 0; index < dimensions.Length; index++)
+                {
+                    dimensions[index] = reader.ReadUInt32();
+                    if (dimensions[index] == 0 || dimensions[index] > MaximumAggregateElementCount)
+                        throw new InvalidDataException("Invalid aggregate dimension length.");
+                    total *= dimensions[index];
+                    if (total > MaximumAggregateElementCount) throw new InvalidDataException("Aggregate shape is too large.");
+                }
+                if (dimensions.Length > 0 && (dimensions.Length < 2 || total != elementCount))
+                    throw new InvalidDataException("Aggregate shape does not match its elements.");
+                return new TagDescriptor(name, datatype, address, elements, maxStringLength, dimensions);
             }
         }
 

@@ -19,6 +19,8 @@ namespace S7CommPlusDriver.ClientApi
     {
         private IReadOnlyList<PlcTag> m_AggregateElements = Array.Empty<PlcTag>();
         private IReadOnlyList<uint> m_AggregateDimensions = Array.Empty<uint>();
+        private object[] m_AggregateSnapshot;
+        internal IReadOnlyList<uint> AggregateDimensions => m_AggregateDimensions;
 
         public string Name;
         public ItemAddress Address;
@@ -101,6 +103,7 @@ namespace S7CommPlusDriver.ClientApi
             {
                 DistributeMultiDimensionalValue(multiDimValue);
                 AggregateValue = multiDimValue;
+                MirrorMultiDimensionalValue(multiDimValue);
                 return;
             }
             var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
@@ -149,7 +152,19 @@ namespace S7CommPlusDriver.ClientApi
         internal void SetAggregateElements(IReadOnlyList<PlcTag> elements, IReadOnlyList<uint> dimensions = null)
         {
             m_AggregateElements = elements ?? throw new ArgumentNullException(nameof(elements));
-            m_AggregateDimensions = dimensions != null && dimensions.Count > 1 ? dimensions : Array.Empty<uint>();
+            m_AggregateDimensions = dimensions != null && dimensions.Count > 1 ? dimensions.ToArray() : Array.Empty<uint>();
+            if (m_AggregateDimensions.Count > 0)
+            {
+                long count = 1;
+                foreach (var dimension in m_AggregateDimensions)
+                {
+                    if (dimension == 0 || dimension > int.MaxValue)
+                        throw new ArgumentException("Aggregate dimensions must be positive CLR array lengths.", nameof(dimensions));
+                    count = checked(count * dimension);
+                }
+                if (count != elements.Count)
+                    throw new ArgumentException("Aggregate dimensions must match the element count.", nameof(dimensions));
+            }
         }
 
         /// <summary>
@@ -189,31 +204,40 @@ namespace S7CommPlusDriver.ClientApi
             else
             {
                 AggregateValue = flatValues;
-                var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
-                if (aggregateValueProperty?.PropertyType == flatValues.GetType())
-                {
-                    aggregateValueProperty.SetValue(this, flatValues);
-                }
             }
+            var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (aggregateValueProperty?.PropertyType == flatValues.GetType())
+                aggregateValueProperty.SetValue(this, flatValues);
+            m_AggregateSnapshot = flatValues.Cast<object>().ToArray();
             Quality = PlcTagQC.TAG_QUALITY_GOOD;
         }
 
         /// <summary>
         /// Copies a typed parent array value into its scalar element tags before an aggregate write is encoded.
-        /// Unsupported native array types intentionally keep their explicitly populated element values unchanged. A
-        /// multidimensional aggregate array is intentionally skipped here because <see cref="SetValue"/> already distributed
-        /// its values directly into <see cref="AggregateElements"/> at assignment time (its concrete tag's <c>Value</c> property
-        /// cannot hold a multidimensional shape).
+        /// Both shaped and legacy flat arrays are synchronized at write time so in-place edits are retained.
+        /// Unsupported native array types keep their explicitly populated element values unchanged.
         /// </summary>
         /// <exception cref="InvalidOperationException">A typed parent array does not contain exactly one value per aggregate element.</exception>
         internal virtual void PrepareAggregateWrite()
         {
-            if (m_AggregateElements.Count == 0 || m_AggregateDimensions.Count > 1)
+            if (m_AggregateElements.Count == 0)
             {
                 return;
             }
 
             var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (m_AggregateDimensions.Count > 1 && AggregateValue is Array shaped &&
+                (m_AggregateSnapshot == null || !shaped.Cast<object>().SequenceEqual(m_AggregateSnapshot)))
+            {
+                var flat = aggregateValueProperty?.GetValue(this) as Array;
+                if (flat != null && m_AggregateSnapshot != null &&
+                    !flat.Cast<object>().SequenceEqual(m_AggregateSnapshot) &&
+                    !flat.Cast<object>().SequenceEqual(shaped.Cast<object>()))
+                    throw new InvalidOperationException("Both the flat and multidimensional values were changed. Assign one value before writing.");
+                DistributeMultiDimensionalValue(shaped);
+                MirrorMultiDimensionalValue(shaped);
+                return;
+            }
             if (aggregateValueProperty?.PropertyType.IsArray != true)
             {
                 return;
@@ -235,6 +259,21 @@ namespace S7CommPlusDriver.ClientApi
                 }
                 elementValueProperty.SetValue(m_AggregateElements[index], values.GetValue(index));
             }
+            if (m_AggregateDimensions.Count > 1)
+            {
+                AggregateValue = ReshapeToMultiDimensional(values.GetType().GetElementType(), values, m_AggregateDimensions);
+                m_AggregateSnapshot = values.Cast<object>().ToArray();
+            }
+        }
+
+        private void MirrorMultiDimensionalValue(Array shaped)
+        {
+            var flat = Array.CreateInstance(shaped.GetType().GetElementType(), shaped.Length);
+            var index = 0;
+            foreach (var item in shaped) flat.SetValue(item, index++);
+            var property = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+            if (property?.PropertyType == flat.GetType()) property.SetValue(this, flat);
+            m_AggregateSnapshot = flat.Cast<object>().ToArray();
         }
 
         /// <summary>
@@ -253,13 +292,17 @@ namespace S7CommPlusDriver.ClientApi
             }
             for (var dimension = 0; dimension < m_AggregateDimensions.Count; dimension++)
             {
-                if (multiDimValue.GetLength(dimension) != m_AggregateDimensions[dimension])
+                if (multiDimValue.GetLowerBound(dimension) != 0 || multiDimValue.GetLength(dimension) != m_AggregateDimensions[dimension])
                 {
                     throw new ArgumentException(
                         $"Aggregate tag '{Name}' requires dimension {dimension} to have length {m_AggregateDimensions[dimension]}, but received {multiDimValue.GetLength(dimension)}.",
                         nameof(multiDimValue));
                 }
             }
+
+            var elementType = m_AggregateElements[0].GetType().GetProperty("Value")?.PropertyType;
+            if (multiDimValue.GetType().GetElementType() != elementType)
+                throw new ArgumentException("Array element type must match the PLC tag value type.", nameof(multiDimValue));
 
             var flatIndex = 0;
             foreach (var indices in EnumerateRowMajorIndices(m_AggregateDimensions))

@@ -18,6 +18,64 @@ namespace S7CommPlusDriver.Tests
     /// </remarks>
     public sealed class PlcTagMultiDimensionalArrayTests
     {
+        [Fact]
+        public void InPlaceShapedEditsAreTransferredAtWriteTime()
+        {
+            var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo());
+            tag.SetValue(new short[2, 3]);
+            var value = Assert.IsType<short[,]>(tag.GetValue());
+            value[1, 2] = 42;
+            tag.PrepareAggregateWrite();
+            Assert.Equal((short)42, tag.AggregateElements[5].GetValue());
+            Assert.Equal((short)42, Assert.IsType<PlcTagIntArray>(tag).Value[5]);
+        }
+
+        [Fact]
+        public void LegacyFlatValuesRemainReadableAndWritable()
+        {
+            var tag = Assert.IsType<PlcTagIntArray>(S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo()));
+            for (int i = 0; i < 6; i++) tag.AggregateElements[i].ProcessReadResult(new ValueInt((short)i), 0);
+            tag.CompleteAggregateRead(0);
+            Assert.Equal(new short[] { 0, 1, 2, 3, 4, 5 }, tag.Value);
+            tag.Value[4] = 77;
+            tag.PrepareAggregateWrite();
+            Assert.Equal((short)77, tag.AggregateElements[4].GetValue());
+            Assert.Equal((short)77, Assert.IsType<short[,]>(tag.GetValue())[1, 1]);
+        }
+
+        [Fact]
+        public void ConflictingFlatAndShapedEditsDoNotSilentlyOverwriteEachOther()
+        {
+            var tag = Assert.IsType<PlcTagIntArray>(S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo()));
+            tag.SetValue(new short[2, 3]);
+            ((short[,])tag.GetValue())[0, 0] = 1;
+            tag.Value[0] = 2;
+            Assert.Throws<InvalidOperationException>(() => tag.PrepareAggregateWrite());
+        }
+
+        [Fact]
+        public void DtlShapedWritesInitializeCompanionArrays()
+        {
+            var tag = Assert.IsType<PlcTagDTLArray>(S7CommPlusProtocolSession.CreateResolvedPlcTag(
+                CreateTwoByTwoVarInfo(Softdatatype.S7COMMP_SOFTDATATYPE_DTL, "DB.Dates", 0)));
+            var date = new DateTime(2026, 1, 1);
+            tag.SetValue(new[,] { { date, date }, { date, date } });
+            ((DateTime[,])tag.GetValue())[1, 1] = date.AddDays(1);
+            tag.PrepareAggregateWrite();
+            Assert.Equal(4, tag.ValueNanosecond.Length);
+            Assert.Equal(date.AddDays(1), tag.AggregateElements[3].GetValue());
+            Assert.All(tag.AggregateElements, element => Assert.IsType<ValueStruct>(element.GetWriteValue()));
+        }
+
+        [Fact]
+        public void WrongShapeOrElementTypeIsRejectedBeforeAssignment()
+        {
+            var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo());
+            Assert.Throws<ArgumentException>(() => tag.SetValue(new short[3, 2]));
+            Assert.Throws<ArgumentException>(() => tag.SetValue(new int[2, 3]));
+            Assert.Throws<ArgumentException>(() => tag.SetValue(Array.CreateInstance(typeof(short), new[] { 2, 3 }, new[] { 1, 1 })));
+        }
+
         private static VarInfo CreateTwoByThreeIntArrayVarInfo()
         {
             return new VarInfo

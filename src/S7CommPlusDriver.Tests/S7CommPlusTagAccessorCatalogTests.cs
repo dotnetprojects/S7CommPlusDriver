@@ -90,6 +90,10 @@ namespace S7CommPlusDriver.Tests
 
             Assert.NotSame(first, second);
             Assert.NotSame(first.Address, second.Address);
+            first.SetValue(new[,] { { true, false, true }, { false, true, false } });
+            Assert.IsType<bool[,]>(first.GetValue());
+            first.PrepareAggregateWrite();
+            Assert.Equal(true, first.AggregateElements[2].GetValue());
             Assert.Equal(
                 new[] { "8A0E0001.F.0", "8A0E0001.F.1", "8A0E0001.F.2", "8A0E0001.F.8", "8A0E0001.F.9", "8A0E0001.F.A" },
                 first.AggregateElements.Select(element => element.Address.GetAccessString()));
@@ -104,6 +108,7 @@ namespace S7CommPlusDriver.Tests
         [Theory]
         [InlineData(1)]
         [InlineData(2)]
+        [InlineData(3)]
         public void ReadSupportsOlderCatalogs(int version)
         {
             using var stream = new MemoryStream();
@@ -123,6 +128,7 @@ namespace S7CommPlusDriver.Tests
                 writer.Write(1);
                 writer.Write(0xFU);
                 writer.Write(0);
+                if (version >= 3) writer.Write(0);
             }
             stream.Position = 0;
 
