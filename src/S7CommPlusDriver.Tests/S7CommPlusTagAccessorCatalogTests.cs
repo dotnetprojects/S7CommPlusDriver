@@ -109,6 +109,7 @@ namespace S7CommPlusDriver.Tests
         [InlineData(1)]
         [InlineData(2)]
         [InlineData(3)]
+        [InlineData(4)]
         public void ReadSupportsOlderCatalogs(int version)
         {
             using var stream = new MemoryStream();
@@ -129,6 +130,7 @@ namespace S7CommPlusDriver.Tests
                 writer.Write(0xFU);
                 writer.Write(0);
                 if (version >= 3) writer.Write(0);
+                if (version >= 4) writer.Write(0);
             }
             stream.Position = 0;
 

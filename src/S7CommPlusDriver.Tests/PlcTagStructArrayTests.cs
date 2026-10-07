@@ -19,6 +19,29 @@ namespace S7CommPlusDriver.Tests
     public sealed class PlcTagStructArrayTests
     {
         [Fact]
+        public void CatalogPreservesStructArrayBoundsWithoutExpandingElements()
+        {
+            var info = new VarInfo
+            {
+                Name = "DB.Structs", AccessSequence = "8A0E0001.F",
+                Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT,
+                ArrayElementCount = 10000,
+                ArrayDimensions = new[] { new S7CommPlusArrayDimension(-5, 10000) },
+            };
+            var catalog = S7CommPlusClient.CreateTagAccessorCatalog(new[] { info }, new[] { info.Name }, "STRUCT-HASH");
+            Assert.Equal(-5, Assert.Single(catalog.CreateTags(new[] { info.Name })[info.Name].ArrayDimensions).LowerBound);
+            using var stream = new System.IO.MemoryStream();
+            catalog.WriteTo(stream);
+            stream.Position = 0;
+            var tag = Assert.IsType<PlcTagStruct>(S7CommPlusTagAccessorCatalog.ReadFrom(stream, "STRUCT-HASH")
+                .CreateTags(new[] { info.Name })[info.Name]);
+            var dimension = Assert.Single(tag.ArrayDimensions);
+            Assert.Equal(-5, dimension.LowerBound);
+            Assert.Equal(10000u, dimension.ElementCount);
+            Assert.Empty(tag.AggregateElements);
+        }
+
+        [Fact]
         public void CreateResolvedPlcTagReturnsStructTagWithDeclaredArrayShape()
         {
             var varInfo = new VarInfo

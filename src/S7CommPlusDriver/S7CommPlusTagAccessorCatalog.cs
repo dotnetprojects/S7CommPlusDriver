@@ -19,7 +19,7 @@ namespace S7CommPlusDriver
     /// </remarks>
     public sealed class S7CommPlusTagAccessorCatalog
     {
-        private const int CurrentFormatVersion = 4;
+        private const int CurrentFormatVersion = 5;
         private const int MinimumSupportedFormatVersion = 1;
         private const int MaximumEntryCount = 2_000_000;
         private const int MaximumAggregateElementCount = 2_000_000;
@@ -324,6 +324,7 @@ namespace S7CommPlusDriver
             private readonly AddressDescriptor _address;
             private readonly IReadOnlyList<TagDescriptor> _aggregateElements;
             private readonly IReadOnlyList<uint> _dimensions;
+            private readonly IReadOnlyList<S7CommPlusArrayDimension> _arrayDimensions;
 
             /// <summary>Initializes one immutable tag descriptor.</summary>
             /// <param name="name">The symbolic or generated aggregate-element name.</param>
@@ -338,7 +339,7 @@ namespace S7CommPlusDriver
                 uint datatype,
                 AddressDescriptor address,
                 IReadOnlyList<TagDescriptor> aggregateElements,
-                int maxStringLength, IReadOnlyList<uint> dimensions)
+                int maxStringLength, IReadOnlyList<uint> dimensions, IReadOnlyList<S7CommPlusArrayDimension> arrayDimensions)
             {
                 Name = name;
                 Datatype = datatype;
@@ -346,6 +347,7 @@ namespace S7CommPlusDriver
                 _aggregateElements = aggregateElements;
                 MaxStringLength = maxStringLength;
                 _dimensions = dimensions;
+                _arrayDimensions = arrayDimensions;
             }
 
             /// <summary>Gets the symbolic or generated element name.</summary>
@@ -368,7 +370,7 @@ namespace S7CommPlusDriver
                     tag.Datatype,
                     AddressDescriptor.FromAddress(tag.Address),
                     tag.AggregateElements.Select(FromTag).ToArray(),
-                    tag.GetMaxStringLength(), tag.AggregateDimensions.ToArray());
+                    tag.GetMaxStringLength(), tag.AggregateDimensions.ToArray(), tag.ArrayDimensions.ToArray());
             }
 
             /// <summary>Creates a fresh mutable driver tag and recursively recreates aggregate element tags.</summary>
@@ -384,6 +386,7 @@ namespace S7CommPlusDriver
                 {
                     tag.SetAggregateElements(_aggregateElements.Select(element => element.CreateTag()).ToArray(), _dimensions);
                 }
+                tag.SetArrayDimensions(_arrayDimensions);
                 return tag;
             }
 
@@ -405,6 +408,12 @@ namespace S7CommPlusDriver
                 writer.Write(MaxStringLength);
                 writer.Write(_dimensions.Count);
                 foreach (var dimension in _dimensions) writer.Write(dimension);
+                writer.Write(_arrayDimensions.Count);
+                foreach (var dimension in _arrayDimensions)
+                {
+                    writer.Write(dimension.LowerBound);
+                    writer.Write(dimension.ElementCount);
+                }
             }
 
             /// <summary>Reads and validates one recursive descriptor from the catalog stream.</summary>
@@ -447,7 +456,16 @@ namespace S7CommPlusDriver
                 }
                 if (dimensions.Length > 0 && (dimensions.Length < 2 || total != elementCount))
                     throw new InvalidDataException("Aggregate shape does not match its elements.");
-                return new TagDescriptor(name, datatype, address, elements, maxStringLength, dimensions);
+                var arrayDimensions = new S7CommPlusArrayDimension[formatVersion >= 5 ? ReadBoundedCount(reader, 6, "array declaration") : 0];
+                for (var index = 0; index < arrayDimensions.Length; index++)
+                {
+                    var lowerBound = reader.ReadInt32();
+                    var count = reader.ReadUInt32();
+                    if (count == 0)
+                        throw new InvalidDataException("Invalid array declaration.");
+                    arrayDimensions[index] = new S7CommPlusArrayDimension(lowerBound, count);
+                }
+                return new TagDescriptor(name, datatype, address, elements, maxStringLength, dimensions, arrayDimensions);
             }
         }
 

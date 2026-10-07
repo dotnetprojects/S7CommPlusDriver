@@ -85,7 +85,11 @@ namespace S7CommPlusDriver.Tests
             var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(CreateTwoByThreeIntArrayVarInfo());
             Assert.Throws<ArgumentException>(() => tag.SetValue(new short[3, 2]));
             Assert.Throws<ArgumentException>(() => tag.SetValue(new int[2, 3]));
-            Assert.Throws<ArgumentException>(() => tag.SetValue(Array.CreateInstance(typeof(short), new[] { 2, 3 }, new[] { 1, 1 })));
+            var nonZeroBounds = Array.CreateInstance(typeof(short), new[] { 2, 3 }, new[] { 1, 5 });
+            nonZeroBounds.SetValue((short)42, 2, 7);
+            tag.SetValue(nonZeroBounds);
+            tag.PrepareAggregateWrite();
+            Assert.Equal((short)42, tag.AggregateElements[5].GetValue());
         }
 
         private static VarInfo CreateTwoByThreeIntArrayVarInfo()

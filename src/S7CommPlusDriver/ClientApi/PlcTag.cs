@@ -209,7 +209,7 @@ namespace S7CommPlusDriver.ClientApi
         /// </param>
         internal void SetArrayDimensions(IReadOnlyList<S7CommPlusArrayDimension> dimensions)
         {
-            m_ArrayDimensions = dimensions ?? Array.Empty<S7CommPlusArrayDimension>();
+            m_ArrayDimensions = dimensions?.ToArray() ?? Array.Empty<S7CommPlusArrayDimension>();
         }
 
         /// <summary>
@@ -337,7 +337,7 @@ namespace S7CommPlusDriver.ClientApi
             }
             for (var dimension = 0; dimension < m_AggregateDimensions.Count; dimension++)
             {
-                if (multiDimValue.GetLowerBound(dimension) != 0 || multiDimValue.GetLength(dimension) != m_AggregateDimensions[dimension])
+                if (multiDimValue.GetLength(dimension) != m_AggregateDimensions[dimension])
                 {
                     throw new ArgumentException(
                         $"Aggregate tag '{Name}' requires dimension {dimension} to have length {m_AggregateDimensions[dimension]}, but received {multiDimValue.GetLength(dimension)}.",
@@ -350,14 +350,14 @@ namespace S7CommPlusDriver.ClientApi
                 throw new ArgumentException("Array element type must match the PLC tag value type.", nameof(multiDimValue));
 
             var flatIndex = 0;
-            foreach (var indices in EnumerateRowMajorIndices(m_AggregateDimensions))
+            foreach (var value in multiDimValue)
             {
                 var elementValueProperty = m_AggregateElements[flatIndex].GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
                 if (elementValueProperty == null)
                 {
                     throw new InvalidOperationException($"Aggregate element '{m_AggregateElements[flatIndex].Name}' has no writable Value property.");
                 }
-                elementValueProperty.SetValue(m_AggregateElements[flatIndex], multiDimValue.GetValue(indices));
+                elementValueProperty.SetValue(m_AggregateElements[flatIndex], value);
                 flatIndex++;
             }
         }
