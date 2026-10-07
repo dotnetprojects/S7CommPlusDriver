@@ -37,6 +37,9 @@ namespace OpenSsl
         private readonly object m_writeListLock = new object();
         private bool m_fatalError;
         private bool m_disposed;
+        private bool m_disposeRequested;
+        private bool m_processing;
+        private readonly object m_sslGate = new object();
 
         public interface IConnectorCallback
         {
@@ -98,15 +101,27 @@ namespace OpenSsl
 
         private void Dispose(bool disposing)
         {
-            if (m_disposed)
+            lock (m_sslGate)
             {
-                return;
+                if (m_disposed) return;
+                m_disposeRequested = true;
+                // A callback may dispose us while RunSSL still has native calls on its stack.
+                if (!m_processing) ReleaseNativeResources();
             }
+        }
 
+        private void ReleaseNativeResources()
+        {
             // A constructor that fails to load OpenSSL also schedules finalization.
             if (m_pSslConnection != IntPtr.Zero)
                 Native.SSL_free(m_pSslConnection);
             m_disposed = true;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (m_disposeRequested || m_disposed)
+                throw new ObjectDisposedException(nameof(OpenSSLConnector));
         }
 
         private int DataToWrite(byte[] pData, int dataLength)
@@ -157,6 +172,7 @@ namespace OpenSsl
                 if (bytesOut > 0)
                 {
                     OnDataToRead(pBuffer, bytesOut);
+                    if (m_disposeRequested) break;
                 }
 
                 if (bytesOut <= 0)
@@ -175,7 +191,7 @@ namespace OpenSsl
 
         private void SendPendingData()
         {
-            while (!m_fatalError && Native.BIO_ctrl_pending(m_pBioOut) > 0)
+            while (!m_fatalError && !m_disposeRequested && Native.BIO_ctrl_pending(m_pBioOut) > 0)
             {
                 byte[] pBuffer = null;
                 int bufferSize = 0;
@@ -205,7 +221,11 @@ namespace OpenSsl
 
         public void ExpectConnect()
         {
-            Native.SSL_set_connect_state(m_pSslConnection);
+            lock (m_sslGate)
+            {
+                ThrowIfDisposed();
+                Native.SSL_set_connect_state(m_pSslConnection);
+            }
         }
 
         void HandleError(int result)
@@ -271,13 +291,33 @@ namespace OpenSsl
 
         protected void RunSSL()
         {
+            lock (m_sslGate)
+            {
+                ThrowIfDisposed();
+                // Reentrant callbacks enqueue work; only the outer invocation drains it.
+                if (m_processing) return;
+                m_processing = true;
+                try
+                {
+                    RunSSLCore();
+                }
+                finally
+                {
+                    m_processing = false;
+                    if (m_disposeRequested) ReleaseNativeResources();
+                }
+            }
+        }
+
+        private void RunSSLCore()
+        {
             bool dataToWrite = false;
             bool dataToRead = false;
 
             GetPendingOperations(ref dataToRead, ref dataToWrite);
             int noProgressCount = 0;
 
-            while (!m_fatalError && ((!m_readRequired && dataToWrite) || dataToRead))
+            while (!m_fatalError && !m_disposeRequested && ((!m_readRequired && dataToWrite) || dataToRead))
             {
                 int pendingReadBefore;
                 int pendingWriteBefore;
@@ -302,15 +342,21 @@ namespace OpenSsl
                     PerformRead();
                 }
 
+                if (m_fatalError || m_disposeRequested) break;
+
                 if (!m_readRequired && dataToWrite)
                 {
                     PerformWrite();
                 }
 
+                if (m_fatalError || m_disposeRequested) break;
+
                 if (Native.BIO_ctrl_pending(m_pBioOut) != 0)
                 {
                     SendPendingData();
                 }
+
+                if (m_fatalError || m_disposeRequested) break;
 
                 GetPendingOperations(ref dataToRead, ref dataToWrite);
                 var bioPendingAfter = Native.BIO_ctrl_pending(m_pBioOut);
@@ -343,12 +389,11 @@ namespace OpenSsl
             }
         }
 
-        private readonly object m_sslGate = new object();
-        
         public void Write(byte[] pData, int dataLen)
         {
            lock (m_sslGate)
            {
+               ThrowIfDisposed();
                AppendBuffer(m_pendingWriteList, new DataBuffer(pData, dataLen));
                RunSSL();
            }
@@ -358,6 +403,7 @@ namespace OpenSsl
         {
            lock (m_sslGate)
            {
+               ThrowIfDisposed();
                AppendBuffer(m_pendingReadList, new DataBuffer(pData, dataLen));
                RunSSL();
            }
@@ -408,9 +454,10 @@ namespace OpenSsl
         {
             m_bytesAvailable = dataLength;
 
-            while (m_bytesAvailable > 0)
+            while (m_bytesAvailable > 0 && !m_disposeRequested)
             {
                 m_DataSink.OnDataAvailable();
+                if (m_disposeRequested) break;
                 if (m_bytesAvailable == dataLength)
                 {
                     ReportFatalError(Native.SSL_ERROR_SYSCALL);
@@ -434,18 +481,22 @@ namespace OpenSsl
 
         public int Receive(ref byte[] pData, int dataLength)
         {
-            int bytesRead = Math.Min(m_bytesAvailable, dataLength);
-
-            Buffer.BlockCopy(m_buffer, 0, pData, 0, bytesRead);
-
-            if (bytesRead != m_bytesAvailable)
+            lock (m_sslGate)
             {
-                Buffer.BlockCopy(m_buffer, bytesRead, m_buffer, 0, m_bytesAvailable - bytesRead);
+                ThrowIfDisposed();
+                int bytesRead = Math.Min(m_bytesAvailable, dataLength);
+
+                Buffer.BlockCopy(m_buffer, 0, pData, 0, bytesRead);
+
+                if (bytesRead != m_bytesAvailable)
+                {
+                    Buffer.BlockCopy(m_buffer, bytesRead, m_buffer, 0, m_bytesAvailable - bytesRead);
+                }
+
+                m_bytesAvailable -= bytesRead;
+
+                return bytesRead;
             }
-
-            m_bytesAvailable -= bytesRead;
-
-            return bytesRead;
         }
 
         private void UseData(DataBufferList list, DataBuffer pBuffer, int result)
@@ -504,9 +555,13 @@ namespace OpenSsl
         /// <returns>Secret</returns>
         public byte[] getOMSExporterSecret()
         {
-            byte[] secretOut = new byte[32];
-            int ret = (int)Native.SSL_export_keying_material(m_pSslConnection, secretOut, (nint)secretOut.Length, "EXPERIMENTAL_OMS".ToCharArray(), 16, IntPtr.Zero, 0, 0);
-            return secretOut;
+            lock (m_sslGate)
+            {
+                ThrowIfDisposed();
+                byte[] secretOut = new byte[32];
+                int ret = (int)Native.SSL_export_keying_material(m_pSslConnection, secretOut, (nint)secretOut.Length, "EXPERIMENTAL_OMS".ToCharArray(), 16, IntPtr.Zero, 0, 0);
+                return secretOut;
+            }
         }
     }
 }
