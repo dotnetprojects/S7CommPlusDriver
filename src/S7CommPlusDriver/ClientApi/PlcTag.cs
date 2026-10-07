@@ -64,6 +64,26 @@ namespace S7CommPlusDriver.ClientApi
 
         internal abstract PValue GetWriteValue();
 
+        /// <summary>
+        /// Gets the tag's current typed value as a boxed <see cref="object"/> via its public <c>Value</c> property.
+        /// </summary>
+        /// <returns>The boxed value, or <see langword="null"/> when the concrete tag type has no public <c>Value</c> property.</returns>
+        public virtual object GetValue()
+        {
+            var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            return valueProperty?.GetValue(this);
+        }
+
+        /// <summary>
+        /// Sets the tag's current typed value from a boxed <see cref="object"/> via its public <c>Value</c> property.
+        /// </summary>
+        /// <param name="value">The value to assign, which must be assignable to the concrete tag's <c>Value</c> property type.</param>
+        public virtual void SetValue(object value)
+        {
+            var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            valueProperty?.SetValue(this, value);
+        }
+
         internal void SetTraceAddressMetadata(VarInfo variable)
         {
             if (variable == null)

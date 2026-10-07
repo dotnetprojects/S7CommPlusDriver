@@ -69,6 +69,12 @@ namespace S7CommPlusDriver
         public abstract bool Is1Dim();
         public abstract bool IsMDim();
 
+        /// <summary>
+        /// Gets the maximum string length for a String/WString offset info, or 0 when not applicable.
+        /// </summary>
+        /// <returns>The maximum length in characters, or 0 for non-string offset info types.</returns>
+        public virtual int MaxStringLength() { return 0; }
+
         public static POffsetInfoType Deserialize(Stream buffer, int offsetinfotype, out int length)
         {
             switch ((OffsetInfoType)offsetinfotype)
@@ -455,6 +461,8 @@ namespace S7CommPlusDriver
         public override bool HasRelation() { return false; }
         public override bool Is1Dim() { return false; }
         public override bool IsMDim() { return true; }
+        // For a string array, UnspecifiedOffsetinfo1 carries the maximum string length of the array elements.
+        public override int MaxStringLength() { return UnspecifiedOffsetinfo1; }
 
         public static POffsetInfoType_ArrayMDim Deserialize(Stream buffer, out int length)
         {
@@ -542,6 +550,8 @@ namespace S7CommPlusDriver
         public override bool HasRelation() { return false; }
         public override bool Is1Dim() { return true; }
         public override bool IsMDim() { return false; }
+        // For a string array, UnspecifiedOffsetinfo1 carries the maximum string length of the array elements.
+        public override int MaxStringLength() { return UnspecifiedOffsetinfo1; }
 
         public static POffsetInfoType_Array1Dim Deserialize(Stream buffer, out int length)
         {
@@ -599,6 +609,8 @@ namespace S7CommPlusDriver
         public override bool HasRelation() { return false; }
         public override bool Is1Dim() { return false; }
         public override bool IsMDim() { return false; }
+        // Some firmware versions swap UnspecifiedOffsetinfo1/2, so take the smaller value as the max. string length.
+        public override int MaxStringLength() { return Math.Min(UnspecifiedOffsetinfo1, UnspecifiedOffsetinfo2); }
 
         public static POffsetInfoType_String Deserialize(Stream buffer, out int length)
         {
