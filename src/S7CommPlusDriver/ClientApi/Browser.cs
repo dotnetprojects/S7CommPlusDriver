@@ -174,7 +174,10 @@ namespace S7CommPlusDriver
                         ArrayElementCount = GetArrayElementCount(node),
                         ArrayDimensions = GetArrayDimensions(node),
                         ContainsIndexedArray = containsIndexedArray,
-                        MaxStringLength = node.Vte?.OffsetInfoType?.MaxStringLength() ?? 0,
+                        MaxStringLength = node.Vte != null &&
+                            (node.Vte.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_STRING ||
+                             node.Vte.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_WSTRING)
+                            ? node.Vte.OffsetInfoType?.MaxStringLength() ?? 0 : 0,
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)

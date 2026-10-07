@@ -101,19 +101,21 @@ namespace S7CommPlusDriver.Tests
         }
 
         /// <summary>Ensures version-two readers preserve access to catalogs written before root names were deduplicated.</summary>
-        [Fact]
-        public void ReadSupportsVersionOneCatalogs()
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        public void ReadSupportsOlderCatalogs(int version)
         {
             using var stream = new MemoryStream();
             using (var writer = new BinaryWriter(stream, Encoding.UTF8, leaveOpen: true))
             {
                 writer.Write(Encoding.ASCII.GetBytes("S7PACT01"));
-                writer.Write(1);
+                writer.Write(version);
                 WriteString(writer, "HASH-V1");
                 writer.Write(1);
                 WriteString(writer, "DB.Value");
                 writer.Write(true);
-                WriteString(writer, "DB.Value");
+                if (version == 1) WriteString(writer, "DB.Value");
                 writer.Write(Softdatatype.S7COMMP_SOFTDATATYPE_BOOL);
                 writer.Write(0x12345678U);
                 writer.Write(0x8A0E0001U);
@@ -129,6 +131,31 @@ namespace S7CommPlusDriver.Tests
 
             Assert.Equal("8A0E0001.F", tag.Address.GetAccessString());
             Assert.Equal(0x12345678U, tag.Address.SymbolCrc);
+        }
+
+        [Fact]
+        public void StringCapacitySurvivesAggregateAndIndexedCatalogRoundTrips()
+        {
+            var catalog = S7CommPlusClient.CreateTagAccessorCatalog(new[]
+            {
+                new VarInfo
+                {
+                    Name = "DB.Texts", AccessSequence = "8A0E0001.F",
+                    Softdatatype = Softdatatype.S7COMMP_SOFTDATATYPE_STRING, MaxStringLength = 5,
+                    ArrayElementCount = 4,
+                    ArrayDimensions = new[] { new S7CommPlusArrayDimension(1, 2), new S7CommPlusArrayDimension(-1, 2) },
+                },
+            }, new[] { "DB.Texts", "DB.Texts[2,0]" }, "STRING-HASH");
+            using var stream = new MemoryStream();
+            catalog.WriteTo(stream);
+            stream.Position = 0;
+            var tags = S7CommPlusTagAccessorCatalog.ReadFrom(stream, "STRING-HASH")
+                .CreateTags(new[] { "DB.Texts", "DB.Texts[2,0]" });
+            Assert.Equal(5, tags["DB.Texts"].GetMaxStringLength());
+            Assert.All(tags["DB.Texts"].AggregateElements, element => Assert.Equal(5, element.GetMaxStringLength()));
+            var scalar = Assert.IsType<PlcTagString>(tags["DB.Texts[2,0]"]);
+            scalar.Value = "Hi";
+            Assert.Equal(7, Assert.IsType<ValueUSIntArray>(scalar.GetWriteValue()).GetValue().Length);
         }
 
         /// <summary>Ensures a valid file cannot be used for an unverified or changed PLC program.</summary>

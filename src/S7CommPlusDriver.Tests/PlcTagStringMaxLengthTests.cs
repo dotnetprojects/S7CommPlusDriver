@@ -81,6 +81,51 @@ namespace S7CommPlusDriver.Tests
 
             var wstringTag = Assert.IsType<PlcTagWString>(tag);
             Assert.Equal(20, wstringTag.GetMaxStringLength());
+            wstringTag.Value = "Hi";
+            var words = Assert.IsType<ValueUIntArray>(wstringTag.GetWriteValue()).GetValue();
+            Assert.Equal(22, words.Length);
+            Assert.Equal((ushort)20, words[0]);
+            Assert.Equal((ushort)2, words[1]);
+            Assert.Equal((ushort)'H', words[2]);
+            Assert.Equal((ushort)'i', words[3]);
+            Assert.All(System.Linq.Enumerable.Skip(words, 4), word => Assert.Equal((ushort)0, word));
+        }
+
+        [Fact]
+        public void OriginalFactorySignatureRemainsAvailableToCompiledCallers()
+        {
+            Assert.NotNull(typeof(PlcTags).GetMethod(nameof(PlcTags.TagFactory),
+                new[] { typeof(string), typeof(ItemAddress), typeof(uint), typeof(bool) }));
+        }
+
+        [Fact]
+        public void Utf8StringChecksBytesOnAssignmentAndAfterEncodingChanges()
+        {
+            var tag = new PlcTagString("Text", new ItemAddress("8A0E0001.F"), Softdatatype.S7COMMP_SOFTDATATYPE_STRING, 10);
+            tag.SetStringEncoding("UTF-8");
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => tag.Value = "éééééé");
+            tag.Value = "ééééé";
+            Assert.Equal(10, Assert.IsType<ValueUSIntArray>(tag.GetWriteValue()).GetValue()[1]);
+            tag.SetStringEncoding("ISO-8859-1");
+            tag.Value = "éééééé";
+            tag.SetStringEncoding("UTF-8");
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => tag.GetWriteValue());
+        }
+
+        [Fact]
+        public void Utf8StringArrayChecksBytesEvenAfterItsValueArrayIsMutated()
+        {
+            var tag = new PlcTagStringArray("Texts", new ItemAddress("8A0E0001.F"), Softdatatype.S7COMMP_SOFTDATATYPE_STRING, 5);
+            tag.SetStringEncoding("UTF-8");
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => tag.Value = new[] { "ééé" });
+            tag.Value = new[] { "éé", "x" };
+            var bytes = Assert.IsType<ValueUSIntArray>(tag.GetWriteValue()).GetValue();
+            Assert.Equal(14, bytes.Length);
+            Assert.Equal(4, bytes[1]);
+            Assert.Equal(0, bytes[6]);
+            Assert.Equal(5, bytes[7]);
+            tag.Value[0] = "ééé";
+            Assert.Throws<System.ArgumentOutOfRangeException>(() => tag.GetWriteValue());
         }
 
         private static PValue GetWriteValue(PlcTag tag)

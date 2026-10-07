@@ -84,7 +84,11 @@ namespace S7CommPlusDriver.ClientApi
         /// behavior for callers that cannot supply this metadata.
         /// </param>
         /// <returns>The matching concrete tag implementation, or <see langword="null"/> for an unsupported datatype.</returns>
-        public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim = false, int maxStringLength = 0)
+        public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim = false)
+            => TagFactory(name, address, softdatatype, Is1Dim, 0);
+
+        /// <summary>Creates a tag using the PLC-declared string capacity.</summary>
+        public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim, int maxStringLength)
         {
             switch (softdatatype)
             {

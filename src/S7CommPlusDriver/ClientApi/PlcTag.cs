@@ -992,7 +992,7 @@ namespace S7CommPlusDriver.ClientApi
 
             set
             {
-                if (value.Length <= m_MaxLength)
+                if (Encoding.GetEncoding(m_Encoding).GetByteCount(value) <= m_MaxLength)
                 {
                     m_Value = value;
                 }
@@ -1034,6 +1034,8 @@ namespace S7CommPlusDriver.ClientApi
         {
             // Must write the complete array of MaxLength of the string (plus two bytes header).
             byte[] sb = Encoding.GetEncoding(m_Encoding).GetBytes(Value);
+            if (sb.Length > m_MaxLength)
+                throw new ArgumentOutOfRangeException(nameof(Value), "Encoded string exceeds its declared byte capacity.");
             var b = new byte[m_MaxLength + 2];
             b[0] = m_MaxLength;
             b[1] = (byte)sb.Length;
@@ -1537,7 +1539,7 @@ namespace S7CommPlusDriver.ClientApi
         internal override PValue GetWriteValue()
         {
             // Must write the complete array of MaxLength of the string (plus two ushort for the header).
-            var b = new ushort[Value.Length + 2];
+            var b = new ushort[m_MaxLength + 2];
             b[0] = m_MaxLength;
             b[1] = (ushort)Value.Length;
             for (int i = 0; i < Value.Length; i++)
@@ -2628,7 +2630,7 @@ namespace S7CommPlusDriver.ClientApi
                 bool lengthOk = true;
                 foreach (var item in value)
                 {
-                    if (item.Length > m_MaxLength)
+                    if (Encoding.GetEncoding(m_Encoding).GetByteCount(item) > m_MaxLength)
                     {
                         lengthOk = false;
                         break;
@@ -2688,6 +2690,8 @@ namespace S7CommPlusDriver.ClientApi
             {
                 // Must write the complete array of MaxLength of the string (plus two bytes header).
                 byte[] sb = Encoding.GetEncoding(m_Encoding).GetBytes(item);
+                if (sb.Length > m_MaxLength)
+                    throw new ArgumentOutOfRangeException(nameof(Value), "Encoded string array element exceeds its declared byte capacity.");
                 var b = new byte[m_MaxLength + 2];
                 b[0] = m_MaxLength;
                 b[1] = (byte)sb.Length;
