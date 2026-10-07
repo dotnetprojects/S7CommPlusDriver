@@ -18,6 +18,7 @@ namespace S7CommPlusDriver.ClientApi
     public abstract class PlcTag
     {
         private IReadOnlyList<PlcTag> m_AggregateElements = Array.Empty<PlcTag>();
+        private IReadOnlyList<uint> m_AggregateDimensions = Array.Empty<uint>();
 
         public string Name;
         public ItemAddress Address;
@@ -72,21 +73,36 @@ namespace S7CommPlusDriver.ClientApi
         internal virtual int GetMaxStringLength() => 0;
 
         /// <summary>
-        /// Gets the tag's current typed value as a boxed <see cref="object"/> via its public <c>Value</c> property.
+        /// Gets the tag's current typed value. For a multidimensional aggregate array (see <see cref="AggregateElements"/> and
+        /// <see cref="AggregateValue"/>), the reshaped multidimensional array is returned because the concrete tag's <c>Value</c>
+        /// property can only expose a flat one-dimensional array. Every other tag returns its boxed public <c>Value</c> property.
         /// </summary>
         /// <returns>The boxed value, or <see langword="null"/> when the concrete tag type has no public <c>Value</c> property.</returns>
         public virtual object GetValue()
         {
+            if (m_AggregateDimensions.Count > 1)
+            {
+                return AggregateValue;
+            }
             var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
             return valueProperty?.GetValue(this);
         }
 
         /// <summary>
-        /// Sets the tag's current typed value from a boxed <see cref="object"/> via its public <c>Value</c> property.
+        /// Sets the tag's current typed value. For a multidimensional aggregate array, <paramref name="value"/> is expected to be
+        /// a multidimensional <see cref="Array"/> matching the PLC-declared dimensions; it is reshaped and distributed directly
+        /// into the individual <see cref="AggregateElements"/> because the concrete tag's <c>Value</c> property can only hold a
+        /// flat one-dimensional array. Every other tag assigns <paramref name="value"/> to its public <c>Value</c> property.
         /// </summary>
         /// <param name="value">The value to assign, which must be assignable to the concrete tag's <c>Value</c> property type.</param>
         public virtual void SetValue(object value)
         {
+            if (m_AggregateDimensions.Count > 1 && value is Array multiDimValue)
+            {
+                DistributeMultiDimensionalValue(multiDimValue);
+                AggregateValue = multiDimValue;
+                return;
+            }
             var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
             valueProperty?.SetValue(this, value);
         }
@@ -125,14 +141,21 @@ namespace S7CommPlusDriver.ClientApi
         /// <summary>
         /// Configures the scalar element tags that collectively represent this aggregate PLC array.
         /// </summary>
-        /// <param name="elements">Element tags in PLC declaration order.</param>
-        internal void SetAggregateElements(IReadOnlyList<PlcTag> elements)
+        /// <param name="elements">Element tags in PLC declaration order (row-major, outermost dimension first).</param>
+        /// <param name="dimensions">
+        /// The PLC-declared dimension lengths in declaration order (outermost first), or <see langword="null"/>/empty for a
+        /// one-dimensional aggregate array. A single-element list is treated the same as <see langword="null"/>.
+        /// </param>
+        internal void SetAggregateElements(IReadOnlyList<PlcTag> elements, IReadOnlyList<uint> dimensions = null)
         {
             m_AggregateElements = elements ?? throw new ArgumentNullException(nameof(elements));
+            m_AggregateDimensions = dimensions != null && dimensions.Count > 1 ? dimensions : Array.Empty<uint>();
         }
 
         /// <summary>
         /// Publishes a completed set of scalar element reads as one aggregate value and mirrors it into a compatible typed array tag.
+        /// A multidimensional aggregate array (<see cref="m_AggregateDimensions"/> has more than one entry) is reshaped into a
+        /// genuine multidimensional <see cref="Array"/> instead of the concrete tag's inherently flat <c>Value</c> property.
         /// </summary>
         /// <param name="itemError">The first element error, or zero when every element succeeded.</param>
         internal virtual void CompleteAggregateRead(ulong itemError)
@@ -153,29 +176,39 @@ namespace S7CommPlusDriver.ClientApi
                 return;
             }
 
-            var values = Array.CreateInstance(elementValueProperty.PropertyType, m_AggregateElements.Count);
+            var flatValues = Array.CreateInstance(elementValueProperty.PropertyType, m_AggregateElements.Count);
             for (var index = 0; index < m_AggregateElements.Count; index++)
             {
-                values.SetValue(elementValueProperty.GetValue(m_AggregateElements[index]), index);
+                flatValues.SetValue(elementValueProperty.GetValue(m_AggregateElements[index]), index);
             }
 
-            AggregateValue = values;
-            var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
-            if (aggregateValueProperty?.PropertyType == values.GetType())
+            if (m_AggregateDimensions.Count > 1)
             {
-                aggregateValueProperty.SetValue(this, values);
+                AggregateValue = ReshapeToMultiDimensional(elementValueProperty.PropertyType, flatValues, m_AggregateDimensions);
+            }
+            else
+            {
+                AggregateValue = flatValues;
+                var aggregateValueProperty = GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+                if (aggregateValueProperty?.PropertyType == flatValues.GetType())
+                {
+                    aggregateValueProperty.SetValue(this, flatValues);
+                }
             }
             Quality = PlcTagQC.TAG_QUALITY_GOOD;
         }
 
         /// <summary>
         /// Copies a typed parent array value into its scalar element tags before an aggregate write is encoded.
-        /// Unsupported native array types intentionally keep their explicitly populated element values unchanged.
+        /// Unsupported native array types intentionally keep their explicitly populated element values unchanged. A
+        /// multidimensional aggregate array is intentionally skipped here because <see cref="SetValue"/> already distributed
+        /// its values directly into <see cref="AggregateElements"/> at assignment time (its concrete tag's <c>Value</c> property
+        /// cannot hold a multidimensional shape).
         /// </summary>
         /// <exception cref="InvalidOperationException">A typed parent array does not contain exactly one value per aggregate element.</exception>
         internal virtual void PrepareAggregateWrite()
         {
-            if (m_AggregateElements.Count == 0)
+            if (m_AggregateElements.Count == 0 || m_AggregateDimensions.Count > 1)
             {
                 return;
             }
@@ -201,6 +234,89 @@ namespace S7CommPlusDriver.ClientApi
                     throw new InvalidOperationException($"Aggregate element '{m_AggregateElements[index].Name}' has no writable Value property.");
                 }
                 elementValueProperty.SetValue(m_AggregateElements[index], values.GetValue(index));
+            }
+        }
+
+        /// <summary>
+        /// Distributes a caller-supplied multidimensional array directly into the scalar element tags' <c>Value</c> properties,
+        /// in the same row-major order used by <see cref="ReshapeToMultiDimensional"/> and the PLC's own element access IDs.
+        /// </summary>
+        /// <param name="multiDimValue">The multidimensional array to distribute. Its shape must match <see cref="m_AggregateDimensions"/>.</param>
+        /// <exception cref="ArgumentException">The array's rank or per-dimension lengths do not match the PLC-declared dimensions.</exception>
+        private void DistributeMultiDimensionalValue(Array multiDimValue)
+        {
+            if (multiDimValue.Rank != m_AggregateDimensions.Count)
+            {
+                throw new ArgumentException(
+                    $"Aggregate tag '{Name}' requires an array of rank {m_AggregateDimensions.Count}, but received rank {multiDimValue.Rank}.",
+                    nameof(multiDimValue));
+            }
+            for (var dimension = 0; dimension < m_AggregateDimensions.Count; dimension++)
+            {
+                if (multiDimValue.GetLength(dimension) != m_AggregateDimensions[dimension])
+                {
+                    throw new ArgumentException(
+                        $"Aggregate tag '{Name}' requires dimension {dimension} to have length {m_AggregateDimensions[dimension]}, but received {multiDimValue.GetLength(dimension)}.",
+                        nameof(multiDimValue));
+                }
+            }
+
+            var flatIndex = 0;
+            foreach (var indices in EnumerateRowMajorIndices(m_AggregateDimensions))
+            {
+                var elementValueProperty = m_AggregateElements[flatIndex].GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public);
+                if (elementValueProperty == null)
+                {
+                    throw new InvalidOperationException($"Aggregate element '{m_AggregateElements[flatIndex].Name}' has no writable Value property.");
+                }
+                elementValueProperty.SetValue(m_AggregateElements[flatIndex], multiDimValue.GetValue(indices));
+                flatIndex++;
+            }
+        }
+
+        /// <summary>
+        /// Reshapes a flat array, ordered exactly like <see cref="AggregateElements"/>, into a genuine multidimensional array.
+        /// </summary>
+        /// <param name="elementType">The CLR element type shared by every scalar element tag's <c>Value</c> property.</param>
+        /// <param name="flatValues">The flat values in row-major order (outermost dimension first).</param>
+        /// <param name="dimensions">The PLC-declared dimension lengths in declaration order (outermost first).</param>
+        /// <returns>A multidimensional array of <paramref name="elementType"/> with one entry per element of <paramref name="flatValues"/>.</returns>
+        private static Array ReshapeToMultiDimensional(Type elementType, Array flatValues, IReadOnlyList<uint> dimensions)
+        {
+            var lengths = dimensions.Select(dimension => checked((int)dimension)).ToArray();
+            var multiDimValues = Array.CreateInstance(elementType, lengths);
+            var flatIndex = 0;
+            foreach (var indices in EnumerateRowMajorIndices(dimensions))
+            {
+                multiDimValues.SetValue(flatValues.GetValue(flatIndex), indices);
+                flatIndex++;
+            }
+            return multiDimValues;
+        }
+
+        /// <summary>
+        /// Enumerates every index combination of a multidimensional shape in row-major order (outermost dimension varies
+        /// slowest), matching the order in which the PLC protocol enumerates aggregate array element access IDs.
+        /// </summary>
+        /// <param name="dimensions">The dimension lengths in declaration order (outermost first).</param>
+        private static IEnumerable<int[]> EnumerateRowMajorIndices(IReadOnlyList<uint> dimensions)
+        {
+            var indices = new int[dimensions.Count];
+            var totalCount = 1L;
+            foreach (var dimension in dimensions)
+            {
+                totalCount = checked(totalCount * dimension);
+            }
+
+            for (var flatIndex = 0L; flatIndex < totalCount; flatIndex++)
+            {
+                var remainder = flatIndex;
+                for (var dimension = dimensions.Count - 1; dimension >= 0; dimension--)
+                {
+                    indices[dimension] = checked((int)(remainder % dimensions[dimension]));
+                    remainder /= dimensions[dimension];
+                }
+                yield return indices;
             }
         }
 

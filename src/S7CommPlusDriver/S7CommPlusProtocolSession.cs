@@ -2086,8 +2086,28 @@ namespace S7CommPlusDriver
                 })
                 .Where(elementTag => elementTag != null)
                 .ToList();
-            tag.SetAggregateElements(elementTags);
+            tag.SetAggregateElements(elementTags, GetAggregateArrayDimensions(varType));
             return tag;
+        }
+
+        /// <summary>
+        /// Extracts the PLC-declared dimension lengths (outermost first) of an aggregate primitive array, for reshaping the
+        /// flat element-tag list into a genuine multidimensional array. Returns an empty list for one-dimensional arrays.
+        /// </summary>
+        /// <param name="varType">The resolved member datatype and dimension metadata.</param>
+        private static IReadOnlyList<uint> GetAggregateArrayDimensions(PVartypeListElement varType)
+        {
+            if (varType.OffsetInfoType is not IOffsetInfoType_MDim multiDimensional)
+            {
+                return Array.Empty<uint>();
+            }
+
+            // GetMdimArrayElementCount() stores dimensions inside-out; reverse to declaration order (outermost first) and
+            // drop trailing zero-length entries, matching GetAggregateArrayElementAccessIds's own filtering.
+            return multiDimensional.GetMdimArrayElementCount()
+                .TakeWhile(count => count > 0)
+                .Reverse()
+                .ToArray();
         }
 
         /// <summary>
@@ -2126,7 +2146,10 @@ namespace S7CommPlusDriver
                     varInfo.MaxStringLength))
                 .Where(elementTag => elementTag != null)
                 .ToList();
-            tag.SetAggregateElements(elementTags);
+            var dimensions = varInfo.ArrayDimensions != null && varInfo.ArrayDimensions.Count > 1
+                ? varInfo.ArrayDimensions.Select(dimension => dimension.ElementCount).ToArray()
+                : Array.Empty<uint>();
+            tag.SetAggregateElements(elementTags, dimensions);
             return tag;
         }
 
