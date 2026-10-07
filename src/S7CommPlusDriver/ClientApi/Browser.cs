@@ -958,6 +958,11 @@ namespace S7CommPlusDriver
         /// without the CRC of the containing array declaration because the PLC rejects that CRC/address combination.
         /// </summary>
         internal bool ContainsIndexedArray;
+
+        public override string ToString()
+        {
+            return Name;
+        }
     }
 
     internal enum eNodeType

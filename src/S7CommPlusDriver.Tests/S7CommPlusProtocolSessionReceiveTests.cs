@@ -254,6 +254,44 @@ namespace S7CommPlusDriver.Tests
             Assert.InRange(batch.SerializedLength, 1, 987);
         }
 
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(3)]
+        [InlineData(7)]
+        [InlineData(8)]
+        [InlineData(9)]
+        [InlineData(16)]
+        [InlineData(17)]
+        [InlineData(63)]
+        [InlineData(64)]
+        [InlineData(65)]
+        [InlineData(500)]
+        public void WriteBatchSplitPointMatchesLinearScanForVariousSizes(int payloadItemLimitByCount)
+        {
+            // Uses uniformly sized items so the exact split point can be pinned down: probe the
+            // serialized length of exactly N items via the real predicate, then use that length as
+            // the payload limit and assert the batching under test stops at exactly N items. This
+            // exercises the galloping/binary-search based implementation across split points that
+            // land before, on, and after several power-of-two boundaries.
+            var connection = new S7CommPlusProtocolSession();
+            const int totalItems = 1000;
+            var addresses = Enumerable.Range(1, totalItems)
+                .Select(i => new ItemAddress($"8A0E{i % 0xFFFF:X4}.1"))
+                .ToArray();
+            var values = Enumerable.Range(1, totalItems)
+                .Select(i => (PValue)new ValueDInt(i))
+                .ToArray();
+
+            var probe = connection.DebugCreateWriteRequestBatchForTests(addresses, values, payloadItemLimitByCount, int.MaxValue);
+            var maxPayloadSize = (int)probe.SerializedLength;
+
+            var batch = connection.DebugCreateWriteRequestBatchForTests(addresses, values, totalItems, maxPayloadSize);
+
+            Assert.Equal(payloadItemLimitByCount, batch.ItemCount);
+            Assert.InRange(batch.SerializedLength, 1, maxPayloadSize);
+        }
+
         [Fact]
         public void LargeLegacyPayloadIsProtectedOnceBeforeTransportFragmentation()
         {
