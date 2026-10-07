@@ -37,6 +37,14 @@ namespace S7CommPlusDriver
         int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo);
         int GetTextLists(IEnumerable<int> languageIds, out S7CommPlusTextListCatalog textLists);
         int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources);
+
+        /// <summary>
+        /// Returns the communication resource limits that were negotiated during the connect handshake
+        /// without issuing additional PLC requests. Unlike <see cref="GetCommunicationResources"/>, this
+        /// reflects the SystemLimits already read while establishing the session and is therefore safe to
+        /// call on every (re)connect.
+        /// </summary>
+        int GetCachedCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources);
         int GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId, Func<string, long, int, string> textListResolver);
         int ReadValues(List<ItemAddress> addresses, out List<object> values, out List<ulong> errors);
         int WriteValues(List<ItemAddress> addresses, List<PValue> values, out List<ulong> errors);

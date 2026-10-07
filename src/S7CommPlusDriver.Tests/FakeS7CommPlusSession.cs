@@ -76,6 +76,7 @@ namespace S7CommPlusDriver.Tests
         public Func<(int Error, S7CommPlusCpuCultureInfo CultureInfo)>? CpuCultureInfoHandler { get; set; }
         public Func<IEnumerable<int>, (int Error, S7CommPlusTextListCatalog TextLists)>? TextListsHandler { get; set; }
         public Func<(int Error, S7CommPlusCommunicationResourceSnapshot Resources)>? CommunicationResourcesHandler { get; set; }
+        public S7CommPlusCommunicationResourceSnapshot CachedCommunicationResources { get; set; } = new S7CommPlusCommunicationResourceSnapshot();
         public Func<List<ItemAddress>, (int Error, List<object?> Values, List<ulong> Errors)>? ReadHandler { get; set; }
         public Func<List<ItemAddress>, List<PValue>, (int Error, List<ulong> Errors)>? WriteHandler { get; set; }
         public Func<List<PlcTag>, ushort, short, int>? CreateTagSubscriptionHandler { get; set; }
@@ -254,9 +255,15 @@ namespace S7CommPlusDriver.Tests
 
         public int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
         {
-            var result = CommunicationResourcesHandler?.Invoke() ?? (0, new S7CommPlusCommunicationResourceSnapshot());
+            var result = CommunicationResourcesHandler?.Invoke() ?? (0, CachedCommunicationResources);
             resources = result.Resources;
             return result.Error;
+        }
+
+        public int GetCachedCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
+        {
+            resources = CachedCommunicationResources;
+            return 0;
         }
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<ulong> errors)

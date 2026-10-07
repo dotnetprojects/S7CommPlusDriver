@@ -160,6 +160,11 @@ namespace S7CommPlusDriver
             return GetCommunicationResources(out resources);
         }
 
+        int IS7CommPlusSession.GetCachedCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
+        {
+            return GetCachedCommunicationResources(out resources);
+        }
+
         int IS7CommPlusSession.GetActiveAlarms(out List<S7CommPlusAlarm> alarmList, int languageId, Func<string, long, int, string> textListResolver)
         {
             return AlarmBrowser.GetActiveAlarms(out alarmList, languageId, textListResolver);

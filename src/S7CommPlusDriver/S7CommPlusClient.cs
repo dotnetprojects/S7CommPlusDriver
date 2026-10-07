@@ -1745,9 +1745,27 @@ namespace S7CommPlusDriver
             }
 
             SetState(S7CommPlusConnectionState.Connected);
-            _tagsPerReadRequestMax = DefaultTagsPerRequest;
-            _tagsPerWriteRequestMax = DefaultTagsPerRequest;
+            ApplyNegotiatedCommunicationResourceLimits();
             _options.Logger.LogInformation("Connected to PLC {Endpoint}.", Endpoint);
+        }
+
+        /// <summary>
+        /// Applies the communication resource limits that the protocol session negotiated during the connect
+        /// handshake instead of resetting them to the hard-coded defaults. The session reads the PLC
+        /// SystemLimits as part of connecting, so this keeps read/write batching at the real PLC limit even
+        /// across automatic reconnects, where the application does not get a chance to re-query the resources.
+        /// </summary>
+        private void ApplyNegotiatedCommunicationResourceLimits()
+        {
+            if (_session == null || _session.GetCachedCommunicationResources(out var resources) != 0)
+            {
+                _tagsPerReadRequestMax = DefaultTagsPerRequest;
+                _tagsPerWriteRequestMax = DefaultTagsPerRequest;
+                return;
+            }
+
+            _tagsPerReadRequestMax = Math.Max(1, resources.TagsPerReadRequestMax);
+            _tagsPerWriteRequestMax = Math.Max(1, resources.TagsPerWriteRequestMax);
         }
 
         private async Task ReconnectCoreAsync(CancellationToken cancellationToken)

@@ -3,6 +3,7 @@ using S7CommPlusDriver.Alarming;
 using S7CommPlusDriver.Internal;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -710,6 +711,140 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(2, fake.ConnectCount);
             Assert.Equal(2, fake.ReadCount);
             Assert.True(result.Items[0].IsSuccess);
+        }
+
+        [Fact]
+        public async Task ReconnectKeepsNegotiatedReadBatchSize()
+        {
+            const int negotiatedReadRequestMax = 25;
+            var observedBatchSizes = new List<int>();
+            var fake = new FakeS7CommPlusSession
+            {
+                CachedCommunicationResources =
+                    new S7CommPlusCommunicationResourceSnapshot(negotiatedReadRequestMax, negotiatedReadRequestMax),
+                ReadHandler = addresses =>
+                {
+                    observedBatchSizes.Add(addresses.Count);
+                    if (observedBatchSizes.Count == 1)
+                    {
+                        // Transient failure on the first attempt forces a reconnect and one retry.
+                        return (S7Consts.errTCPDataReceive, new List<object?>(), new List<ulong>());
+                    }
+
+                    return (
+                        0,
+                        addresses.Select(_ => (object?)new ValueInt(1)).ToList(),
+                        new List<ulong>(new ulong[addresses.Count]));
+                }
+            };
+            var client = CreateClient(fake);
+
+            // Must use the PlcTag overload: only that path batches by _tagsPerReadRequestMax,
+            // the ItemAddress overload sends all addresses in a single request.
+            var tags = Enumerable.Range(1, negotiatedReadRequestMax)
+                .Select(index => PlcTags.TagFactory(
+                    $"DB.Value[{index}]",
+                    new ItemAddress($"8A0E0001.{index:X}"),
+                    Softdatatype.S7COMMP_SOFTDATATYPE_INT))
+                .ToList();
+
+            var result = await client.ReadAsync(tags);
+
+            Assert.True(result.Items.All(item => item.IsSuccess));
+            // After the automatic reconnect the client must keep batching at the negotiated limit
+            // (one 25-item request per attempt), not fall back to the 20-item default which would
+            // produce a 20-item and a 5-item request.
+            Assert.Equal(new[] { negotiatedReadRequestMax, negotiatedReadRequestMax }, observedBatchSizes);
+        }
+
+        [Fact]
+        public async Task ReconnectThenReadKeepsSteadyStateTiming()
+        {
+            // The negotiated limit is twice the hard-coded 20-item default; losing it on a reconnect
+            // doubles the number of read round trips and therefore the read duration.
+            const int negotiatedReadRequestMax = 40;
+            const int tagCount = 400;
+            const int readRequestLatencyMs = 25;
+            const int simulatedTimeoutMs = 250;
+
+            var batches = new List<int>();
+            var failNextReadAttempt = false;
+            var fake = new FakeS7CommPlusSession
+            {
+                CachedCommunicationResources =
+                    new S7CommPlusCommunicationResourceSnapshot(negotiatedReadRequestMax, negotiatedReadRequestMax),
+                ReadHandler = addresses =>
+                {
+                    batches.Add(addresses.Count);
+
+                    // The first attempt of the reconnect-carrying read simulates the transient timeout.
+                    // That makes the driver reconnect and retry, and is intentionally slow.
+                    if (failNextReadAttempt)
+                    {
+                        failNextReadAttempt = false;
+                        Thread.Sleep(simulatedTimeoutMs);
+                        return (S7Consts.errTCPDataReceive, new List<object?>(), new List<ulong>());
+                    }
+
+                    Thread.Sleep(readRequestLatencyMs);
+                    return (
+                        0,
+                        addresses.Select(_ => (object?)new ValueInt(1)).ToList(),
+                        new List<ulong>(new ulong[addresses.Count]));
+                }
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 5000);
+
+            var tags = Enumerable.Range(1, tagCount)
+                .Select(index => PlcTags.TagFactory(
+                    $"DB.Value[{index}]",
+                    new ItemAddress($"8A0E0001.{index:X}"),
+                    Softdatatype.S7COMMP_SOFTDATATYPE_INT))
+                .ToList();
+
+            // Mirror the gateway: it explicitly negotiates the resources once after connecting.
+            // Without that step the baseline would already use the 20-item default and the reconnect
+            // regression would be invisible in the measured timings.
+            await client.GetCommunicationResourcesAsync();
+
+            // Baseline before the reconnect.
+            var baselineWatch = Stopwatch.StartNew();
+            var baseline = await client.ReadAsync(tags);
+            baselineWatch.Stop();
+
+            // This call hits the simulated transient timeout, reconnects and retries. It is the
+            // "first call after the reconnect" and is expected to be slow, so it is only compared
+            // against steady state and never against the baseline.
+            failNextReadAttempt = true;
+            var reconnectWatch = Stopwatch.StartNew();
+            var afterReconnect = await client.ReadAsync(tags);
+            reconnectWatch.Stop();
+
+            // Steady state after the reconnect.
+            var steadyWatch = Stopwatch.StartNew();
+            var steady = await client.ReadAsync(tags);
+            steadyWatch.Stop();
+
+            Assert.True(baseline.Items.All(item => item.IsSuccess));
+            Assert.True(afterReconnect.Items.All(item => item.IsSuccess));
+            Assert.True(steady.Items.All(item => item.IsSuccess));
+
+            // The reconnect-carrying call must be clearly slower than steady state.
+            Assert.True(
+                reconnectWatch.ElapsedMilliseconds > steadyWatch.ElapsedMilliseconds,
+                $"Reconnect call ({reconnectWatch.ElapsedMilliseconds} ms) must be slower than steady state ({steadyWatch.ElapsedMilliseconds} ms).");
+
+            // Steady state must not roughly double compared to the baseline, i.e. the negotiated
+            // batch size must have survived the reconnect.
+            var steadyUpperBoundMs = baselineWatch.ElapsedMilliseconds * 1.5 + 40;
+            Assert.True(
+                steadyWatch.ElapsedMilliseconds <= steadyUpperBoundMs,
+                $"Steady-state read after reconnect took {steadyWatch.ElapsedMilliseconds} ms, baseline {baselineWatch.ElapsedMilliseconds} ms (limit {steadyUpperBoundMs:F0} ms). " +
+                $"Batches: [{string.Join(", ", batches)}].");
+
+            // Deterministic backing check independent of timing jitter: every request uses the
+            // negotiated limit instead of the 20-item default.
+            Assert.All(batches, batch => Assert.Equal(negotiatedReadRequestMax, batch));
         }
 
         [Fact]

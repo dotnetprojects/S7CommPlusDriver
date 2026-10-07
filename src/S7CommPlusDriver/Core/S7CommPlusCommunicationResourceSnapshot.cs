@@ -30,6 +30,20 @@ namespace S7CommPlusDriver
         public int SubscriptionMemoryMax { get; private set; }
         public int SubscriptionMemoryFree { get; private set; }
 
+        public S7CommPlusCommunicationResourceSnapshot()
+        {
+        }
+
+        /// <summary>
+        /// Creates a snapshot with explicit item limits, used by tests and internal callers that already
+        /// know the negotiated values.
+        /// </summary>
+        internal S7CommPlusCommunicationResourceSnapshot(int tagsPerReadRequestMax, int tagsPerWriteRequestMax)
+        {
+            TagsPerReadRequestMax = tagsPerReadRequestMax;
+            TagsPerWriteRequestMax = tagsPerWriteRequestMax;
+        }
+
         public int ReadMax(S7CommPlusProtocolSession conn)
         {
             // Read SystemLimits

@@ -1351,6 +1351,16 @@ namespace S7CommPlusDriver
             return resources.ReadFree(this);
         }
 
+        /// <summary>
+        /// Returns the communication resource limits negotiated during connection setup (SystemLimits are
+        /// read as part of the connect handshake) without issuing additional PLC requests.
+        /// </summary>
+        public int GetCachedCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
+        {
+            resources = m_CommunicationResources ?? new S7CommPlusCommunicationResourceSnapshot();
+            return 0;
+        }
+
         public void Disconnect()
         {
             TryDisconnect(m_ReadTimeout);
