@@ -19,7 +19,7 @@ namespace S7CommPlusDriver
     /// </remarks>
     public sealed class S7CommPlusTagAccessorCatalog
     {
-        private const int CurrentFormatVersion = 2;
+        private const int CurrentFormatVersion = 3;
         private const int MinimumSupportedFormatVersion = 1;
         private const int MaximumEntryCount = 2_000_000;
         private const int MaximumAggregateElementCount = 2_000_000;
@@ -238,7 +238,7 @@ namespace S7CommPlusDriver
                     entries.Add(
                         symbol,
                         reader.ReadBoolean()
-                            ? TagDescriptor.ReadFrom(reader, 0, version >= 2 ? symbol : null)
+                            ? TagDescriptor.ReadFrom(reader, 0, version, version >= 2 ? symbol : null)
                             : null);
                 }
                 return new S7CommPlusTagAccessorCatalog(structureHash, entries);
@@ -329,16 +329,21 @@ namespace S7CommPlusDriver
             /// <param name="datatype">The Siemens soft-datatype identifier.</param>
             /// <param name="address">The immutable item-address descriptor.</param>
             /// <param name="aggregateElements">Scalar elements used to transfer an aggregate array.</param>
+            /// <param name="maxStringLength">
+            /// The PLC-declared maximum string length for <c>String</c>/<c>WString</c> tags, or zero for every other datatype.
+            /// </param>
             private TagDescriptor(
                 string name,
                 uint datatype,
                 AddressDescriptor address,
-                IReadOnlyList<TagDescriptor> aggregateElements)
+                IReadOnlyList<TagDescriptor> aggregateElements,
+                int maxStringLength)
             {
                 Name = name;
                 Datatype = datatype;
                 _address = address;
                 _aggregateElements = aggregateElements;
+                MaxStringLength = maxStringLength;
             }
 
             /// <summary>Gets the symbolic or generated element name.</summary>
@@ -346,6 +351,9 @@ namespace S7CommPlusDriver
 
             /// <summary>Gets the Siemens soft-datatype identifier.</summary>
             private uint Datatype { get; }
+
+            /// <summary>Gets the PLC-declared maximum string length, or zero for every non-string datatype.</summary>
+            private int MaxStringLength { get; }
 
             /// <summary>Creates a detached immutable descriptor from a resolved mutable driver tag.</summary>
             /// <param name="tag">The resolved source tag.</param>
@@ -357,14 +365,15 @@ namespace S7CommPlusDriver
                     tag.Name,
                     tag.Datatype,
                     AddressDescriptor.FromAddress(tag.Address),
-                    tag.AggregateElements.Select(FromTag).ToArray());
+                    tag.AggregateElements.Select(FromTag).ToArray(),
+                    tag.GetMaxStringLength());
             }
 
             /// <summary>Creates a fresh mutable driver tag and recursively recreates aggregate element tags.</summary>
             /// <returns>An accessor that shares no mutable state with previous materializations.</returns>
             internal PlcTag CreateTag(string nameOverride = null)
             {
-                var tag = PlcTags.TagFactory(nameOverride ?? Name, _address.CreateAddress(), Datatype, _aggregateElements.Count > 0);
+                var tag = PlcTags.TagFactory(nameOverride ?? Name, _address.CreateAddress(), Datatype, _aggregateElements.Count > 0, MaxStringLength);
                 if (tag == null)
                 {
                     throw new InvalidDataException($"The cached datatype {Datatype} for symbol '{Name}' is not supported by this driver version.");
@@ -391,13 +400,18 @@ namespace S7CommPlusDriver
                 {
                     element.WriteTo(writer);
                 }
+                writer.Write(MaxStringLength);
             }
 
             /// <summary>Reads and validates one recursive descriptor from the catalog stream.</summary>
             /// <param name="reader">The source reader.</param>
             /// <param name="depth">The current nesting depth used to reject maliciously recursive cache files.</param>
+            /// <param name="formatVersion">
+            /// The catalog format version being read. Versions below 3 (<see cref="CurrentFormatVersion"/>) predate persisted
+            /// string-length metadata; such caches fall back to <c>0</c>, which recreates the tag's built-in default (254).
+            /// </param>
             /// <returns>The validated descriptor.</returns>
-            internal static TagDescriptor ReadFrom(BinaryReader reader, int depth, string nameOverride = null)
+            internal static TagDescriptor ReadFrom(BinaryReader reader, int depth, int formatVersion, string nameOverride = null)
             {
                 if (depth > MaximumDescriptorDepth)
                 {
@@ -414,9 +428,10 @@ namespace S7CommPlusDriver
                 var elements = new TagDescriptor[elementCount];
                 for (var index = 0; index < elementCount; index++)
                 {
-                    elements[index] = ReadFrom(reader, depth + 1);
+                    elements[index] = ReadFrom(reader, depth + 1, formatVersion);
                 }
-                return new TagDescriptor(name, datatype, address, elements);
+                var maxStringLength = formatVersion >= 3 ? reader.ReadInt32() : 0;
+                return new TagDescriptor(name, datatype, address, elements, maxStringLength);
             }
         }
 

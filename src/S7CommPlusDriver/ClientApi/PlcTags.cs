@@ -78,8 +78,13 @@ namespace S7CommPlusDriver.ClientApi
         /// Whether the address represents a complete primitive array. The legacy parameter name is retained for source compatibility,
         /// but the flag also applies to multidimensional arrays because their wire value uses the same flattened array tag type.
         /// </param>
+        /// <param name="maxStringLength">
+        /// The PLC-declared maximum length for <see cref="Softdatatype.S7COMMP_SOFTDATATYPE_STRING"/> values, or zero when unknown.
+        /// Ignored for every other datatype. A value of zero falls back to the tag's built-in default of 254, matching the previous
+        /// behavior for callers that cannot supply this metadata.
+        /// </param>
         /// <returns>The matching concrete tag implementation, or <see langword="null"/> for an unsupported datatype.</returns>
-        public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim = false)
+        public static PlcTag TagFactory(string name, ItemAddress address, uint softdatatype, bool Is1Dim = false, int maxStringLength = 0)
         {
             switch (softdatatype)
             {
@@ -127,9 +132,15 @@ namespace S7CommPlusDriver.ClientApi
                     return new PlcTagDateAndTime(name, address, softdatatype);
 
                 case Softdatatype.S7COMMP_SOFTDATATYPE_STRING:
-                    if (Is1Dim)
-                        return new PlcTagStringArray(name, address, softdatatype);
-                    return new PlcTagString(name, address, softdatatype);
+                    {
+                        // A value of 0 (unknown/not supplied by the caller) keeps the tag's own built-in default (254).
+                        var stringMaxLength = maxStringLength > 0 && maxStringLength <= byte.MaxValue
+                            ? (byte)maxStringLength
+                            : (byte)254;
+                        if (Is1Dim)
+                            return new PlcTagStringArray(name, address, softdatatype, stringMaxLength);
+                        return new PlcTagString(name, address, softdatatype, stringMaxLength);
+                    }
                 case Softdatatype.S7COMMP_SOFTDATATYPE_POINTER:
                     return new PlcTagPointer(name, address, softdatatype);
 
@@ -178,7 +189,13 @@ namespace S7CommPlusDriver.ClientApi
                 case Softdatatype.S7COMMP_SOFTDATATYPE_WCHAR:
                     return new PlcTagWChar(name, address, softdatatype);
                 case Softdatatype.S7COMMP_SOFTDATATYPE_WSTRING:
-                    return new PlcTagWString(name, address, softdatatype);
+                    {
+                        // A value of 0 (unknown/not supplied by the caller) keeps the tag's own built-in default (254).
+                        var wstringMaxLength = maxStringLength > 0 && maxStringLength <= ushort.MaxValue
+                            ? (ushort)maxStringLength
+                            : (ushort)254;
+                        return new PlcTagWString(name, address, softdatatype, wstringMaxLength);
+                    }
                 //case Softdatatype.S7COMMP_SOFTDATATYPE_VARIANT:
                 //-> Variant isn't added inside of the instance-db as a variable!
                 case Softdatatype.S7COMMP_SOFTDATATYPE_LTIME:

@@ -174,6 +174,7 @@ namespace S7CommPlusDriver
                         ArrayElementCount = GetArrayElementCount(node),
                         ArrayDimensions = GetArrayDimensions(node),
                         ContainsIndexedArray = containsIndexedArray,
+                        MaxStringLength = node.Vte?.OffsetInfoType?.MaxStringLength() ?? 0,
                     };
                     // If an Array element of basic datatype, the Vte is here from the parent array base element and offsets not valid here.
                     if (node.NodeType == eNodeType.Array)
@@ -939,6 +940,12 @@ namespace S7CommPlusDriver
         /// Gets the declared PLC dimensions in the same left-to-right order used by symbolic indices.
         /// </summary>
         public IReadOnlyList<S7CommPlusArrayDimension> ArrayDimensions = Array.Empty<S7CommPlusArrayDimension>();
+
+        /// <summary>
+        /// Gets the maximum string length declared in the PLC for <c>String</c>/<c>WString</c> values, or zero for every
+        /// other datatype. Required to build a correctly sized write telegram; see <see cref="POffsetInfoType.MaxStringLength"/>.
+        /// </summary>
+        public int MaxStringLength;
 
         /// <summary>Retains the parsed symbol path so tag creation can reuse the exact CRC inputs.</summary>
         internal List<S7CommPlusSymbolCrc.PathSegment> SymbolCrcPath;

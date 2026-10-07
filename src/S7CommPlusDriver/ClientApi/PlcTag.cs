@@ -65,6 +65,13 @@ namespace S7CommPlusDriver.ClientApi
         internal abstract PValue GetWriteValue();
 
         /// <summary>
+        /// Gets the PLC-declared maximum string length for <see cref="PlcTagString"/>, <see cref="PlcTagWString"/>, and
+        /// <see cref="PlcTagStringArray"/> tags, or zero for every other tag type. Used to persist and recreate the exact
+        /// wire length required by <see cref="GetWriteValue"/> (see <see cref="S7CommPlusTagAccessorCatalog"/>).
+        /// </summary>
+        internal virtual int GetMaxStringLength() => 0;
+
+        /// <summary>
         /// Gets the tag's current typed value as a boxed <see cref="object"/> via its public <c>Value</c> property.
         /// </summary>
         /// <returns>The boxed value, or <see langword="null"/> when the concrete tag type has no public <c>Value</c> property.</returns>
@@ -1001,6 +1008,8 @@ namespace S7CommPlusDriver.ClientApi
             m_MaxLength = maxlength;
         }
 
+        internal override int GetMaxStringLength() => m_MaxLength;
+
         public override void ProcessReadResult(object valueObj, ulong error)
         {
             LastReadError = error;
@@ -1502,6 +1511,8 @@ namespace S7CommPlusDriver.ClientApi
         {
             m_MaxLength = maxlength;
         }
+
+        internal override int GetMaxStringLength() => m_MaxLength;
 
         public override void ProcessReadResult(object valueObj, ulong error)
         {
@@ -2638,6 +2649,8 @@ namespace S7CommPlusDriver.ClientApi
         {
             m_MaxLength = maxlength;
         }
+
+        internal override int GetMaxStringLength() => m_MaxLength;
 
         public override void ProcessReadResult(object valueObj, ulong error)
         {

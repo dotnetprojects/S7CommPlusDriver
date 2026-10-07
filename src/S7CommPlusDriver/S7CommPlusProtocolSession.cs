@@ -2067,7 +2067,8 @@ namespace S7CommPlusDriver
         private static PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
         {
             var address = CreateItemAddress(varInfo);
-            var tag = PlcTags.TagFactory(varInfo.Name, address, varType.Softdatatype, isAggregateArray);
+            var maxStringLength = varType.OffsetInfoType?.MaxStringLength() ?? 0;
+            var tag = PlcTags.TagFactory(varInfo.Name, address, varType.Softdatatype, isAggregateArray, maxStringLength);
             tag?.SetTraceAddressMetadata(varInfo);
             if (!isAggregateArray || tag == null)
             {
@@ -2081,7 +2082,7 @@ namespace S7CommPlusDriver
                         varInfo.AccessSequence,
                         accessId,
                         varType.OffsetInfoType.HasRelation());
-                    return PlcTags.TagFactory($"{varInfo.Name}[#{accessId}]", elementAddress, varType.Softdatatype);
+                    return PlcTags.TagFactory($"{varInfo.Name}[#{accessId}]", elementAddress, varType.Softdatatype, false, maxStringLength);
                 })
                 .Where(elementTag => elementTag != null)
                 .ToList();
@@ -2106,7 +2107,7 @@ namespace S7CommPlusDriver
 
             var address = CreateItemAddress(varInfo);
             var isAggregateArray = varInfo.ArrayElementCount > 0;
-            var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray);
+            var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray, varInfo.MaxStringLength);
             tag?.SetTraceAddressMetadata(varInfo);
             if (!isAggregateArray || tag == null)
             {
@@ -2120,7 +2121,9 @@ namespace S7CommPlusDriver
                         varInfo.AccessSequence,
                         accessId,
                         RequiresArrayElementRelationSelector(varInfo.Softdatatype)),
-                    varInfo.Softdatatype))
+                    varInfo.Softdatatype,
+                    false,
+                    varInfo.MaxStringLength))
                 .Where(elementTag => elementTag != null)
                 .ToList();
             tag.SetAggregateElements(elementTags);
@@ -2321,7 +2324,9 @@ namespace S7CommPlusDriver
                     aggregateVariable.AccessSequence,
                     accessId,
                     RequiresArrayElementRelationSelector(aggregateVariable.Softdatatype)),
-                aggregateVariable.Softdatatype);
+                aggregateVariable.Softdatatype,
+                false,
+                aggregateVariable.MaxStringLength);
             return tag != null;
         }
 
