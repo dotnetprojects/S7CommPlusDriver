@@ -157,6 +157,7 @@ namespace S7CommPlusDriver.ClientApi
                 // Struct/UDT instances (and their array roots) have no scalar wire value; the tag reports the packed
                 // struct identifier and, for arrays, the PLC-declared shape through PlcTag.ArrayDimensions.
                 case Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT:
+                case Softdatatype.S7COMMP_SOFTDATATYPE_BLOCKUDT:
                     return new PlcTagStruct(name, address, softdatatype);
 
                 case Softdatatype.S7COMMP_SOFTDATATYPE_COUNTER:

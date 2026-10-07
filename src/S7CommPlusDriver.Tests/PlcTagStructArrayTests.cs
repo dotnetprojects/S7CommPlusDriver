@@ -19,6 +19,13 @@ namespace S7CommPlusDriver.Tests
     public sealed class PlcTagStructArrayTests
     {
         [Fact]
+        public void BlockUdtResolvesAsAStructuralTag()
+        {
+            Assert.IsType<PlcTagStruct>(PlcTags.TagFactory("DB.Udt", new ItemAddress("8A0E0001.F"),
+                Softdatatype.S7COMMP_SOFTDATATYPE_BLOCKUDT));
+        }
+
+        [Fact]
         public void CatalogPreservesStructArrayBoundsWithoutExpandingElements()
         {
             var info = new VarInfo

@@ -121,6 +121,8 @@ namespace S7CommPlusDriver.ClientApi
                 return AggregateValue;
             }
             var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            if (m_AggregateElements.Count > 0 && !IsCompatibleAggregateProperty(valueProperty))
+                return AggregateValue;
             return valueProperty?.GetValue(this);
         }
 
@@ -141,7 +143,29 @@ namespace S7CommPlusDriver.ClientApi
                 return;
             }
             var valueProperty = GetType().GetProperty("Value", BindingFlags.Public | BindingFlags.Instance);
+            if (m_AggregateElements.Count > 0 && !IsCompatibleAggregateProperty(valueProperty))
+            {
+                if (value is not Array array) throw new ArgumentException("An aggregate requires an array value.", nameof(value));
+                DistributeFlatAggregateValue(array);
+                AggregateValue = array;
+                return;
+            }
             valueProperty?.SetValue(this, value);
+        }
+
+        private bool IsCompatibleAggregateProperty(PropertyInfo property)
+        {
+            var elementType = m_AggregateElements[0].GetType().GetProperty("Value")?.PropertyType;
+            return elementType != null && property?.PropertyType == elementType.MakeArrayType();
+        }
+
+        private void DistributeFlatAggregateValue(Array values)
+        {
+            var elementType = m_AggregateElements[0].GetType().GetProperty("Value")?.PropertyType;
+            if (values.Rank != 1 || values.Length != m_AggregateElements.Count || values.GetType().GetElementType() != elementType)
+                throw new ArgumentException("Array type and length must match the aggregate elements.", nameof(values));
+            var index = 0;
+            foreach (var value in values) m_AggregateElements[index++].SetValue(value);
         }
 
         internal void SetTraceAddressMetadata(VarInfo variable)
@@ -283,8 +307,10 @@ namespace S7CommPlusDriver.ClientApi
                 MirrorMultiDimensionalValue(shaped);
                 return;
             }
-            if (aggregateValueProperty?.PropertyType.IsArray != true)
+            if (!IsCompatibleAggregateProperty(aggregateValueProperty))
             {
+                if (m_AggregateDimensions.Count == 0 && AggregateValue is Array flatAggregate)
+                    DistributeFlatAggregateValue(flatAggregate);
                 return;
             }
 

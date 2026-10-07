@@ -10,6 +10,25 @@ namespace S7CommPlusDriver.Tests
     public sealed class BrowserArrayTests
     {
         [Fact]
+        public void MultidimensionalStringMetadataProducesCorrectlySizedElementWrites()
+        {
+            var browser = CreateBrowser(false, "Texts", Softdatatype.S7COMMP_SOFTDATATYPE_STRING,
+                new POffsetInfoType_ArrayMDim
+                {
+                    UnspecifiedOffsetinfo1 = 5, ArrayElementCount = 6,
+                    MdimArrayElementCount = new uint[] { 3, 2, 0, 0, 0, 0 },
+                    MdimArrayLowerBounds = new[] { 1, 1, 0, 0, 0, 0 },
+                });
+            var variable = Assert.Single(browser.GetVarInfoList());
+            Assert.Equal(5, variable.MaxStringLength);
+            var tag = S7CommPlusProtocolSession.CreateResolvedPlcTag(variable);
+            tag.SetValue(new[,] { { "a", "b", "c" }, { "d", "e", "f" } });
+            tag.PrepareAggregateWrite();
+            Assert.All(tag.AggregateElements, element =>
+                Assert.Equal(7, Assert.IsType<ValueUSIntArray>(element.GetWriteValue()).GetValue().Length));
+        }
+
+        [Fact]
         public void AggregatePrimitiveArrayReturnsOneItemWithBounds()
         {
             var browser = CreateBrowser(

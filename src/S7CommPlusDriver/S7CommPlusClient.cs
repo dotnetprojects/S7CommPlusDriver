@@ -1744,8 +1744,8 @@ namespace S7CommPlusDriver
                 throw exception;
             }
 
-            SetState(S7CommPlusConnectionState.Connected);
             ApplyNegotiatedCommunicationResourceLimits();
+            SetState(S7CommPlusConnectionState.Connected);
             _options.Logger.LogInformation("Connected to PLC {Endpoint}.", Endpoint);
         }
 
@@ -1757,7 +1757,7 @@ namespace S7CommPlusDriver
         /// </summary>
         private void ApplyNegotiatedCommunicationResourceLimits()
         {
-            if (_session == null || _session.GetCachedCommunicationResources(out var resources) != 0)
+            if (_session == null || _session.GetCachedCommunicationResources(out var resources) != 0 || resources == null)
             {
                 _tagsPerReadRequestMax = DefaultTagsPerRequest;
                 _tagsPerWriteRequestMax = DefaultTagsPerRequest;
