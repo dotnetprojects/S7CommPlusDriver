@@ -2105,13 +2105,12 @@ namespace S7CommPlusDriver
             }
             if (varType.OffsetInfoType.HasRelation())
             {
-                if (symbol.Length <= 0 && varType.Softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL)
-                {
-                    return CreateResolvedPlcTag(varInfo, varType, isAggregateArray);
-                }
                 if (symbol.Length <= 0)
                 {
-                    return null;
+                    // Relation-bearing members (struct/UDT instances, their arrays, FB instances and DTL) resolve to a tag
+                    // instead of being reported as "not found" once the symbol path is exhausted, matching the legacy
+                    // driver's browsePlcTagBySymbol(). Struct arrays report their declared shape through PlcTag.ArrayDimensions.
+                    return CreateResolvedPlcTag(varInfo, varType, isAggregateArray);
                 }
                 else
                 {
@@ -2184,6 +2183,15 @@ namespace S7CommPlusDriver
                 return tag;
             }
 
+            // The caller requested the complete array, so the tag always reports the PLC-declared shape. Struct/UDT arrays
+            // are deliberately not expanded into element tags: their elements are individually addressable structures rather
+            // than scalar wire values, and a large declaration would otherwise materialize thousands of synthetic addresses.
+            tag.SetArrayDimensions(GetArrayDeclaration(varType));
+            if (!SupportsAggregateElementExpansion(varType.Softdatatype))
+            {
+                return tag;
+            }
+
             var elementTags = GetAggregateArrayElementAccessIds(varType)
                 .Select(accessId =>
                 {
@@ -2220,6 +2228,67 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
+        /// Builds the PLC-declared array declaration of one member from its low-level dimension metadata, in declaration
+        /// order (outermost dimension first), for <see cref="PlcTag.ArrayDimensions"/>.
+        /// </summary>
+        /// <param name="varType">The resolved member metadata containing the dimension information.</param>
+        /// <returns>One entry per declared dimension, or an empty list for scalar members.</returns>
+        private static IReadOnlyList<S7CommPlusArrayDimension> GetArrayDeclaration(PVartypeListElement varType)
+        {
+            if (varType.OffsetInfoType is IOffsetInfoType_MDim multiDimensional)
+            {
+                // The protocol stores both the counts and the lower bounds inside-out, so reverse them into declaration order.
+                var counts = multiDimensional.GetMdimArrayElementCount().TakeWhile(count => count > 0).ToArray();
+                var lowerBounds = multiDimensional.GetMdimArrayLowerBounds();
+                var declaration = new S7CommPlusArrayDimension[counts.Length];
+                for (var dimension = 0; dimension < counts.Length; dimension++)
+                {
+                    var protocolIndex = counts.Length - dimension - 1;
+                    declaration[dimension] = new S7CommPlusArrayDimension(lowerBounds[protocolIndex], counts[protocolIndex]);
+                }
+                return declaration;
+            }
+
+            if (varType.OffsetInfoType is IOffsetInfoType_1Dim oneDimensional)
+            {
+                var elementCount = oneDimensional.GetArrayElementCount();
+                if (elementCount == 0)
+                {
+                    return Array.Empty<S7CommPlusArrayDimension>();
+                }
+                return new[] { new S7CommPlusArrayDimension(oneDimensional.GetArrayLowerBounds(), elementCount) };
+            }
+
+            return Array.Empty<S7CommPlusArrayDimension>();
+        }
+
+        /// <summary>
+        /// Determines whether an aggregate array is expanded into individually addressable element tags.
+        /// </summary>
+        /// <param name="softdatatype">The Siemens soft-datatype of the array member.</param>
+        /// <returns>
+        /// <see langword="true"/> for members whose elements are scalar wire values; <see langword="false"/> for structural
+        /// members, whose tag reports only the declared array shape (see <see cref="PlcTag.ArrayDimensions"/>).
+        /// </returns>
+        private static bool SupportsAggregateElementExpansion(uint softdatatype)
+        {
+            return !IsStructLikeSoftdatatype(softdatatype) && softdatatype != Softdatatype.S7COMMP_SOFTDATATYPE_FOLDER;
+        }
+
+        /// <summary>
+        /// Determines whether a soft-datatype describes a user-defined structure or a block instance, which is transferred as
+        /// a packed <see cref="ValueStruct"/> instead of a scalar value.
+        /// </summary>
+        /// <param name="softdatatype">The Siemens soft-datatype identifier.</param>
+        private static bool IsStructLikeSoftdatatype(uint softdatatype)
+        {
+            return softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT
+                || softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BLOCKFB
+                || softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BLOCKFC
+                || softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_BLOCKUDT;
+        }
+
+        /// <summary>
         /// Creates a typed tag directly from one aggregate browse result, avoiding a second walk through the PLC type catalog.
         /// </summary>
         /// <param name="varInfo">Browse metadata containing the exact symbol, access sequence, CRC, datatype, and array bounds.</param>
@@ -2239,6 +2308,14 @@ namespace S7CommPlusDriver
             var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray, varInfo.MaxStringLength);
             tag?.SetTraceAddressMetadata(varInfo);
             if (!isAggregateArray || tag == null)
+            {
+                return tag;
+            }
+
+            // Browse results already carry the caller-facing array declaration, so it can be attached without any conversion.
+            // Struct/UDT arrays keep that declaration only and are not expanded into per-element tags, see the symbol overload.
+            tag.SetArrayDimensions(varInfo.ArrayDimensions);
+            if (!SupportsAggregateElementExpansion(varInfo.Softdatatype))
             {
                 return tag;
             }
@@ -2375,9 +2452,17 @@ namespace S7CommPlusDriver
             return new ItemAddress($"{aggregateAccessSequence}.{accessId:X}{(requiresRelationSelector ? ".1" : string.Empty)}");
         }
 
+        /// <summary>
+        /// Determines whether an aggregate array element address needs the protocol's literal relation selector (<c>".1"</c>).
+        /// Relation-bearing array members (structs/UDTs, block instances and DTL) place that selector between the element
+        /// access ID and the member access ID, exactly like <c>calcAccessSeqFor1DimArray</c> does for symbolic access.
+        /// </summary>
+        /// <param name="softdatatype">The Siemens soft-datatype of the array member.</param>
+        /// <returns><see langword="true"/> when element addresses require the additional relation selector.</returns>
         private static bool RequiresArrayElementRelationSelector(uint softdatatype)
         {
-            return softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL;
+            return IsStructLikeSoftdatatype(softdatatype)
+                || softdatatype == Softdatatype.S7COMMP_SOFTDATATYPE_DTL;
         }
 
         /// <summary>

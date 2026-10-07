@@ -22,6 +22,7 @@ namespace S7CommPlusDriver.ClientApi
         private object[] m_AggregateSnapshot;
         private object m_AggregateValue;
         internal IReadOnlyList<uint> AggregateDimensions => m_AggregateDimensions;
+        private IReadOnlyList<S7CommPlusArrayDimension> m_ArrayDimensions = Array.Empty<S7CommPlusArrayDimension>();
 
         public string Name;
         public ItemAddress Address;
@@ -70,6 +71,18 @@ namespace S7CommPlusDriver.ClientApi
             }
             private set => m_AggregateValue = value;
         }
+
+        /// <summary>
+        /// Gets the PLC-declared array declaration of the member this tag was resolved from, in declaration order
+        /// (outermost dimension first), or an empty list for scalar members.
+        /// </summary>
+        /// <remarks>
+        /// Every entry carries the lower bound and element count of one declared dimension exactly as written in the PLC
+        /// program, so <c>Array[1..10000] of MyUdt</c> reports one entry with lower bound <c>1</c> and element count
+        /// <c>10000</c>. Struct/UDT arrays report their declaration through this property instead of exposing thousands of
+        /// individual element tags; single elements are resolved on demand through their indexed symbol.
+        /// </remarks>
+        public IReadOnlyList<S7CommPlusArrayDimension> ArrayDimensions => m_ArrayDimensions;
 
         public PlcTag(string name, ItemAddress address, uint softdatatype)
         {
@@ -186,6 +199,17 @@ namespace S7CommPlusDriver.ClientApi
                 if (count != elements.Count)
                     throw new ArgumentException("Aggregate dimensions must match the element count.", nameof(dimensions));
             }
+        }
+
+        /// <summary>
+        /// Sets the PLC-declared array declaration this tag was resolved from, exposed through <see cref="ArrayDimensions"/>.
+        /// </summary>
+        /// <param name="dimensions">
+        /// One entry per declared dimension in declaration order (outermost first), or <see langword="null"/> for scalar members.
+        /// </param>
+        internal void SetArrayDimensions(IReadOnlyList<S7CommPlusArrayDimension> dimensions)
+        {
+            m_ArrayDimensions = dimensions ?? Array.Empty<S7CommPlusArrayDimension>();
         }
 
         /// <summary>
@@ -2039,6 +2063,55 @@ namespace S7CommPlusDriver.ClientApi
                 return Value.ToString();
             }
             return String.Format(fmt, Value.ToString(), ns);
+        }
+    }
+
+    /// <summary>
+    /// Structural PLC tag for relation-bearing members (UDT/<c>STRUCT</c> instances and their array elements) that are
+    /// resolved as a whole symbol without a remaining member path.
+    /// </summary>
+    /// <remarks>
+    /// Mirrors the legacy driver's <c>PlcTagStruct</c>: the concrete value is the packed struct identifier reported by the
+    /// PLC, while the declared shape of a struct array is exposed through <see cref="PlcTag.ArrayDimensions"/> and the
+    /// individual members are read through their own member tags. Unlike <see cref="PlcTagDTL"/> this tag does not decode
+    /// packed system values, because a user-defined structure has no fixed wire layout.
+    /// </remarks>
+    public class PlcTagStruct : PlcTag
+    {
+        private uint m_Value;
+
+        /// <summary>Gets or sets the packed struct identifier transmitted by the PLC for this structural member.</summary>
+        public uint Value
+        {
+            get { return m_Value; }
+            set { m_Value = value; }
+        }
+
+        public PlcTagStruct(string name, ItemAddress address, uint softdatatype) : base(name, address, softdatatype) { }
+
+        public override void ProcessReadResult(object valueObj, ulong error)
+        {
+            LastReadError = error;
+            if (CheckErrorAndType(error, valueObj, typeof(ValueStruct)) == 0)
+            {
+                Value = ((ValueStruct)valueObj).GetValue();
+
+                Quality = PlcTagQC.TAG_QUALITY_GOOD;
+            }
+            else
+            {
+                Quality = PlcTagQC.TAG_QUALITY_BAD;
+            }
+        }
+
+        internal override PValue GetWriteValue()
+        {
+            return new ValueStruct(Value);
+        }
+
+        public override string ToString()
+        {
+            return ResultString(this, Value.ToString());
         }
     }
 
