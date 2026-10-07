@@ -33,6 +33,8 @@ namespace OpenSsl
         private readonly byte[] m_buffer = new byte[4096];
         private readonly DataBufferList m_pendingWriteList;
         private readonly DataBufferList m_pendingReadList;
+        private readonly object m_readListLock = new object();
+        private readonly object m_writeListLock = new object();
         private bool m_fatalError;
         private bool m_disposed;
 
@@ -277,8 +279,16 @@ namespace OpenSsl
 
             while (!m_fatalError && ((!m_readRequired && dataToWrite) || dataToRead))
             {
-                int pendingReadBefore = m_pendingReadList.Count;
-                int pendingWriteBefore = m_pendingWriteList.Count;
+                int pendingReadBefore;
+                int pendingWriteBefore;
+                lock (m_readListLock)
+                {
+                    pendingReadBefore = m_pendingReadList.Count;
+                }
+                lock (m_writeListLock)
+                {
+                    pendingWriteBefore = m_pendingWriteList.Count;
+                }
                 bool readRequiredBefore = m_readRequired;
                 var bioPendingBefore = Native.BIO_ctrl_pending(m_pBioOut);
 
@@ -304,8 +314,18 @@ namespace OpenSsl
 
                 GetPendingOperations(ref dataToRead, ref dataToWrite);
                 var bioPendingAfter = Native.BIO_ctrl_pending(m_pBioOut);
-                if (pendingReadBefore == m_pendingReadList.Count &&
-                    pendingWriteBefore == m_pendingWriteList.Count &&
+                int pendingReadAfter;
+                int pendingWriteAfter;
+                lock (m_readListLock)
+                {
+                    pendingReadAfter = m_pendingReadList.Count;
+                }
+                lock (m_writeListLock)
+                {
+                    pendingWriteAfter = m_pendingWriteList.Count;
+                }
+                if (pendingReadBefore == pendingReadAfter &&
+                    pendingWriteBefore == pendingWriteAfter &&
                     readRequiredBefore == m_readRequired &&
                     bioPendingBefore == bioPendingAfter)
                 {
@@ -323,26 +343,36 @@ namespace OpenSsl
             }
         }
 
-        public void Write(byte[] pData,int dataLen)
+        private readonly object m_sslGate = new object();
+        
+        public void Write(byte[] pData, int dataLen)
         {
-            DataBuffer pBuffer = new DataBuffer(pData, dataLen);
-            AppendBuffer(m_pendingWriteList, pBuffer);
-
-            RunSSL();
+           lock (m_sslGate)
+           {
+               AppendBuffer(m_pendingWriteList, new DataBuffer(pData, dataLen));
+               RunSSL();
+           }
         }
-
+        
         public void ReadCompleted(byte[] pData, int dataLen)
         {
-            DataBuffer pBuffer = new DataBuffer(pData, dataLen);
-            AppendBuffer(m_pendingReadList, pBuffer);
-
-            RunSSL();
+           lock (m_sslGate)
+           {
+               AppendBuffer(m_pendingReadList, new DataBuffer(pData, dataLen));
+               RunSSL();
+           }
         }
 
         private void GetPendingOperations(ref bool dataToRead, ref bool dataToWrite)
         {
-            dataToRead = m_pendingReadList.Count > 0;
-            dataToWrite = m_pendingWriteList.Count > 0;
+            lock (m_readListLock)
+            {
+                dataToRead = m_pendingReadList.Count > 0;
+            }
+            lock (m_writeListLock)
+            {
+                dataToWrite = m_pendingWriteList.Count > 0;
+            }
         }
 
         private void PerformRead()
@@ -437,23 +467,35 @@ namespace OpenSsl
 
         private void AppendBuffer(DataBufferList list, DataBuffer pBuffer)
         {
-            list.AddLast(pBuffer);
+            object lockObject = (list == m_pendingReadList) ? m_readListLock : m_writeListLock;
+            lock (lockObject)
+            {
+                list.AddLast(pBuffer);
+            }
         }
 
         DataBuffer GetNextBuffer(DataBufferList list)
         {
             DataBuffer head = null;
-            if (list.Count > 0)
+            object lockObject = (list == m_pendingReadList) ? m_readListLock : m_writeListLock;
+            lock (lockObject)
             {
-                head = list.First.Value;
-                list.RemoveFirst();
+                if (list.Count > 0)
+                {
+                    head = list.First.Value;
+                    list.RemoveFirst();
+                }
             }
             return head;
         }
 
         void PutbackBuffer(DataBufferList list, DataBuffer pBuffer)
         {
-            list.AddFirst(pBuffer);
+            object lockObject = (list == m_pendingReadList) ? m_readListLock : m_writeListLock;
+            lock (lockObject)
+            {
+                list.AddFirst(pBuffer);
+            }
         }
 
         /// <summary>
