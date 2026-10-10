@@ -4,6 +4,8 @@ using S7CommPlusDriver.Internal;
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Xml.Linq;
 
 namespace S7CommPlusDriver
 {
@@ -73,7 +75,33 @@ namespace S7CommPlusDriver
 
         int IS7CommPlusSession.GetBlockContent(uint relationId, out S7CommPlusClientBlockContent blockContent)
         {
-            return Metadata.GetBlockContent(relationId, out blockContent);
+            var result = Metadata.GetBlockContent(relationId, out blockContent);
+            if (result != 0 || blockContent.Type != S7CommPlusBlockType.DB) return result;
+            // Local ID 1 identifies the actual DB type, which may differ from its source UDT.
+            var address = new ItemAddress(relationId, Ids.DB_ValueActual);
+            address.AddLocalId(1);
+            result = ReadValues(new List<ItemAddress> { address }, out var values, out var errors);
+            if (result != 0) return result;
+            if (errors.Count == 1 && errors[0] == 0 && values[0] is ValueRID typeId)
+            {
+                var information = getTypeInfoByRelId(typeId.GetValue());
+                blockContent = blockContent with { TypeInformation = SerializeBlockTypeInformation(information) };
+            }
+            return 0;
+        }
+
+        internal static string SerializeBlockTypeInformation(PObject information)
+        {
+            if (information?.VartypeList?.Elements == null || information.VarnameList?.Names == null) return null;
+            return new XElement("Object",
+                new XElement("RelationId", information.RelationId),
+                new XElement("VartypeList", information.VartypeList.Elements.Select(member =>
+                    new XElement("Element", new XElement("VartypeListElement",
+                        new XElement("LID", member.LID),
+                        new XElement("AttributeFlags", member.AttributeFlags),
+                        new XElement("BitoffsetinfoFlags", member.BitoffsetinfoFlags))))),
+                new XElement("VarnameList", information.VarnameList.Names.Select(name => new XElement("Name", name))))
+                .ToString(SaveOptions.DisableFormatting);
         }
 
         /// <summary>

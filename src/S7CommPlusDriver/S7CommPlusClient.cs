@@ -464,6 +464,36 @@ namespace S7CommPlusDriver
             }, cancellationToken);
         }
 
+        /// <summary>Reads up to sixteen blocks using bounded multi-variable requests on one serialized connection.</summary>
+        /// <param name="relationIds">One to sixteen distinct IDs from block browsing or PLC structure metadata.</param>
+        /// <param name="cancellationToken">Cancels the read operation.</param>
+        /// <param name="sourceOnly">Reuse browsed headers and omit compiled binary fields not needed for source conversion. Defaults to full block content.</param>
+        public Task<IReadOnlyList<S7CommPlusClientBlockContent>> GetBlockContentsAsync(IReadOnlyList<uint> relationIds,
+            CancellationToken cancellationToken = default, bool sourceOnly = false)
+        {
+            if (relationIds == null) throw new ArgumentNullException(nameof(relationIds));
+            if (relationIds.Count < 1 || relationIds.Count > 16 || relationIds.Distinct().Count() != relationIds.Count)
+                throw new ArgumentException("Provide one to sixteen distinct block relation IDs.", nameof(relationIds));
+            var ids = relationIds.ToArray();
+            return ExecuteReadOperationAsync<IReadOnlyList<S7CommPlusClientBlockContent>>("GetBlockContents", session =>
+            {
+                if (session is IS7CommPlusBlockBatchSession batch)
+                {
+                    var error = batch.GetBlockContents(ids, sourceOnly, out var contents);
+                    ThrowIfError("GetBlockContents", error);
+                    return contents;
+                }
+                var result = new List<S7CommPlusClientBlockContent>();
+                foreach (var id in ids)
+                {
+                    var error = session.GetBlockContent(id, out var content);
+                    ThrowIfError("GetBlockContent", error);
+                    result.Add(content);
+                }
+                return result;
+            }, _options.BrowseTimeout, cancellationToken);
+        }
+
         /// <summary>
         /// Retrieves multilingual engineering comments for one data block or absolute I/Q/M area without downloading block code.
         /// </summary>

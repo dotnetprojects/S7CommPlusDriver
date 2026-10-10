@@ -18,6 +18,24 @@ namespace S7CommPlusDriver.Tests
     public sealed class S7CommPlusClientTests
     {
         [Fact]
+        public async Task BlockBatchFallsBackToIndividualReadsForSessionsWithoutBatchSupport()
+        {
+            var client = CreateClient(new FakeS7CommPlusSession());
+            var blocks = await client.GetBlockContentsAsync(new uint[] { 7, 8 }, sourceOnly: true);
+            Assert.Equal(new uint[] { 7, 8 }, blocks.Select(block => block.RelationId));
+            Assert.Equal(new[] { "Block_7", "Block_8" }, blocks.Select(block => block.Name));
+        }
+
+        [Fact]
+        public async Task BlockBatchRejectsEmptyDuplicateAndOversizedRequests()
+        {
+            var client = CreateClient(new FakeS7CommPlusSession());
+            await Assert.ThrowsAsync<ArgumentException>(() => client.GetBlockContentsAsync(Array.Empty<uint>()));
+            await Assert.ThrowsAsync<ArgumentException>(() => client.GetBlockContentsAsync(new uint[] { 7, 7 }));
+            await Assert.ThrowsAsync<ArgumentException>(() => client.GetBlockContentsAsync(Enumerable.Range(1, 17).Select(id => (uint)id).ToArray()));
+        }
+
+        [Fact]
         public async Task ConnectBrowseAndReadSucceeds()
         {
             var fake = new FakeS7CommPlusSession
@@ -619,6 +637,26 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(200, timeoutDuringBrowse);
             Assert.Equal(20, fake.RequestTimeoutMilliseconds);
             Assert.Contains(200, fake.RequestTimeoutHistory);
+        }
+
+        [Fact]
+        public async Task BlockBatchUsesBrowseTimeoutAndRestoresSingleRequestTimeout()
+        {
+            var observed = new List<int>();
+            var fake = new FakeS7CommPlusSession();
+            var defaultBlocks = new FakeS7CommPlusSession();
+            fake.GetBlockHandler = id =>
+            {
+                observed.Add(fake.RequestTimeoutMilliseconds);
+                Thread.Sleep(60);
+                defaultBlocks.GetBlockContent(id, out var block);
+                return (0, block);
+            };
+            var client = CreateClient(fake, requestTimeoutMs: 20, browseTimeoutMs: 200);
+            var blocks = await client.GetBlockContentsAsync(new uint[] { 7, 8 });
+            Assert.Equal(2, blocks.Count);
+            Assert.Equal(new[] { 200, 200 }, observed);
+            Assert.Equal(20, fake.RequestTimeoutMilliseconds);
         }
 
         [Fact]

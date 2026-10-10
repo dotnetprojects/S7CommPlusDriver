@@ -27,6 +27,10 @@ namespace S7CommPlusDriver
     {
         private readonly IS7CommPlusProtocolSession _session;
         private readonly S7CommPlusProtocolRequests _requests;
+        private readonly Dictionary<uint, bool> failsafeCompliance = new Dictionary<uint, bool>();
+        private readonly Dictionary<uint, string> engineeringVersions = new Dictionary<uint, string>();
+        private readonly Dictionary<uint, uint> blockClasses = new Dictionary<uint, uint>();
+        private readonly Dictionary<uint, PObject> blockHeaders = new Dictionary<uint, PObject>();
 
         public S7CommPlusMetadataService(IS7CommPlusProtocolSession session)
         {
@@ -76,6 +80,7 @@ namespace S7CommPlusDriver
                     case Ids.FB_Class_Rid:
                     case Ids.FC_Class_Rid:
                     case Ids.OB_Class_Rid:
+                    case Ids.UDT_Class_Rid:
                     case 2637:
                     case 2639:
                     case 2640:
@@ -99,6 +104,8 @@ namespace S7CommPlusDriver
                     case 2658:
                     case 8440:
                         UInt32 relid = ob.RelationId;
+                        blockClasses[relid] = ob.ClassId;
+                        blockHeaders[relid] = ob;
                         UInt32 area = (relid >> 16);
                         UInt32 num = relid & 0xffff;
 
@@ -109,7 +116,8 @@ namespace S7CommPlusDriver
                         data.Number = num;
                         data.Type = GetBlockTypeFromClassId(ob.ClassId);
 
-                        var lang = ((ValueUInt)ob.Attributes[Ids.Block_BlockLanguage]).GetValue();
+                        var lang = ob.Attributes.TryGetValue(Ids.Block_BlockLanguage, out var languageValue) && languageValue is ValueUInt language
+                            ? language.GetValue() : 0;
                         data.Language = (S7CommPlusProgrammingLanguage)lang;
                         exploreData.Add(data);
                         break;
@@ -154,14 +162,76 @@ namespace S7CommPlusDriver
                 var v = attr.GetValue();
                 var xml = bd3.decompress(v, 0);
                 plcStructure = PlcStructureXmlParser.CreateSnapshot(xml);
+                failsafeCompliance.Clear();
+                engineeringVersions.Clear();
+                foreach (var entity in XDocument.Parse(xml).Descendants("Entity"))
+                    if (uint.TryParse((string)entity.Attribute("Rid"), out var relationId) && entity.Element("Header") != null)
+                    {
+                        var compatibility = (string)entity.Element("Header").Attribute("Compatibility");
+                        if (!string.IsNullOrEmpty(compatibility)) engineeringVersions[relationId] = compatibility;
+                        var compliant = entity.Descendants("FailsafeFingerprint").FirstOrDefault(item => (string)item.Attribute("Id") == "FCompliant");
+                        if (bool.TryParse((string)compliant?.Attribute("Data"), out var value)) failsafeCompliance[relationId] = value;
+                        if ((string)entity.Element("Header").Attribute("Type") == "UDT")
+                        {
+                            blockClasses[relationId] = Ids.UDT_Class_Rid;
+                            var header = new PObject(relationId, Ids.UDT_Class_Rid, 0);
+                            header.Attributes[Ids.ObjectVariableTypeName] = new ValueWString((string)entity.Element("Header").Attribute("Name"));
+                            header.Attributes[Ids.Block_BlockLanguage] = new ValueUInt(0);
+                            blockHeaders[relationId] = header;
+                        }
+                    }
             }
 
             return 0;
         }
 
+        internal static readonly uint[] BlockContentAttributes =
+        {
+            Ids.ObjectVariableTypeName,
+            Ids.Block_BlockLanguage,
+            Ids.Block_RuntimeModified,
+            Ids.Block_CRC,
+            Ids.Block_FunctionalSignature,
+            Ids.ASObjectES_Comment,
+            Ids.DataInterface_LineComments,
+            Ids.DataInterface_InterfaceDescription,
+            Ids.Block_BodyDescription,
+            Ids.FunctionalObject_Code,
+            Ids.FunctionalObject_ParameterModified,
+            Ids.FunctionalObject_InterfaceSignature,
+            Ids.FunctionalObject_NetworkComments,
+            Ids.FunctionalObject_NetworkTitles,
+            Ids.FunctionalObject_DebugInfo,
+            Ids.FunctionalObject_extRefData,
+            Ids.FunctionalObject_intRefData,
+        };
+
+        internal bool TryGetBlockClass(uint relationId, out uint classId) => blockClasses.TryGetValue(relationId, out classId);
+        internal PObject GetBlockHeader(uint relationId) => blockHeaders.TryGetValue(relationId, out var header) ? header : null;
+
         public int GetBlockContent(uint relid, out S7CommPlusClientBlockContent blockContent)
         {
             int res;
+            blockContent = null;
+            var exploreReq = new ExploreRequest(ProtocolVersion.V2);
+            exploreReq.ExploreId = relid;
+            exploreReq.ExploreRequestId = Ids.None;
+            exploreReq.ExploreChildsRecursive = 1;
+            exploreReq.ExploreParents = 0;
+
+            exploreReq.AddressList.AddRange(BlockContentAttributes);
+
+            res = _requests.SendExplore(exploreReq, out var exploreRes);
+            if (res != 0)
+            {
+                return res;
+            }
+
+            return ParseBlockContent(relid, exploreRes.Objects, out blockContent);
+        }
+
+        internal int ParseBlockContent(uint relid, IEnumerable<PObject> objects, out S7CommPlusClientBlockContent blockContent)
+        {
             // With requesting DataInterface_InterfaceDescription, whe would be able to get all informations like the access ids and
             // datatype informations, that we get from the other browsing method. Needs to be tested which one is more efficient on network traffic or plc load.
             // If we keep use browsing for the comments, at least we would be able to read all information in one request.
@@ -185,40 +255,7 @@ namespace S7CommPlusDriver
             var blockNumber = relid & 0xffff;
             var blockType = S7CommPlusBlockType.Unknown;
 
-            var exploreReq = new ExploreRequest(ProtocolVersion.V2);
-            exploreReq.ExploreId = relid;
-            exploreReq.ExploreRequestId = Ids.None;
-            exploreReq.ExploreChildsRecursive = 1;
-            exploreReq.ExploreParents = 0;
-
-            // We want to know the following attributes
-            exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
-            //exploreReq.AddressList.Add(Ids.Block_BlockNumber);
-            exploreReq.AddressList.Add(Ids.Block_BlockLanguage);
-            exploreReq.AddressList.Add(Ids.Block_RuntimeModified);
-            exploreReq.AddressList.Add(Ids.Block_CRC);
-            exploreReq.AddressList.Add(Ids.Block_FunctionalSignature);
-
-            exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
-            exploreReq.AddressList.Add(Ids.DataInterface_LineComments);
-            exploreReq.AddressList.Add(Ids.DataInterface_InterfaceDescription);
-            exploreReq.AddressList.Add(Ids.Block_BodyDescription);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_Code);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_ParameterModified);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_InterfaceSignature);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_NetworkComments);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_NetworkTitles);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_DebugInfo);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_extRefData);
-            exploreReq.AddressList.Add(Ids.FunctionalObject_intRefData);
-
-            res = _requests.SendExplore(exploreReq, out var exploreRes);
-            if (res != 0)
-            {
-                return res;
-            }
-
-            foreach (var obj in exploreRes.Objects)
+            foreach (var obj in objects)
             {
                 blockType = GetBlockTypeFromClassId(obj.ClassId);
 
@@ -376,7 +413,10 @@ namespace S7CommPlusDriver
                 binaryArtifacts,
                 onlineMetadata,
                 networkComments,
-                networkTitles);
+                networkTitles) {
+                    IsFailsafeCompliant = failsafeCompliance.TryGetValue(relid, out var compliant) ? compliant : (bool?)null,
+                    EngineeringVersion = engineeringVersions.TryGetValue(relid, out var version) ? version : null
+                };
             return 0;
         }
 

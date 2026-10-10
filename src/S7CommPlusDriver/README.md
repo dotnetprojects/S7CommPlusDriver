@@ -157,6 +157,15 @@ Communication limits are exposed through `GetCommunicationResourcesAsync()`, inc
 
 Block metadata is available through `BrowseBlocksAsync()`, `GetPlcStructureXmlAsync()`, `BrowseBlockStructureAsync()`, and `GetBlockContentAsync(relid)`.
 
+`GetBlockContentsAsync(relationIds)` uses `BrowseTimeout` for the whole batch and
+restores `RequestTimeout` afterward. It reads one to sixteen distinct blocks with bounded
+multi-variable requests on the same serialized connection. It preserves individual
+read fallback for unsupported attributes. Set `sourceOnly: true` for source conversion
+to reuse browsed headers and omit compiled binary fields; the default returns full
+block content. DB type information is read together and resolved through the shared
+type cache. Read PLC structure metadata first to obtain UDT headers and explicit
+`IsFailsafeCompliant` information when the CPU provides it.
+
 Advanced block-watch scenarios can use `OpenBlockOnlineViewAsync()` with a caller-provided `S7CommPlusTisWatchRequest`; the returned `S7CommPlusTisWatchSubscription` exposes parsed watch notifications and follows the same disposable subscription lifecycle.
 
 ## Driver failures and process isolation
