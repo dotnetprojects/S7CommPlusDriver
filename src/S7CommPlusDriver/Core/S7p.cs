@@ -14,6 +14,9 @@
 #endregion
 
 using System;
+using System.Buffers;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
 using S7CommPlusDriver.Internal;
@@ -22,6 +25,55 @@ namespace S7CommPlusDriver
 {
     internal class S7p
     {
+        [StructLayout(LayoutKind.Explicit)]
+        private struct SingleBits
+        {
+            [FieldOffset(0)] internal uint Bits;
+            [FieldOffset(0)] internal float Value;
+        }
+
+        [StructLayout(LayoutKind.Explicit)]
+        private struct DoubleBits
+        {
+            [FieldOffset(0)] internal ulong Bits;
+            [FieldOffset(0)] internal double Value;
+        }
+
+        private static bool TryReadMemoryBytes(System.IO.Stream buffer, int length, out ReadOnlySpan<byte> bytes)
+        {
+            if (buffer is System.IO.MemoryStream memory && memory.TryGetBuffer(out var segment)
+                && memory.Length - memory.Position >= length)
+            {
+                var position = checked((int)memory.Position);
+                bytes = segment.Array.AsSpan(segment.Offset + position, length);
+                memory.Position = position + length;
+                return true;
+            }
+            bytes = default;
+            return false;
+        }
+
+        private static bool TryReadExactly(System.IO.Stream buffer, Span<byte> value)
+        {
+#if NET6_0_OR_GREATER
+            var totalRead = 0;
+            while (totalRead < value.Length)
+            {
+                var read = buffer.Read(value.Slice(totalRead));
+                if (read == 0) return false;
+                totalRead += read;
+            }
+#else
+            for (var i = 0; i < value.Length; i++)
+            {
+                var read = buffer.ReadByte();
+                if (read < 0) return false;
+                value[i] = (byte)read;
+            }
+#endif
+            return true;
+        }
+
         private static bool TryReadExactly(System.IO.Stream buffer, byte[] value, int length)
         {
             var totalRead = 0;
@@ -194,38 +246,40 @@ namespace S7CommPlusDriver
 
         public static int DecodeUInt64(System.IO.Stream buffer, out UInt64 value)
         {
+            if (TryReadMemoryBytes(buffer, 8, out var view))
+            {
+                value = BinaryPrimitives.ReadUInt64BigEndian(view);
+                return 8;
+            }
             if (buffer.Length - buffer.Position < 8)
             {
                 value = 0;
                 return 0;
             }
-            byte[] b = new byte[8];
-            if (!TryReadExactly(buffer, b, 8))
-            {
-                value = 0;
-                return 0;
-            }
-            Array.Reverse(b, 0, 8);
-            value = BitConverter.ToUInt64(b, 0);
+            var b0 = buffer.ReadByte(); var b1 = buffer.ReadByte();
+            var b2 = buffer.ReadByte(); var b3 = buffer.ReadByte();
+            var b4 = buffer.ReadByte(); var b5 = buffer.ReadByte();
+            var b6 = buffer.ReadByte(); var b7 = buffer.ReadByte();
+            if ((b0 | b1 | b2 | b3 | b4 | b5 | b6 | b7) < 0) { value = 0; return 0; }
+            value = ((ulong)b0 << 56) | ((ulong)b1 << 48) | ((ulong)b2 << 40) | ((ulong)b3 << 32)
+                | ((ulong)b4 << 24) | ((ulong)b5 << 16) | ((ulong)b6 << 8) | (uint)b7;
             return 8;
         }
 
         public static int DecodeInt64(System.IO.Stream buffer, out Int64 value)
         {
-            if (buffer.Length - buffer.Position < 8)
-            {
-                value = 0;
-                return 0;
-            }
-            byte[] b = new byte[8];
-            if (!TryReadExactly(buffer, b, 8))
-            {
-                value = 0;
-                return 0;
-            }
-            Array.Reverse(b, 0, 8);
-            value = BitConverter.ToInt64(b, 0);
-            return 8;
+            var count = DecodeUInt64(buffer, out var bits);
+            value = unchecked((long)bits);
+            return count;
+        }
+
+        internal static int GetUInt32VlqLength(uint value)
+        {
+            if (value < 0x80) return 1;
+            if (value < 0x4000) return 2;
+            if (value < 0x200000) return 3;
+            if (value < 0x10000000) return 4;
+            return 5;
         }
 
         public static int EncodeUInt32Vlq(System.IO.Stream buffer, UInt32 value)
@@ -339,7 +393,7 @@ namespace S7CommPlusDriver
             // The actual method writes the values in the 2nd compact variant.
             // The decode algorithms can handle both variants.
 
-            byte[] b = new byte[5];
+            Span<byte> b = stackalloc byte[5];
             UInt32 abs_v;
             if (value == Int32.MinValue) // Handle this, otherwise Math.Abs() will fail
             {
@@ -370,7 +424,7 @@ namespace S7CommPlusDriver
             // Reverse order of bytes
             for (int i = length - 1; i >= 0; i--)
             {
-                buffer.Write(b, i, 1);
+                buffer.WriteByte(b[i]);
             }
             return length;
         }
@@ -383,7 +437,7 @@ namespace S7CommPlusDriver
             // Every byte looses 1 bit for the "continue" flag. For 8 bytes loosing 1 bit, we need 1 more byte.
             // Which in the normal variant would have only 7 bit of space, because 1 bit is for the "continue" flag.
             // The special handling allows to use all 8 bits in the additional 9th byte.
-            byte[] b = new byte[9];
+            Span<byte> b = stackalloc byte[9];
 
             bool special = value > 0x00ffffffffffffff;
             if (special)
@@ -435,7 +489,7 @@ namespace S7CommPlusDriver
             // Reverse order of bytes
             for (int i = length - 1; i >= 0; i--)
             {
-                buffer.Write(b, i, 1);
+                buffer.WriteByte(b[i]);
             }
             return length;
         }
@@ -533,7 +587,7 @@ namespace S7CommPlusDriver
 
         public static int EncodeInt64Vlq(System.IO.Stream buffer, Int64 value)
         {
-            byte[] b = new byte[9];
+            Span<byte> b = stackalloc byte[9];
             UInt64 abs_v;
             if (value == Int64.MinValue) // Handle this, otherwise Math.Abs() will fail
             {
@@ -597,66 +651,69 @@ namespace S7CommPlusDriver
             // Reverse order of bytes
             for (int i = length - 1; i >= 0; i--)
             {
-                buffer.Write(b, i, 1);
+                buffer.WriteByte(b[i]);
             }
             return length;
         }
 
         public static int EncodeFloat(System.IO.Stream buffer, float value)
         {
-            byte[] v = BitConverter.GetBytes(value);
-            buffer.WriteByte(v[3]);
-            buffer.WriteByte(v[2]);
-            buffer.WriteByte(v[1]);
-            buffer.WriteByte(v[0]);
-            return 4;
+            return EncodeUInt32(buffer, new SingleBits { Value = value }.Bits);
         }
 
         public static int DecodeFloat(System.IO.Stream buffer, out float value)
         {
-            byte[] v = new byte[4];
-            v[3] = (byte)buffer.ReadByte();
-            v[2] = (byte)buffer.ReadByte();
-            v[1] = (byte)buffer.ReadByte();
-            v[0] = (byte)buffer.ReadByte();
-            value = BitConverter.ToSingle(v, 0);
+            value = 0;
+            if (buffer.CanSeek)
+            {
+                var read = DecodeUInt32(buffer, out var bits);
+                value = new SingleBits { Bits = bits }.Value;
+                return read;
+            }
+            Span<byte> bytes = stackalloc byte[4];
+            if (!TryReadExactly(buffer, bytes)) return 0;
+            value = new SingleBits { Bits = BinaryPrimitives.ReadUInt32BigEndian(bytes) }.Value;
             return 4;
         }
 
         public static int EncodeDouble(System.IO.Stream buffer, double value)
         {
-            byte[] v = BitConverter.GetBytes(value);
-            buffer.WriteByte(v[7]);
-            buffer.WriteByte(v[6]);
-            buffer.WriteByte(v[5]);
-            buffer.WriteByte(v[4]);
-            buffer.WriteByte(v[3]);
-            buffer.WriteByte(v[2]);
-            buffer.WriteByte(v[1]);
-            buffer.WriteByte(v[0]);
-            return 8;
+            return EncodeUInt64(buffer, new DoubleBits { Value = value }.Bits);
         }
 
         public static int DecodeDouble(System.IO.Stream buffer, out double value)
         {
-            byte[] v = new byte[8];
-            v[7] = (byte)buffer.ReadByte();
-            v[6] = (byte)buffer.ReadByte();
-            v[5] = (byte)buffer.ReadByte();
-            v[4] = (byte)buffer.ReadByte();
-            v[3] = (byte)buffer.ReadByte();
-            v[2] = (byte)buffer.ReadByte();
-            v[1] = (byte)buffer.ReadByte();
-            v[0] = (byte)buffer.ReadByte();
-            value = BitConverter.ToDouble(v, 0);
+            value = 0;
+            if (buffer.CanSeek && buffer.Length - buffer.Position < 8) return 0;
+            Span<byte> bytes = stackalloc byte[8];
+            if (!TryReadExactly(buffer, bytes)) return 0;
+            value = new DoubleBits { Bits = BinaryPrimitives.ReadUInt64BigEndian(bytes) }.Value;
             return 8;
         }
 
         public static int EncodeWString(System.IO.Stream buffer, string value)
         {
-            byte[] bytes = Encoding.UTF8.GetBytes(value);
-            buffer.Write(bytes, 0, bytes.Length);
-            return bytes.Length;
+            var length = Encoding.UTF8.GetByteCount(value);
+#if NET6_0_OR_GREATER
+            if (length <= 256)
+            {
+                Span<byte> bytes = stackalloc byte[256];
+                var count = Encoding.UTF8.GetBytes(value.AsSpan(), bytes);
+                buffer.Write(bytes.Slice(0, count));
+                return count;
+            }
+#endif
+            var rented = ArrayPool<byte>.Shared.Rent(length);
+            try
+            {
+                var count = Encoding.UTF8.GetBytes(value, 0, value.Length, rented, 0);
+                buffer.Write(rented, 0, count);
+                return count;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+            }
         }
 
         public static int DecodeWString(System.IO.Stream buffer, int length, out string value)
@@ -665,6 +722,13 @@ namespace S7CommPlusDriver
             {
                 value = string.Empty;
                 return 0;
+            }
+            if (buffer is System.IO.MemoryStream memory && memory.TryGetBuffer(out var segment))
+            {
+                var offset = segment.Offset + checked((int)memory.Position);
+                value = Encoding.UTF8.GetString(segment.Array, offset, length);
+                memory.Position += length;
+                return length;
             }
             byte[] tmp = new byte[length];
             if (!TryReadExactly(buffer, tmp, length))

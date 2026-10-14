@@ -73,6 +73,24 @@ namespace S7CommPlusDriver.Tests
             Assert.Null(pdu);
         }
 
+#if NET6_0_OR_GREATER
+        [Fact]
+        public void AlreadyQueuedResponsesDoNotAllocateTimeoutOrTaskObjects()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            connection.DebugResetReceiveDispatcherForTests();
+            var packet = new byte[] { 0x72, ProtocolVersion.V1, 0x00, 0x01, 0xAA, 0x72, ProtocolVersion.V1, 0x00, 0x00 };
+            connection.DebugOnDataReceivedForTests(packet);
+            Assert.Equal(0, connection.DebugReceiveNextS7plusPduForTests(100, out _));
+            for (var i = 0; i < 100; i++) connection.DebugOnDataReceivedForTests(packet);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                if (connection.DebugReceiveNextS7plusPduForTests(100, out _) != 0)
+                    throw new InvalidOperationException("Queued response was lost.");
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+#endif
+
         [Fact]
         public void LegacyDigestMismatchPublishesReceiveError()
         {

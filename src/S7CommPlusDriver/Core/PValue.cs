@@ -307,9 +307,11 @@ namespace S7CommPlusDriver
         }
     }
 
-    internal class ValueBool : PValue
+    internal sealed class ValueBool : PValue
     {
-        bool Value;
+        private static readonly ValueBool False = new ValueBool(false);
+        private static readonly ValueBool True = new ValueBool(true);
+        readonly bool Value;
 
         public ValueBool(bool value) : this(value, 0)
         {
@@ -344,7 +346,9 @@ namespace S7CommPlusDriver
         {
             byte value;
             S7p.DecodeByte(buffer, out value);
-            return new ValueBool(Convert.ToBoolean(value), flags);
+            // Ordinary scalar booleans are immutable. Reuse their two representations
+            // without sharing array values or values carrying other wire flags.
+            return flags == 0 ? (value == 0 ? False : True) : new ValueBool(Convert.ToBoolean(value), flags);
         }
     }
 

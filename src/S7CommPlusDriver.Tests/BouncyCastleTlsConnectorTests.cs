@@ -24,15 +24,32 @@ namespace S7CommPlusDriver.Tests
         private const string OmsExporterLabel = "EXPERIMENTAL_OMS";
         private const int OmsExporterSecretLength = 32;
 
-        [Fact]
-        public void OmsExporterSecretRemainsAvailableAfterHandshakeCompletion()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void OmsExporterSecretAndApplicationDataWorkWithOwnedAndBorrowedCallbacks(bool borrowed)
         {
             var serverInput = new BlockingInputStream();
             BouncyCastleTlsConnector? connector = null;
             var serverOutput = new CallbackOutputStream(
                 (data, offset, count) => connector!.ReadCompleted(Copy(data, offset, count), count));
             var callback = new LoopbackConnectorCallback(serverInput);
-            connector = new BouncyCastleTlsConnector(callback);
+            using var plaintextReady = new ManualResetEventSlim();
+            byte[]? plaintext = null;
+            var marker = System.Text.Encoding.UTF8.GetBytes("TLS application data");
+            callback.DataAvailable = () =>
+            {
+                var buffer = new byte[4096];
+                var count = connector!.Receive(ref buffer, buffer.Length);
+                plaintext = Copy(buffer, 0, count);
+                plaintextReady.Set();
+            };
+            IS7TlsConnectorCallback sink = borrowed ? new BorrowedLoopbackCallback(callback, (data, count) =>
+            {
+                plaintext = Copy(data, 0, count);
+                plaintextReady.Set();
+            }) : callback;
+            connector = new BouncyCastleTlsConnector(sink);
             var server = new ExporterTlsServer();
             Exception? serverException = null;
 
@@ -42,6 +59,8 @@ namespace S7CommPlusDriver.Tests
                 {
                     var protocol = new TlsServerProtocol(serverInput, serverOutput);
                     protocol.Accept(server);
+                    protocol.Stream.Write(marker, 0, marker.Length);
+                    protocol.Stream.Flush();
                 }
                 catch (Exception ex)
                 {
@@ -60,6 +79,8 @@ namespace S7CommPlusDriver.Tests
 
                 Assert.True(serverThread.Join(TimeSpan.FromSeconds(10)), "TLS server handshake did not complete.");
                 Assert.Null(serverException);
+                Assert.True(plaintextReady.Wait(TimeSpan.FromSeconds(10)), "TLS application data was not delivered.");
+                Assert.Equal(marker, plaintext);
 
                 var firstExport = connector.GetOmsExporterSecret();
                 var secondExport = connector.GetOmsExporterSecret();
@@ -163,6 +184,7 @@ namespace S7CommPlusDriver.Tests
         private sealed class LoopbackConnectorCallback : IS7TlsConnectorCallback
         {
             private readonly BlockingInputStream _serverInput;
+            internal Action? DataAvailable;
 
             public LoopbackConnectorCallback(BlockingInputStream serverInput)
             {
@@ -176,11 +198,27 @@ namespace S7CommPlusDriver.Tests
 
             public void OnDataAvailable()
             {
+                DataAvailable?.Invoke();
             }
 
             public void OnSslError(int sslError, string sslState)
             {
             }
+        }
+
+        private sealed class BorrowedLoopbackCallback : IS7TlsConnectorCallback, IS7TlsPlaintextCallback, IS7TlsRecordCallback
+        {
+            private readonly LoopbackConnectorCallback _owned;
+            private readonly Action<byte[], int> _receive;
+            internal BorrowedLoopbackCallback(LoopbackConnectorCallback owned, Action<byte[], int> receive)
+            {
+                _owned = owned; _receive = receive;
+            }
+            public void WriteData(byte[] data, int dataLength) => _owned.WriteData(data, dataLength);
+            public void WriteEncryptedData(byte[] data, int offset, int count) => _owned.WriteData(Copy(data, offset, count), count);
+            public void OnPlaintextData(byte[] data, int dataLength) => _receive(data, dataLength);
+            public void OnDataAvailable() => throw new InvalidOperationException("Borrowed TLS delivery must not queue an owned payload.");
+            public void OnSslError(int sslError, string sslState) => _owned.OnSslError(sslError, sslState);
         }
 
         private sealed class BlockingInputStream : Stream

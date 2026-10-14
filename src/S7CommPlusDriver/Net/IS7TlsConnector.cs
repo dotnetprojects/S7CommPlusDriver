@@ -16,4 +16,16 @@ namespace S7CommPlusDriver
         void OnDataAvailable();
         void OnSslError(int sslError, string sslState);
     }
+
+    /// <summary>The plaintext buffer is borrowed and valid only for the duration of the callback.</summary>
+    internal interface IS7TlsPlaintextCallback
+    {
+        void OnPlaintextData(byte[] data, int dataLength);
+    }
+
+    /// <summary>The encrypted buffer slice is borrowed for a synchronous transport send.</summary>
+    internal interface IS7TlsRecordCallback
+    {
+        void WriteEncryptedData(byte[] data, int offset, int count);
+    }
 }

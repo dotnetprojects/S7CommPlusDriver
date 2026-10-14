@@ -47,27 +47,15 @@ namespace S7CommPlusDriver
             {
                 var received = receive(pending.Values.First().Request, sequences);
                 if (received.Error != 0) return received.Error;
-                var response = GetMultiVariablesResponse.DeserializeFromPdu(received.Pdu);
+                var response = GetMultiVariablesReadResponse.ReadHeader(received.Pdu);
                 if (response == null || !pending.TryGetValue(response.SequenceNumber, out var completed))
                     return S7Consts.errIsoInvalidPDU5;
+                result = response.ReadItems(received.Pdu, values, errors, completed.Start, completed.Count);
+                if (result != 0) return result;
                 result = validate(completed.Request, response);
                 if (result != 0) return result;
                 if (response.IntegrityId != unchecked(completed.Request.IntegrityId + completed.Request.SequenceNumber))
                     return S7Consts.errIsoInvalidPDU;
-                // Preserve item failures and missing-value status; never expose partial
-                // data as a successful logical read after a transport/validation failure.
-                foreach (var value in response.Values)
-                {
-                    if (value.Key == 0 || value.Key > completed.Count) return S7Consts.errIsoInvalidPDU;
-                    var index = completed.Start + (int)value.Key - 1;
-                    values[index] = value.Value;
-                    errors[index] = 0;
-                }
-                foreach (var error in response.ErrorValues)
-                {
-                    if (error.Key == 0 || error.Key > completed.Count) return S7Consts.errIsoInvalidPDU;
-                    errors[completed.Start + (int)error.Key - 1] = error.Value;
-                }
                 pending.Remove(response.SequenceNumber);
                 sequences.Remove(response.SequenceNumber);
                 result = FillWindow();

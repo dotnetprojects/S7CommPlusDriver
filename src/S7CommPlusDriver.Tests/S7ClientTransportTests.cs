@@ -135,5 +135,19 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(0x80, transport.Sent[1][6]);
             Assert.Equal(payload, transport.Sent.SelectMany(packet => packet.Skip(7)).ToArray());
         }
+
+        [Fact]
+        public void BorrowedEncryptedSliceUsesItsOffsetCountAndExactWireLength()
+        {
+            var transport = new FakeS7Transport { Connected = true };
+            using var client = new S7Client(() => transport);
+            var payload = Enumerable.Range(0, 3000).Select(value => (byte)value).ToArray();
+            ((IS7TlsRecordCallback)client).WriteEncryptedData(payload, 17, 2000);
+            Assert.Equal(2000, transport.Sent.Sum(packet => packet.Length - 7));
+            Assert.All(transport.Sent, packet => Assert.Equal(packet.Length, (packet[2] << 8) | packet[3]));
+            Assert.All(transport.Sent.Take(transport.Sent.Count - 1), packet => Assert.Equal(0, packet[6]));
+            Assert.Equal(0x80, transport.Sent.Last()[6]);
+            Assert.Equal(payload.Skip(17).Take(2000), transport.Sent.SelectMany(packet => packet.Skip(7)));
+        }
     }
 }

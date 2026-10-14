@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
-using System.Threading.Channels;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
@@ -35,7 +34,7 @@ namespace S7CommPlusDriver
         private S7Client m_client;
         private MemoryStream m_ReceivedPDU;
         private MemoryStream m_ReceivedTempPDU;
-        private Channel<ReceivedS7PlusPdu> m_ReceivedPDUs = CreateReceiveChannel();
+        private S7CommPlusReceiveQueue<ReceivedS7PlusPdu> m_ReceivedPDUs = CreateReceiveQueue();
         private readonly object m_RequestLock = new object();
         private readonly object m_ReceiveDispatchLock = new object();
         private readonly object m_NotificationQueueLock = new object();
@@ -89,14 +88,9 @@ namespace S7CommPlusDriver
             public int ErrorCode { get; }
         }
 
-        private static Channel<ReceivedS7PlusPdu> CreateReceiveChannel()
+        private static S7CommPlusReceiveQueue<ReceivedS7PlusPdu> CreateReceiveQueue()
         {
-            return Channel.CreateUnbounded<ReceivedS7PlusPdu>(new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false
-            });
+            return new S7CommPlusReceiveQueue<ReceivedS7PlusPdu>();
         }
 
         private UInt16 GetNextSequenceNumber()
@@ -165,25 +159,11 @@ namespace S7CommPlusDriver
         private int ReceiveNextS7plusPdu(int timeout, out MemoryStream pdu)
         {
             pdu = null;
-            try
-            {
-                using var cts = new CancellationTokenSource(Math.Max(1, timeout));
-                var received = m_ReceivedPDUs.Reader.ReadAsync(cts.Token).AsTask().GetAwaiter().GetResult();
-                if (received.ErrorCode != 0)
-                {
-                    return received.ErrorCode;
-                }
-                pdu = received.Pdu;
-                return 0;
-            }
-            catch (OperationCanceledException)
-            {
-                return S7Consts.errCliJobTimeout;
-            }
-            catch (ChannelClosedException)
-            {
-                return S7Consts.errTCPNotConnected;
-            }
+            var result = m_ReceivedPDUs.Read(timeout, out var received);
+            if (result != 0) return result;
+            if (received.ErrorCode != 0) return received.ErrorCode;
+            pdu = received.Pdu;
+            return 0;
         }
 
         private int SendS7plusFunctionObject(IS7pRequest funcObj)
@@ -211,9 +191,11 @@ namespace S7CommPlusDriver
             }
             m_LastSentRequestForWait = funcObj;
 
-            MemoryStream stream = new MemoryStream();
+            using var stream = funcObj is GetMultiVariablesRequest read
+                ? new MemoryStream(checked((int)read.GetSerializedLength()))
+                : new MemoryStream();
             funcObj.Serialize(stream);
-            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, funcObj.ProtocolVersion,
+            return SendS7plusPDUdata(stream.GetBuffer(), (int)stream.Length, funcObj.ProtocolVersion,
                 allowTransportFragmentation: funcObj is GetMultiVariablesRequest);
         }
 
@@ -789,6 +771,8 @@ namespace S7CommPlusDriver
 
         private static long GetSerializedRequestLengthForBatching(IS7pRequest request)
         {
+            if (request is GetMultiVariablesRequest read)
+                return read.GetSerializedLength(UInt32.MaxValue);
             uint sessionId = request.SessionId;
             ushort sequenceNumber = request.SequenceNumber;
             uint integrityId = request.IntegrityId;
@@ -841,9 +825,17 @@ namespace S7CommPlusDriver
             // First step we push the complete PDU to a queue.
             // Receive errors are published through the receive queue so request waiters fail immediately.
 
+            // Borrowed TLS buffers may have spare capacity. Validate the active length
+            // before parsing so truncated frames cannot expose stale buffer contents.
+            if (PDU == null || len < 4 || len > PDU.Length)
+            {
+                m_ReceivedNeedMoreDataForCompletePDU = false;
+                PublishReceiveError(S7Consts.errIsoInvalidPDU);
+                return;
+            }
             if (!m_ReceivedNeedMoreDataForCompletePDU)
             {
-                m_ReceivedTempPDU = new MemoryStream();
+                m_ReceivedTempPDU = new MemoryStream(len);
             }
             // S7comm-plus
             byte protoVersion;
@@ -874,6 +866,12 @@ namespace S7CommPlusDriver
             // Read the length of the data-part from header
             s7HeaderDataLen = GetWordAt(PDU, pos);
             pos += 2;
+            if (s7HeaderDataLen > len - pos)
+            {
+                m_ReceivedNeedMoreDataForCompletePDU = false;
+                PublishReceiveError(S7Consts.errIsoInvalidPDU);
+                return;
+            }
             if (s7HeaderDataLen > 0)
             {
                 // Special handling for SystemEvent 0xfe PDUs:
@@ -973,7 +971,7 @@ namespace S7CommPlusDriver
             // If a complete (usable) PDU is received, add to the queue (threadsafe) for readout
             if (m_NewS7CommPlusReceived)
             {
-                m_ReceivedPDUs.Writer.TryWrite(new ReceivedS7PlusPdu(m_ReceivedTempPDU));
+                m_ReceivedPDUs.TryWrite(new ReceivedS7PlusPdu(m_ReceivedTempPDU));
                 m_NewS7CommPlusReceived = false;
             }
         }
@@ -981,7 +979,7 @@ namespace S7CommPlusDriver
         private void PublishReceiveError(int errorCode)
         {
             m_LastError = errorCode;
-            m_ReceivedPDUs.Writer.TryWrite(new ReceivedS7PlusPdu(null, errorCode));
+            m_ReceivedPDUs.TryWrite(new ReceivedS7PlusPdu(null, errorCode));
         }
 
         private byte[] BuildLegacyAccumulatedDigestData(byte[] pdu, int bodyPos, int bodyLen, int previousBodyLen)
@@ -998,6 +996,11 @@ namespace S7CommPlusDriver
             OnDataReceived(pdu, pdu.Length);
         }
 
+        internal void DebugOnBorrowedDataReceivedForTests(byte[] pdu, int activeLength)
+        {
+            OnDataReceived(pdu, activeLength);
+        }
+
         internal int DebugReceiveNextS7plusPduForTests(int timeout, out MemoryStream pdu)
         {
             return ReceiveNextS7plusPdu(timeout, out pdu);
@@ -1005,8 +1008,8 @@ namespace S7CommPlusDriver
 
         internal void DebugResetReceiveDispatcherForTests()
         {
-            m_ReceivedPDUs.Writer.TryComplete();
-            m_ReceivedPDUs = CreateReceiveChannel();
+            m_ReceivedPDUs.Complete();
+            m_ReceivedPDUs = CreateReceiveQueue();
             m_ReceivedTempPDU = null;
             m_ReceivedPDU = null;
             m_ReceivedNeedMoreDataForCompletePDU = false;
@@ -1203,10 +1206,10 @@ namespace S7CommPlusDriver
             m_IntegrityId_Set = 0;
             dbInfoList = null;
             typeInfoList.Clear();
-            m_ReceivedPDUs.Writer.TryComplete();
-            m_ReceivedPDUs = CreateReceiveChannel();
+            m_ReceivedPDUs.Complete();
+            m_ReceivedPDUs = CreateReceiveQueue();
             m_client = new S7Client();
-            m_client.OnDataReceived = this.OnDataReceived;
+            m_client.OnBorrowedDataReceived = this.OnDataReceived;
             m_client.OnReceiveError = this.PublishReceiveError;
             m_client.PLCPort = port;
             m_client.ConnTimeout = timeoutMs;
@@ -1389,6 +1392,7 @@ namespace S7CommPlusDriver
 
             // A receive that is still unwinding must not publish into a new session.
             client.OnDataReceived = null;
+            client.OnBorrowedDataReceived = null;
             client.OnReceiveError = null;
             return client.Dispose(timeoutMs);
         }
@@ -1435,8 +1439,8 @@ namespace S7CommPlusDriver
                 m_ReadTimeout = oldTimeout;
                 m_ReceivedPDU = null;
                 m_ReceivedTempPDU = null;
-                m_ReceivedPDUs.Writer.TryComplete();
-                m_ReceivedPDUs = CreateReceiveChannel();
+                m_ReceivedPDUs.Complete();
+                m_ReceivedPDUs = CreateReceiveQueue();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
                 m_LastSentRequestForWait = null;
@@ -1477,8 +1481,8 @@ namespace S7CommPlusDriver
                 m_ReadTimeout = oldTimeout;
                 m_ReceivedPDU = null;
                 m_ReceivedTempPDU = null;
-                m_ReceivedPDUs.Writer.TryComplete();
-                m_ReceivedPDUs = CreateReceiveChannel();
+                m_ReceivedPDUs.Complete();
+                m_ReceivedPDUs = CreateReceiveQueue();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
                 m_LastSentRequestForWait = null;
@@ -1575,8 +1579,8 @@ namespace S7CommPlusDriver
             }
             // The requester must pass the internal type with the request, otherwise not all return values can be converted automatically.
             // For example, strings are transmitted as UInt-Array.
-            values = new List<object>();
-            errors = new List<UInt64>();
+            values = new List<object>(addresslist.Count);
+            errors = new List<UInt64>(addresslist.Count);
             // Initialize error fields to error value
             for (int i = 0; i < addresslist.Count; i++)
             {
@@ -1606,7 +1610,10 @@ namespace S7CommPlusDriver
                     return res;
                 }
 
-                var getMultiVarRes = GetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
+                var getMultiVarRes = GetMultiVariablesReadResponse.ReadHeader(m_ReceivedPDU);
+                if (getMultiVarRes == null) return S7Consts.errIsoInvalidPDU4;
+                res = getMultiVarRes.ReadItems(m_ReceivedPDU, values, errors, chunk_startIndex, count_perChunk);
+                if (res != 0) return res;
                 res = checkResponseWithIntegrity(getMultiVarReq, getMultiVarRes);
                 if (res != 0)
                 {
@@ -1618,19 +1625,6 @@ namespace S7CommPlusDriver
                     Trace.WriteLine("S7CommPlusProtocolSession - ReadValues: Executed with Error! ReturnValue=" + getMultiVarRes.ReturnValue);
                 }
 
-                // If a variable could not be read, there is no value, but there is an ErrorValue.
-                // The production client maps this to per-item batch status.
-                foreach (var v in getMultiVarRes.Values)
-                {
-                    values[chunk_startIndex + (int)v.Key - 1] = v.Value;
-                    // Initialize error to 0, will be overwritten below if there was an error on an item.
-                    errors[chunk_startIndex + (int)v.Key - 1] = 0;
-                }
-
-                foreach (var ev in getMultiVarRes.ErrorValues)
-                {
-                    errors[chunk_startIndex + (int)ev.Key - 1] = ev.Value;
-                }
                 chunk_startIndex += count_perChunk;
 
             } while (chunk_startIndex < addresslist.Count);
@@ -1649,7 +1643,8 @@ namespace S7CommPlusDriver
             {
                 request.AddressList.Add(addresses[startIndex + offset]);
             }
-            // Ordinary reads fit in one logical PDU: measure the complete batch once.
+            // Ordinary reads fit in one logical PDU: calculate the complete batch length
+            // without encoding a throwaway payload.
             // Only unusually long addresses need the bounded payload search.
             if (maxCandidates <= 1 || !ExceedsSingleFramePayload(request, maxPayloadSize))
             {
