@@ -29,7 +29,7 @@ using Microsoft.Extensions.Logging;
 
 namespace S7CommPlusDriver
 {
-    internal partial class S7CommPlusProtocolSession
+    internal partial class S7CommPlusProtocolSession : IS7CommPlusBulkReadSession
     {
         #region Private Members
         private S7Client m_client;
@@ -53,6 +53,7 @@ namespace S7CommPlusDriver
         }
 
         private int m_ReadTimeout = 5000;
+        private int m_ReadPipelineDepth = 1;
         private UInt16 m_SequenceNumber = 0;
         private UInt32 m_IntegrityId = 0;
         private UInt32 m_IntegrityId_Set = 0;
@@ -237,6 +238,7 @@ namespace S7CommPlusDriver
         private int SendS7plusFunctionObjectAndWait(IS7pRequest funcObj, int timeout)
         {
             lock (m_RequestLock)
+            lock (m_ReceiveDispatchLock)
             {
                 try
                 {
@@ -262,6 +264,7 @@ namespace S7CommPlusDriver
         private int SendRawS7plusPduAndWait(byte[] sendPduData, int bytesToSend, byte protoVersion, int timeout)
         {
             lock (m_RequestLock)
+            lock (m_ReceiveDispatchLock)
             {
                 var result = SendS7plusPDUdata(sendPduData, bytesToSend, protoVersion);
                 if (result != 0)
@@ -335,7 +338,7 @@ namespace S7CommPlusDriver
             return S7Consts.errCliJobTimeout;
         }
 
-        private int DispatchOneReceivedPdu(int timeout, IS7pRequest expectedResponse, uint notificationSubscriptionObjectId, out MemoryStream responsePdu, out Notification matchingNotification)
+        private int DispatchOneReceivedPdu(int timeout, IS7pRequest expectedResponse, uint notificationSubscriptionObjectId, out MemoryStream responsePdu, out Notification matchingNotification, ISet<ushort> acceptedResponseSequences = null)
         {
             responsePdu = null;
             matchingNotification = null;
@@ -359,7 +362,8 @@ namespace S7CommPlusDriver
                     {
                         if (expectedResponse != null
                             && function == expectedResponse.FunctionCode
-                            && sequenceNumber == expectedResponse.SequenceNumber)
+                            && (sequenceNumber == expectedResponse.SequenceNumber
+                                || acceptedResponseSequences?.Contains(sequenceNumber) == true))
                         {
                             pdu.Position = 0;
                             responsePdu = pdu;
@@ -1116,6 +1120,7 @@ namespace S7CommPlusDriver
             {
                 return S7Consts.errCliInvalidParams;
             }
+            m_ReadPipelineDepth = options.ReadPipelineDepth;
 
             switch (options.SecurityMode)
             {
@@ -1541,6 +1546,33 @@ namespace S7CommPlusDriver
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<UInt64> errors)
         {
+            if (m_ReadPipelineDepth > 1 && addresslist.Count > Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax))
+            {
+                lock (m_RequestLock)
+                // Reserve response dispatch before sending. Subscription pollers
+                // otherwise can consume a read response while expecting notifications.
+                lock (m_ReceiveDispatchLock)
+                {
+                    try
+                    {
+                        var result = S7CommPlusReadPipeline.Execute(addresslist,
+                            Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax), m_ReadPipelineDepth,
+                            request => SendS7plusFunctionObject(request), ReceivePipelinedReadResponse,
+                            checkResponseWithIntegrity, out values, out errors);
+                        if (result != 0) CloseTransport(2000);
+                        return result;
+                    }
+                    catch
+                    {
+                        CloseTransport(2000);
+                        throw;
+                    }
+                    finally
+                    {
+                        m_LastSentRequestForWait = null;
+                    }
+                }
+            }
             // The requester must pass the internal type with the request, otherwise not all return values can be converted automatically.
             // For example, strings are transmitted as UInt-Array.
             values = new List<object>();
@@ -1606,7 +1638,7 @@ namespace S7CommPlusDriver
             return m_LastError;
         }
 
-        private static GetMultiVariablesRequest CreateReadRequestBatch(
+        internal static GetMultiVariablesRequest CreateReadRequestBatch(
             IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount)
         {
             var request = new GetMultiVariablesRequest(ProtocolVersion.V2);
@@ -1629,6 +1661,20 @@ namespace S7CommPlusDriver
                 offset => request.AddressList.Add(addresses[startIndex + offset]),
                 () => request.AddressList.RemoveAt(request.AddressList.Count - 1));
             return request;
+        }
+
+        private (int Error, MemoryStream Pdu) ReceivePipelinedReadResponse(
+            GetMultiVariablesRequest expected, ISet<ushort> acceptedSequences)
+        {
+            var deadline = RuntimeCompatibility.TickCount64 + Math.Max(1, m_ReadTimeout);
+            while (RuntimeCompatibility.TickCount64 < deadline)
+            {
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - RuntimeCompatibility.TickCount64));
+                var result = DispatchOneReceivedPdu(remaining, expected, 0, out var response, out _, acceptedSequences);
+                if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout) continue;
+                if (result != 0 || response != null) return (result, response);
+            }
+            return (S7Consts.errCliJobTimeout, null);
         }
 
         public int WriteValues(List<ItemAddress> addresslist, List<PValue> values, out List<UInt64> errors)

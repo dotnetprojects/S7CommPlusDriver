@@ -1493,6 +1493,12 @@ namespace S7CommPlusDriver
             IS7CommPlusSession session,
             IReadOnlyList<PlcTag> requestTags)
         {
+            if (_options.ReadPipelineDepth > 1 && session is IS7CommPlusBulkReadSession bulkSession)
+            {
+                var error = bulkSession.ReadValues(requestTags.Select(tag => tag.Address).ToList(), out var bulkValues, out var bulkErrors);
+                ThrowIfError("ReadTags", error);
+                return (bulkValues, bulkErrors);
+            }
             var values = new List<object>(requestTags.Count);
             var itemErrors = new List<ulong>(requestTags.Count);
             for (var batchStart = 0; batchStart < requestTags.Count; batchStart += _tagsPerReadRequestMax)

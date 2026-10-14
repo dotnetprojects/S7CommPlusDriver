@@ -230,22 +230,29 @@ namespace S7CommPlusDriver
 
         public static int EncodeUInt32Vlq(System.IO.Stream buffer, UInt32 value)
         {
-            byte[] bytes = new byte[5];
-            int i, j;
-            for (i = 4; i > 0; i--)
+            if (value < 0x80)
             {
-                if ((value & (0x7f << (i * 7))) > 0)
-                {
-                    break;
-                }
+                buffer.WriteByte((byte)value);
+                return 1;
             }
-            for (j = 0; j <= i; j++)
+
+            // Address fields are encoded for every read request. Keep the scratch
+            // bytes on the stack rather than allocating an array for each field.
+            Span<byte> bytes = stackalloc byte[5];
+            var start = bytes.Length - 1;
+            bytes[start] = (byte)(value & 0x7f);
+            while ((value >>= 7) != 0)
             {
-                bytes[j] = (byte)(((value >> ((i - j) * 7)) & 0x7f) | 0x80);
+                bytes[--start] = (byte)((value & 0x7f) | 0x80);
             }
-            bytes[i] ^= 0x80;
-            buffer.Write(bytes, 0, i + 1);
-            return i + 1;
+            var length = bytes.Length - start;
+#if NET6_0_OR_GREATER
+            buffer.Write(bytes.Slice(start, length));
+#else
+            for (var index = start; index < bytes.Length; index++)
+                buffer.WriteByte(bytes[index]);
+#endif
+            return length;
         }
 
         public static int DecodeUInt32Vlq(System.IO.Stream buffer, out UInt32 value)

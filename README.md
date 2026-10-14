@@ -386,6 +386,34 @@ matching TIA's standard element-type syntax.
 
 ## Communication Limits
 
+### Bulk read pipelining
+
+For PLCs that process multiple outstanding read requests efficiently, set
+`ReadPipelineDepth = 2` before creating the client:
+
+```csharp
+await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
+{
+    Address = "10.0.100.10",
+    ReadPipelineDepth = 2,
+    WriteEnabled = false
+});
+await client.ConnectAsync();
+await client.GetCommunicationResourcesAsync();
+```
+
+The default depth is `1`; valid values are `1` through `16`. Measure on the target
+CPU: two in-flight requests can substantially reduce large read cycles, while an
+older CPU may be faster with sequential reads. Querying communication resources
+also refreshes the actual item limits on legacy connections that still have
+conservative fallback limits after connecting.
+
+The pipeline preserves caller item order, checks response sequence/integrity
+identifiers, respects each request's PLC item and protocol length limits, and routes
+subscription notifications while reading. A transport or validation failure closes
+the connection to discard outstanding responses before reuse/reconnect. Other
+operations remain serialized; writes are not pipelined or enabled by this option.
+
 PLC communication limits are available through the production client. This is
 useful before creating subscriptions or planning large batch reads:
 

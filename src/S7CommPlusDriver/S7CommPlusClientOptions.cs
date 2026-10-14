@@ -39,6 +39,13 @@ namespace S7CommPlusDriver
         public bool AutoReconnect { get; set; } = true;
         public bool WriteEnabled { get; set; } = false;
         /// <summary>
+        /// Maximum number of read requests in flight on one connection. The default
+        /// of one keeps sequential request behavior. Two can improve bulk reads on
+        /// CPUs that process multiple outstanding requests; measure on the target PLC.
+        /// Does not enable writes or parallelize other operations.
+        /// </summary>
+        public int ReadPipelineDepth { get; set; } = 1;
+        /// <summary>
         /// Enables periodic renewal of the integrity key for legacy challenge-authenticated sessions.
         /// </summary>
         public bool LegacySessionKeyRefreshEnabled { get; set; } = true;
@@ -114,6 +121,8 @@ namespace S7CommPlusDriver
 
         internal void Validate()
         {
+            if (ReadPipelineDepth < 1 || ReadPipelineDepth > 16)
+                throw new ArgumentOutOfRangeException(nameof(ReadPipelineDepth), "Read pipeline depth must be between 1 and 16.");
             if (string.IsNullOrWhiteSpace(Address))
             {
                 throw new ArgumentException("PLC address is required.", nameof(Address));
