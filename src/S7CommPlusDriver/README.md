@@ -153,6 +153,16 @@ Each `S7CommPlusAlarm` exposes `SourceRelationId` and `SourceAlarmId`, decoded f
 
 Communication limits are exposed through `GetCommunicationResourcesAsync()`, including max read/write batch sizes, available PLC subscription slots, and subscription memory.
 
+For large reads, `S7CommPlusClientOptions.ReadPipelineDepth = 2` can overlap two
+requests on one connection. The default is `1` (sequential), with supported depths
+from `1` through `16`. Benchmark the target CPU before increasing it; older CPUs
+can be faster at depth one. After connecting, `GetCommunicationResourcesAsync()`
+refreshes negotiated item limits, including conservative legacy fallback limits.
+The pipeline preserves caller result order, validates response identifiers, routes
+notifications, and closes the connection on transport/validation failure so pending
+responses cannot contaminate the next operation. This setting applies to reads;
+other operations retain their existing serialization and write safety gates.
+
 ## Block Metadata and Online View
 
 Block metadata is available through `BrowseBlocksAsync()`, `GetPlcStructureXmlAsync()`, `BrowseBlockStructureAsync()`, and `GetBlockContentAsync(relid)`.

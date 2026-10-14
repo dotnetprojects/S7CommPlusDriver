@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using System.IO;
 using System.Security.Cryptography;
+using S7CommPlusDriver.Internal;
 using Xunit;
 
 namespace S7CommPlusDriver.Tests
@@ -71,6 +72,24 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(S7Consts.errCliJobTimeout, error);
             Assert.Null(pdu);
         }
+
+#if NET6_0_OR_GREATER
+        [Fact]
+        public void AlreadyQueuedResponsesDoNotAllocateTimeoutOrTaskObjects()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            connection.DebugResetReceiveDispatcherForTests();
+            var packet = new byte[] { 0x72, ProtocolVersion.V1, 0x00, 0x01, 0xAA, 0x72, ProtocolVersion.V1, 0x00, 0x00 };
+            connection.DebugOnDataReceivedForTests(packet);
+            Assert.Equal(0, connection.DebugReceiveNextS7plusPduForTests(100, out _));
+            for (var i = 0; i < 100; i++) connection.DebugOnDataReceivedForTests(packet);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 100; i++)
+                if (connection.DebugReceiveNextS7plusPduForTests(100, out _) != 0)
+                    throw new InvalidOperationException("Queued response was lost.");
+            Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+#endif
 
         [Fact]
         public void LegacyDigestMismatchPublishesReceiveError()
@@ -205,6 +224,38 @@ namespace S7CommPlusDriver.Tests
             var exceedsLimit = connection.DebugGetMultiVariablesRequestExceedsLegacySingleFrameForTests(addresses);
 
             Assert.False(exceedsLimit);
+        }
+
+        [Fact]
+        public void ReadBatchUsesPlcItemLimitEvenWhenItNeedsMultipleTransportFrames()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = Enumerable.Range(1, 107)
+                .Select(i => new ItemAddress($"8A0E{i:X4}.1.2.3.4.5.6.7.8"))
+                .ToArray();
+
+            var first = connection.DebugCreateReadRequestBatchForTests(addresses, 0, 100);
+            var last = connection.DebugCreateReadRequestBatchForTests(addresses, first.ItemCount, 100);
+
+            Assert.Equal(100, first.ItemCount);
+            Assert.True(first.SerializedLength > S7CommPlusProtocolConstants.DefaultIsoTpduSize);
+            Assert.Equal(7, last.ItemCount);
+        }
+
+        [Fact]
+        public void ReadBatchKeepsTheProtocolLengthBoundForUnusuallyLongAddresses()
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var addresses = Enumerable.Range(1, 20)
+                .Select(i => new ItemAddress($"8A0E{i:X4}.1")
+                {
+                    LID = Enumerable.Repeat(uint.MaxValue, 2000).ToList()
+                }).ToArray();
+
+            var batch = connection.DebugCreateReadRequestBatchForTests(addresses, 0, 100);
+
+            Assert.InRange(batch.ItemCount, 1, addresses.Length - 1);
+            Assert.InRange(batch.SerializedLength, 1025, ushort.MaxValue - 33 - sizeof(uint));
         }
 
         [Fact]

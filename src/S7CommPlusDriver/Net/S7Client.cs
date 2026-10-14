@@ -11,6 +11,7 @@ using OpenSsl;
 using S7CommPlusDriver.Internal;
 using S7CommPlusDriver.Tls;
 using System;
+using System.Buffers;
 using System.IO;
 using System.Threading;
 
@@ -21,7 +22,7 @@ namespace S7CommPlusDriver
 	// |  it under the terms of the Lesser GNU General Public License as published by |
 	// |  the Free Software Foundation, either version 3 of the License, or           |
 	// |  (at your option) any later version.                                         |
-	public class S7Client : IS7TlsConnectorCallback, IDisposable
+	public class S7Client : IS7TlsConnectorCallback, IS7TlsPlaintextCallback, IS7TlsRecordCallback, IDisposable
 	{
 		public static bool WriteSslKeyToFile;
 		public static string WriteSslKeyPath;
@@ -91,33 +92,57 @@ namespace S7CommPlusDriver
 		{
 			// SSL fordert Daten zum Absenden an
 			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
-			int offset = 0;
-			int maxPayloadSize = Math.Min(MaxPduSizeToRequest, PDU.Length - IsoHSize);
-			if (maxPayloadSize <= 0)
+			if (pData == null || dataLength < 0 || dataLength > pData.Length)
 			{
 				_LastError = S7Consts.errIsoInvalidPDU;
 				return;
 			}
-			while (offset < dataLength && _LastError == 0)
-			{
-				int chunkSize = Math.Min(maxPayloadSize, dataLength - offset);
-				byte[] sendData = new byte[chunkSize];
-				Array.Copy(pData, offset, sendData, 0, chunkSize);
-				SendIsoPacket(sendData);
-				offset += chunkSize;
-			}
+			// Fragment the TLS record once at the negotiated COTP boundary. Splitting
+			// it into fixed 960-byte messages first adds packets and premature EOT flags.
+			SendIsoPacket(pData, 0, dataLength);
+		}
+
+		void IS7TlsRecordCallback.WriteEncryptedData(byte[] data, int offset, int count)
+		{
+			SendIsoPacket(data, offset, count);
 		}
 
 		// OpenSSL meldet fertige Daten (decrypted) zum einlesen
 		public void OnDataAvailable()
 		{
-			// Netzwerk meldet eintreffende Daten
-			byte[] buf = new byte[8192];
-			int bytesRead = m_sslconn.Receive(ref buf, buf.Length);
-			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL OnDataAvailable: bytesRead=" + bytesRead);
-			byte[] readData = new byte[bytesRead];
-			Array.Copy(buf, readData, bytesRead);
-			OnDataReceived?.Invoke(readData, bytesRead);
+			var rented = ArrayPool<byte>.Shared.Rent(8192);
+			try
+			{
+				var buffer = rented;
+				int bytesRead = m_sslconn.Receive(ref buffer, 8192);
+				DeliverPlaintext(buffer, bytesRead);
+			}
+			finally
+			{
+				ArrayPool<byte>.Shared.Return(rented, clearArray: true);
+			}
+		}
+
+		void IS7TlsPlaintextCallback.OnPlaintextData(byte[] data, int dataLength)
+		{
+			DeliverPlaintext(data, dataLength);
+		}
+
+		private void DeliverPlaintext(byte[] data, int dataLength)
+		{
+			if (dataLength <= 0) return;
+			if (data == null || dataLength > data.Length)
+				throw new ArgumentOutOfRangeException(nameof(dataLength));
+			// The protocol parser consumes and copies the payload synchronously. Public
+			// callbacks retain their existing ownership contract and receive an exact copy.
+			OnBorrowedDataReceived?.Invoke(data, dataLength);
+			var callback = OnDataReceived;
+			if (callback != null)
+			{
+				var owned = new byte[dataLength];
+				Buffer.BlockCopy(data, 0, owned, 0, dataLength);
+				callback(owned, dataLength);
+			}
 		}
 
 		public void OnSslError(int sslError, string sslState)
@@ -345,6 +370,7 @@ namespace S7CommPlusDriver
 						m_sslconn.ReadCompleted(Buffer, Size);
 					} else {
 						// Wenn etwas gelesen werden konnte, Client benachrichtigen
+						OnBorrowedDataReceived?.Invoke(Buffer, Size);
 						OnDataReceived?.Invoke(Buffer, Size);
 					}
 				}
@@ -357,6 +383,7 @@ namespace S7CommPlusDriver
 		}
 
 		public _OnDataReceived OnDataReceived;
+		internal _OnDataReceived OnBorrowedDataReceived;
 		public delegate void _OnDataReceived(byte[] PDU, int len);
 		public Action<int> OnReceiveError;
 
@@ -473,8 +500,13 @@ namespace S7CommPlusDriver
 
 		private int SendIsoPacket(byte[] Buffer)
 		{
+			return SendIsoPacket(Buffer, 0, Buffer?.Length ?? 0);
+		}
+
+		private int SendIsoPacket(byte[] Buffer, int sourceOffset, int count)
+		{
 			_LastError = 0;
-			if (Buffer == null)
+			if (Buffer == null || sourceOffset < 0 || count < 0 || sourceOffset > Buffer.Length - count)
 				return _LastError = S7Consts.errIsoInvalidPDU;
 
 			int negotiatedTpduSize = _PDULength > 0
@@ -487,18 +519,26 @@ namespace S7CommPlusDriver
 			int offset = 0;
 			do
 			{
-				int chunkSize = Math.Min(maxPayloadSize, Buffer.Length - offset);
-				byte[] packet = new byte[TPKT_ISO.Length + chunkSize];
-				Array.Copy(TPKT_ISO, 0, packet, 0, TPKT_ISO.Length);
-				SetWordAt(packet, 2, (ushort)packet.Length);
-				// The COTP EOT flag is set only on the final transport fragment.
-				packet[6] = offset + chunkSize >= Buffer.Length ? (byte)0x80 : (byte)0x00;
-				if (chunkSize > 0)
-					Array.Copy(Buffer, offset, packet, TPKT_ISO.Length, chunkSize);
-				SendPacket(packet);
+				int chunkSize = Math.Min(maxPayloadSize, count - offset);
+				int packetLength = TPKT_ISO.Length + chunkSize;
+				var packet = ArrayPool<byte>.Shared.Rent(packetLength);
+				try
+				{
+					Array.Copy(TPKT_ISO, 0, packet, 0, TPKT_ISO.Length);
+					SetWordAt(packet, 2, (ushort)packetLength);
+					// Pool capacity is not wire length. EOT belongs only to the last fragment.
+					packet[6] = offset + chunkSize >= count ? (byte)0x80 : (byte)0x00;
+					if (chunkSize > 0)
+						Array.Copy(Buffer, sourceOffset + offset, packet, TPKT_ISO.Length, chunkSize);
+					SendPacket(packet, packetLength);
+				}
+				finally
+				{
+					ArrayPool<byte>.Shared.Return(packet, clearArray: true);
+				}
 				offset += chunkSize;
 			}
-			while (_LastError == 0 && offset < Buffer.Length);
+			while (_LastError == 0 && offset < count);
 
 			return _LastError;
 		}

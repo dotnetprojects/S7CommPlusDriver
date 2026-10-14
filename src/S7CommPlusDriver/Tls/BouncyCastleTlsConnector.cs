@@ -111,10 +111,17 @@ namespace S7CommPlusDriver.Tls
                         break;
                     }
 
-                    var data = new byte[bytesRead];
-                    Buffer.BlockCopy(buffer, 0, data, 0, bytesRead);
-                    _decryptedData.Add(data);
-                    _dataSink.OnDataAvailable();
+                    if (_dataSink is IS7TlsPlaintextCallback plaintextSink)
+                    {
+                        plaintextSink.OnPlaintextData(buffer, bytesRead);
+                    }
+                    else
+                    {
+                        var data = new byte[bytesRead];
+                        Buffer.BlockCopy(buffer, 0, data, 0, bytesRead);
+                        _decryptedData.Add(data);
+                        _dataSink.OnDataAvailable();
+                    }
                 }
             }
             catch (Exception ex)
@@ -285,6 +292,11 @@ namespace S7CommPlusDriver.Tls
 
             public override void Write(byte[] buffer, int offset, int count)
             {
+                if (_dataSink is IS7TlsRecordCallback recordSink)
+                {
+                    recordSink.WriteEncryptedData(buffer, offset, count);
+                    return;
+                }
                 var data = new byte[count];
                 Buffer.BlockCopy(buffer, offset, data, 0, count);
                 _dataSink.WriteData(data, data.Length);

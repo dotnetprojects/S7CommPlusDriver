@@ -104,8 +104,10 @@ namespace S7CommPlusDriver.Tests
             Assert.False(transport.Connected);
         }
 
-        [Fact]
-        public void SendFragmentsPayloadAtNegotiatedCotpBoundary()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void SendFragmentsPayloadAtNegotiatedCotpBoundary(bool tlsRecord)
         {
             var transport = new FakeS7Transport { EmptyReceiveDelayMilliseconds = 500 };
             transport.EnqueueReceive(new byte[] { 0x03, 0x00, 0x00, 0x23 });
@@ -120,7 +122,10 @@ namespace S7CommPlusDriver.Tests
             transport.Sent.Clear();
             var payload = Enumerable.Range(0, 2000).Select(value => (byte)value).ToArray();
 
-            client.Send(payload);
+            if (tlsRecord)
+                client.WriteData(payload.Concat(new byte[13]).ToArray(), payload.Length);
+            else
+                client.Send(payload);
             client.Disconnect(50);
 
             Assert.Equal(2, transport.Sent.Count);
@@ -129,6 +134,20 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(0x00, transport.Sent[0][6]);
             Assert.Equal(0x80, transport.Sent[1][6]);
             Assert.Equal(payload, transport.Sent.SelectMany(packet => packet.Skip(7)).ToArray());
+        }
+
+        [Fact]
+        public void BorrowedEncryptedSliceUsesItsOffsetCountAndExactWireLength()
+        {
+            var transport = new FakeS7Transport { Connected = true };
+            using var client = new S7Client(() => transport);
+            var payload = Enumerable.Range(0, 3000).Select(value => (byte)value).ToArray();
+            ((IS7TlsRecordCallback)client).WriteEncryptedData(payload, 17, 2000);
+            Assert.Equal(2000, transport.Sent.Sum(packet => packet.Length - 7));
+            Assert.All(transport.Sent, packet => Assert.Equal(packet.Length, (packet[2] << 8) | packet[3]));
+            Assert.All(transport.Sent.Take(transport.Sent.Count - 1), packet => Assert.Equal(0, packet[6]));
+            Assert.Equal(0x80, transport.Sent.Last()[6]);
+            Assert.Equal(payload.Skip(17).Take(2000), transport.Sent.SelectMany(packet => packet.Skip(7)));
         }
     }
 }

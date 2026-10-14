@@ -32,11 +32,13 @@ namespace S7CommPlusDriver
         public uint IntegrityId { get; set; }
         public bool WithIntegrityId { get; set; }
 
-        public GetMultiVariablesResponse(byte protocolVersion)
+        public GetMultiVariablesResponse(byte protocolVersion, int expectedValueCount = 0)
         {
             ProtocolVersion = protocolVersion;
             ErrorValues = new Dictionary<UInt32, UInt64>();
-            Values = new Dictionary<UInt32, PValue>();
+            // The originating request supplies the capacity; avoid repeated dictionary
+            // growth for every batch without trusting a count from the wire.
+            Values = new Dictionary<UInt32, PValue>(expectedValueCount);
             WithIntegrityId = true;
         }
 
@@ -111,7 +113,7 @@ namespace S7CommPlusDriver
             return s;
         }
 
-        public static GetMultiVariablesResponse DeserializeFromPdu(Stream pdu)
+        public static GetMultiVariablesResponse DeserializeFromPdu(Stream pdu, int expectedValueCount = 0)
         {
             byte protocolVersion;
             byte opcode;
@@ -131,7 +133,7 @@ namespace S7CommPlusDriver
             {
                 return null;
             }
-            GetMultiVariablesResponse resp = new GetMultiVariablesResponse(protocolVersion);
+            GetMultiVariablesResponse resp = new GetMultiVariablesResponse(protocolVersion, expectedValueCount);
             resp.Deserialize(pdu);
 
             return resp;

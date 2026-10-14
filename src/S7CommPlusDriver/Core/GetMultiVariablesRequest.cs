@@ -25,6 +25,7 @@ namespace S7CommPlusDriver
         byte TransportFlags = S7CommPlusProtocolConstants.RequestWithResponseTransportFlags;
         public UInt32 LinkId = 0;       // for reading variables, this should be 0
         public List<ItemAddress> AddressList = new List<ItemAddress>();
+        private static readonly int ObjectQualifierLength = S7p.EncodeObjectQualifier(Stream.Null);
 
         public uint SessionId { get; set; }
         public byte ProtocolVersion { get; set; }
@@ -42,6 +43,22 @@ namespace S7CommPlusDriver
         public byte GetProtocolVersion()
         {
             return ProtocolVersion;
+        }
+
+        // Calculate from current fields; ItemAddress remains mutable, so do not cache
+        // address bytes or lengths across reads. Batching reserves the widest integrity ID.
+        internal long GetSerializedLength(uint? integrityId = null)
+        {
+            uint fieldCount = 0;
+            long addressLength = 0;
+            foreach (var address in AddressList)
+            {
+                fieldCount += address.GetNumberOfFields();
+                addressLength += address.GetSerializedLength();
+            }
+            return 18L + S7p.GetUInt32VlqLength((uint)AddressList.Count)
+                + S7p.GetUInt32VlqLength(fieldCount) + addressLength + ObjectQualifierLength
+                + (WithIntegrityId ? S7p.GetUInt32VlqLength(integrityId ?? IntegrityId) : 0) + 4;
         }
 
         public int Serialize(Stream buffer)

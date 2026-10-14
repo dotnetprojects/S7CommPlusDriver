@@ -8,7 +8,7 @@ using System.Threading;
 
 namespace S7CommPlusDriver.Tests
 {
-    internal sealed class FakeS7CommPlusSession : IS7CommPlusSession
+    internal class FakeS7CommPlusSession : IS7CommPlusSession
     {
         public bool IsConnected { get; private set; }
         public int ConnectCount { get; private set; }

@@ -17,7 +17,6 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
-using System.Threading.Channels;
 using System.IO;
 using System.Linq;
 using System.Diagnostics;
@@ -29,13 +28,13 @@ using Microsoft.Extensions.Logging;
 
 namespace S7CommPlusDriver
 {
-    internal partial class S7CommPlusProtocolSession
+    internal partial class S7CommPlusProtocolSession : IS7CommPlusBulkReadSession
     {
         #region Private Members
         private S7Client m_client;
         private MemoryStream m_ReceivedPDU;
         private MemoryStream m_ReceivedTempPDU;
-        private Channel<ReceivedS7PlusPdu> m_ReceivedPDUs = CreateReceiveChannel();
+        private S7CommPlusReceiveQueue<ReceivedS7PlusPdu> m_ReceivedPDUs = CreateReceiveQueue();
         private readonly object m_RequestLock = new object();
         private readonly object m_ReceiveDispatchLock = new object();
         private readonly object m_NotificationQueueLock = new object();
@@ -53,6 +52,7 @@ namespace S7CommPlusDriver
         }
 
         private int m_ReadTimeout = 5000;
+        private int m_ReadPipelineDepth = 1;
         private UInt16 m_SequenceNumber = 0;
         private UInt32 m_IntegrityId = 0;
         private UInt32 m_IntegrityId_Set = 0;
@@ -88,14 +88,9 @@ namespace S7CommPlusDriver
             public int ErrorCode { get; }
         }
 
-        private static Channel<ReceivedS7PlusPdu> CreateReceiveChannel()
+        private static S7CommPlusReceiveQueue<ReceivedS7PlusPdu> CreateReceiveQueue()
         {
-            return Channel.CreateUnbounded<ReceivedS7PlusPdu>(new UnboundedChannelOptions
-            {
-                SingleReader = true,
-                SingleWriter = false,
-                AllowSynchronousContinuations = false
-            });
+            return new S7CommPlusReceiveQueue<ReceivedS7PlusPdu>();
         }
 
         private UInt16 GetNextSequenceNumber()
@@ -164,25 +159,11 @@ namespace S7CommPlusDriver
         private int ReceiveNextS7plusPdu(int timeout, out MemoryStream pdu)
         {
             pdu = null;
-            try
-            {
-                using var cts = new CancellationTokenSource(Math.Max(1, timeout));
-                var received = m_ReceivedPDUs.Reader.ReadAsync(cts.Token).AsTask().GetAwaiter().GetResult();
-                if (received.ErrorCode != 0)
-                {
-                    return received.ErrorCode;
-                }
-                pdu = received.Pdu;
-                return 0;
-            }
-            catch (OperationCanceledException)
-            {
-                return S7Consts.errCliJobTimeout;
-            }
-            catch (ChannelClosedException)
-            {
-                return S7Consts.errTCPNotConnected;
-            }
+            var result = m_ReceivedPDUs.Read(timeout, out var received);
+            if (result != 0) return result;
+            if (received.ErrorCode != 0) return received.ErrorCode;
+            pdu = received.Pdu;
+            return 0;
         }
 
         private int SendS7plusFunctionObject(IS7pRequest funcObj)
@@ -210,9 +191,12 @@ namespace S7CommPlusDriver
             }
             m_LastSentRequestForWait = funcObj;
 
-            MemoryStream stream = new MemoryStream();
+            using var stream = funcObj is GetMultiVariablesRequest read
+                ? new MemoryStream(checked((int)read.GetSerializedLength()))
+                : new MemoryStream();
             funcObj.Serialize(stream);
-            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, funcObj.ProtocolVersion);
+            return SendS7plusPDUdata(stream.GetBuffer(), (int)stream.Length, funcObj.ProtocolVersion,
+                allowTransportFragmentation: funcObj is GetMultiVariablesRequest);
         }
 
         private int SendS7plusFunctionObjectSerialized(IS7pRequest funcObj)
@@ -236,6 +220,7 @@ namespace S7CommPlusDriver
         private int SendS7plusFunctionObjectAndWait(IS7pRequest funcObj, int timeout)
         {
             lock (m_RequestLock)
+            lock (m_ReceiveDispatchLock)
             {
                 try
                 {
@@ -261,6 +246,7 @@ namespace S7CommPlusDriver
         private int SendRawS7plusPduAndWait(byte[] sendPduData, int bytesToSend, byte protoVersion, int timeout)
         {
             lock (m_RequestLock)
+            lock (m_ReceiveDispatchLock)
             {
                 var result = SendS7plusPDUdata(sendPduData, bytesToSend, protoVersion);
                 if (result != 0)
@@ -334,7 +320,7 @@ namespace S7CommPlusDriver
             return S7Consts.errCliJobTimeout;
         }
 
-        private int DispatchOneReceivedPdu(int timeout, IS7pRequest expectedResponse, uint notificationSubscriptionObjectId, out MemoryStream responsePdu, out Notification matchingNotification)
+        private int DispatchOneReceivedPdu(int timeout, IS7pRequest expectedResponse, uint notificationSubscriptionObjectId, out MemoryStream responsePdu, out Notification matchingNotification, ISet<ushort> acceptedResponseSequences = null)
         {
             responsePdu = null;
             matchingNotification = null;
@@ -358,7 +344,8 @@ namespace S7CommPlusDriver
                     {
                         if (expectedResponse != null
                             && function == expectedResponse.FunctionCode
-                            && sequenceNumber == expectedResponse.SequenceNumber)
+                            && (sequenceNumber == expectedResponse.SequenceNumber
+                                || acceptedResponseSequences?.Contains(sequenceNumber) == true))
                         {
                             pdu.Position = 0;
                             responsePdu = pdu;
@@ -530,7 +517,7 @@ namespace S7CommPlusDriver
             }
         }
 
-        private int SendS7plusPDUdata(byte[] sendPduData, int bytesToSend, byte protoVersion)
+        private int SendS7plusPDUdata(byte[] sendPduData, int bytesToSend, byte protoVersion, bool allowTransportFragmentation = false)
         {
             m_LastError = 0;
 
@@ -539,7 +526,9 @@ namespace S7CommPlusDriver
             int sendLen;
             bool useLegacyDigest = ShouldUseLegacyDigest(protoVersion);
             int legacyDigestLength = useLegacyDigest ? LegacyDigestFieldLength : 0;
-            int MaxSize = GetMaxS7CommPlusPayloadSize(legacyDigestLength);
+            int MaxSize = allowTransportFragmentation
+                ? Math.Min(bytesToSend, UInt16.MaxValue - legacyDigestLength)
+                : GetMaxS7CommPlusPayloadSize(legacyDigestLength);
             if (MaxSize <= 0)
             {
                 return S7Consts.errIsoInvalidPDU;
@@ -782,6 +771,8 @@ namespace S7CommPlusDriver
 
         private static long GetSerializedRequestLengthForBatching(IS7pRequest request)
         {
+            if (request is GetMultiVariablesRequest read)
+                return read.GetSerializedLength(UInt32.MaxValue);
             uint sessionId = request.SessionId;
             ushort sequenceNumber = request.SequenceNumber;
             uint integrityId = request.IntegrityId;
@@ -834,9 +825,17 @@ namespace S7CommPlusDriver
             // First step we push the complete PDU to a queue.
             // Receive errors are published through the receive queue so request waiters fail immediately.
 
+            // Borrowed TLS buffers may have spare capacity. Validate the active length
+            // before parsing so truncated frames cannot expose stale buffer contents.
+            if (PDU == null || len < 4 || len > PDU.Length)
+            {
+                m_ReceivedNeedMoreDataForCompletePDU = false;
+                PublishReceiveError(S7Consts.errIsoInvalidPDU);
+                return;
+            }
             if (!m_ReceivedNeedMoreDataForCompletePDU)
             {
-                m_ReceivedTempPDU = new MemoryStream();
+                m_ReceivedTempPDU = new MemoryStream(len);
             }
             // S7comm-plus
             byte protoVersion;
@@ -867,6 +866,12 @@ namespace S7CommPlusDriver
             // Read the length of the data-part from header
             s7HeaderDataLen = GetWordAt(PDU, pos);
             pos += 2;
+            if (s7HeaderDataLen > len - pos)
+            {
+                m_ReceivedNeedMoreDataForCompletePDU = false;
+                PublishReceiveError(S7Consts.errIsoInvalidPDU);
+                return;
+            }
             if (s7HeaderDataLen > 0)
             {
                 // Special handling for SystemEvent 0xfe PDUs:
@@ -966,7 +971,7 @@ namespace S7CommPlusDriver
             // If a complete (usable) PDU is received, add to the queue (threadsafe) for readout
             if (m_NewS7CommPlusReceived)
             {
-                m_ReceivedPDUs.Writer.TryWrite(new ReceivedS7PlusPdu(m_ReceivedTempPDU));
+                m_ReceivedPDUs.TryWrite(new ReceivedS7PlusPdu(m_ReceivedTempPDU));
                 m_NewS7CommPlusReceived = false;
             }
         }
@@ -974,7 +979,7 @@ namespace S7CommPlusDriver
         private void PublishReceiveError(int errorCode)
         {
             m_LastError = errorCode;
-            m_ReceivedPDUs.Writer.TryWrite(new ReceivedS7PlusPdu(null, errorCode));
+            m_ReceivedPDUs.TryWrite(new ReceivedS7PlusPdu(null, errorCode));
         }
 
         private byte[] BuildLegacyAccumulatedDigestData(byte[] pdu, int bodyPos, int bodyLen, int previousBodyLen)
@@ -991,6 +996,11 @@ namespace S7CommPlusDriver
             OnDataReceived(pdu, pdu.Length);
         }
 
+        internal void DebugOnBorrowedDataReceivedForTests(byte[] pdu, int activeLength)
+        {
+            OnDataReceived(pdu, activeLength);
+        }
+
         internal int DebugReceiveNextS7plusPduForTests(int timeout, out MemoryStream pdu)
         {
             return ReceiveNextS7plusPdu(timeout, out pdu);
@@ -998,8 +1008,8 @@ namespace S7CommPlusDriver
 
         internal void DebugResetReceiveDispatcherForTests()
         {
-            m_ReceivedPDUs.Writer.TryComplete();
-            m_ReceivedPDUs = CreateReceiveChannel();
+            m_ReceivedPDUs.Complete();
+            m_ReceivedPDUs = CreateReceiveQueue();
             m_ReceivedTempPDU = null;
             m_ReceivedPDU = null;
             m_ReceivedNeedMoreDataForCompletePDU = false;
@@ -1029,6 +1039,13 @@ namespace S7CommPlusDriver
             int maxPayloadSize)
         {
             var request = CreateWriteRequestBatch(addresses, values, 0, maxItems, maxPayloadSize, out int itemCount);
+            return (itemCount, GetSerializedRequestLengthForBatching(request));
+        }
+
+        internal (int ItemCount, long SerializedLength) DebugCreateReadRequestBatchForTests(
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems)
+        {
+            var request = CreateReadRequestBatch(addresses, startIndex, maxItems, out var itemCount);
             return (itemCount, GetSerializedRequestLengthForBatching(request));
         }
 
@@ -1106,6 +1123,7 @@ namespace S7CommPlusDriver
             {
                 return S7Consts.errCliInvalidParams;
             }
+            m_ReadPipelineDepth = options.ReadPipelineDepth;
 
             switch (options.SecurityMode)
             {
@@ -1188,10 +1206,10 @@ namespace S7CommPlusDriver
             m_IntegrityId_Set = 0;
             dbInfoList = null;
             typeInfoList.Clear();
-            m_ReceivedPDUs.Writer.TryComplete();
-            m_ReceivedPDUs = CreateReceiveChannel();
+            m_ReceivedPDUs.Complete();
+            m_ReceivedPDUs = CreateReceiveQueue();
             m_client = new S7Client();
-            m_client.OnDataReceived = this.OnDataReceived;
+            m_client.OnBorrowedDataReceived = this.OnDataReceived;
             m_client.OnReceiveError = this.PublishReceiveError;
             m_client.PLCPort = port;
             m_client.ConnTimeout = timeoutMs;
@@ -1374,6 +1392,7 @@ namespace S7CommPlusDriver
 
             // A receive that is still unwinding must not publish into a new session.
             client.OnDataReceived = null;
+            client.OnBorrowedDataReceived = null;
             client.OnReceiveError = null;
             return client.Dispose(timeoutMs);
         }
@@ -1420,8 +1439,8 @@ namespace S7CommPlusDriver
                 m_ReadTimeout = oldTimeout;
                 m_ReceivedPDU = null;
                 m_ReceivedTempPDU = null;
-                m_ReceivedPDUs.Writer.TryComplete();
-                m_ReceivedPDUs = CreateReceiveChannel();
+                m_ReceivedPDUs.Complete();
+                m_ReceivedPDUs = CreateReceiveQueue();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
                 m_LastSentRequestForWait = null;
@@ -1462,8 +1481,8 @@ namespace S7CommPlusDriver
                 m_ReadTimeout = oldTimeout;
                 m_ReceivedPDU = null;
                 m_ReceivedTempPDU = null;
-                m_ReceivedPDUs.Writer.TryComplete();
-                m_ReceivedPDUs = CreateReceiveChannel();
+                m_ReceivedPDUs.Complete();
+                m_ReceivedPDUs = CreateReceiveQueue();
                 m_ReceivedNeedMoreDataForCompletePDU = false;
                 m_NewS7CommPlusReceived = false;
                 m_LastSentRequestForWait = null;
@@ -1531,10 +1550,37 @@ namespace S7CommPlusDriver
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<UInt64> errors)
         {
+            if (m_ReadPipelineDepth > 1 && addresslist.Count > Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax))
+            {
+                lock (m_RequestLock)
+                // Reserve response dispatch before sending. Subscription pollers
+                // otherwise can consume a read response while expecting notifications.
+                lock (m_ReceiveDispatchLock)
+                {
+                    try
+                    {
+                        var result = S7CommPlusReadPipeline.Execute(addresslist,
+                            Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax), m_ReadPipelineDepth,
+                            request => SendS7plusFunctionObject(request), ReceivePipelinedReadResponse,
+                            checkResponseWithIntegrity, out values, out errors);
+                        if (result != 0) CloseTransport(2000);
+                        return result;
+                    }
+                    catch
+                    {
+                        CloseTransport(2000);
+                        throw;
+                    }
+                    finally
+                    {
+                        m_LastSentRequestForWait = null;
+                    }
+                }
+            }
             // The requester must pass the internal type with the request, otherwise not all return values can be converted automatically.
             // For example, strings are transmitted as UInt-Array.
-            values = new List<object>();
-            errors = new List<UInt64>();
+            values = new List<object>(addresslist.Count);
+            errors = new List<UInt64>(addresslist.Count);
             // Initialize error fields to error value
             for (int i = 0; i < addresslist.Count; i++)
             {
@@ -1546,24 +1592,17 @@ namespace S7CommPlusDriver
                 return 0;
             }
 
-            // Split requests by both the PLC's item limit and the negotiated TPDU payload.
+            // A logical read request may span transport frames. Restricting it to one
+            // TPDU creates extra PLC round trips even though the send path fragments it.
+            // Keep the PLC item limit and the protocol's 16-bit data-length limit.
             int chunk_startIndex = 0;
             int count_perChunk = 0;
             int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax);
-            int maxPayloadSize = GetSingleFramePayloadLimit(ProtocolVersion.V2);
             do
             {
                 int res;
-                var getMultiVarReq = new GetMultiVariablesRequest(ProtocolVersion.V2);
-
-                getMultiVarReq.AddressList.Clear();
-                var maxCandidates = Math.Min(maxTagsPerRequest, addresslist.Count - chunk_startIndex);
-                count_perChunk = AppendItemsWithinPayloadLimit(
-                    maxCandidates,
-                    maxPayloadSize,
-                    getMultiVarReq,
-                    offset => getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + offset]),
-                    () => getMultiVarReq.AddressList.RemoveAt(getMultiVarReq.AddressList.Count - 1));
+                var getMultiVarReq = CreateReadRequestBatch(addresslist, chunk_startIndex,
+                    maxTagsPerRequest, out count_perChunk);
 
                 res = SendS7plusFunctionObjectAndWait(getMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1571,7 +1610,10 @@ namespace S7CommPlusDriver
                     return res;
                 }
 
-                var getMultiVarRes = GetMultiVariablesResponse.DeserializeFromPdu(m_ReceivedPDU);
+                var getMultiVarRes = GetMultiVariablesReadResponse.ReadHeader(m_ReceivedPDU);
+                if (getMultiVarRes == null) return S7Consts.errIsoInvalidPDU4;
+                res = getMultiVarRes.ReadItems(m_ReceivedPDU, values, errors, chunk_startIndex, count_perChunk);
+                if (res != 0) return res;
                 res = checkResponseWithIntegrity(getMultiVarReq, getMultiVarRes);
                 if (res != 0)
                 {
@@ -1583,24 +1625,51 @@ namespace S7CommPlusDriver
                     Trace.WriteLine("S7CommPlusProtocolSession - ReadValues: Executed with Error! ReturnValue=" + getMultiVarRes.ReturnValue);
                 }
 
-                // If a variable could not be read, there is no value, but there is an ErrorValue.
-                // The production client maps this to per-item batch status.
-                foreach (var v in getMultiVarRes.Values)
-                {
-                    values[chunk_startIndex + (int)v.Key - 1] = v.Value;
-                    // Initialize error to 0, will be overwritten below if there was an error on an item.
-                    errors[chunk_startIndex + (int)v.Key - 1] = 0;
-                }
-
-                foreach (var ev in getMultiVarRes.ErrorValues)
-                {
-                    errors[chunk_startIndex + (int)ev.Key - 1] = ev.Value;
-                }
                 chunk_startIndex += count_perChunk;
 
             } while (chunk_startIndex < addresslist.Count);
 
             return m_LastError;
+        }
+
+        internal static GetMultiVariablesRequest CreateReadRequestBatch(
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount)
+        {
+            var request = new GetMultiVariablesRequest(ProtocolVersion.V2);
+            var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
+            // Reserve the legacy digest and growth of the VLQ integrity id assigned on send.
+            var maxPayloadSize = UInt16.MaxValue - LegacyDigestFieldLength - sizeof(uint);
+            for (var offset = 0; offset < maxCandidates; offset++)
+            {
+                request.AddressList.Add(addresses[startIndex + offset]);
+            }
+            // Ordinary reads fit in one logical PDU: calculate the complete batch length
+            // without encoding a throwaway payload.
+            // Only unusually long addresses need the bounded payload search.
+            if (maxCandidates <= 1 || !ExceedsSingleFramePayload(request, maxPayloadSize))
+            {
+                itemCount = maxCandidates;
+                return request;
+            }
+            request.AddressList.Clear();
+            itemCount = AppendItemsWithinPayloadLimit(maxCandidates, maxPayloadSize, request,
+                offset => request.AddressList.Add(addresses[startIndex + offset]),
+                () => request.AddressList.RemoveAt(request.AddressList.Count - 1));
+            return request;
+        }
+
+        private (int Error, MemoryStream Pdu) ReceivePipelinedReadResponse(
+            GetMultiVariablesRequest expected, ISet<ushort> acceptedSequences)
+        {
+            var deadline = RuntimeCompatibility.TickCount64 + Math.Max(1, m_ReadTimeout);
+            while (RuntimeCompatibility.TickCount64 < deadline)
+            {
+                var remaining = (int)Math.Min(50, Math.Max(1, deadline - RuntimeCompatibility.TickCount64));
+                var result = DispatchOneReceivedPdu(remaining, expected, 0, out var response, out _, acceptedSequences);
+                if (result == S7Consts.errCliJobTimeout || result == S7Consts.errTCPReceiveTimeout) continue;
+                if (result != 0 || response != null) return (result, response);
+            }
+            return (S7Consts.errCliJobTimeout, null);
         }
 
         public int WriteValues(List<ItemAddress> addresslist, List<PValue> values, out List<UInt64> errors)

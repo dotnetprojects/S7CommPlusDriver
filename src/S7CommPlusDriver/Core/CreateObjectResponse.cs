@@ -57,7 +57,11 @@ namespace S7CommPlusDriver
                 ret += S7p.DecodeUInt32Vlq(buffer, out object_id);
                 ObjectIds.Add(object_id);
             }
-            ret += S7p.DecodeObject(buffer, ref ResponseObject);
+            // Bit 1 declares the optional response object. Without it, the next
+            // bytes are an integrity counter, whose VLQ prefix can resemble an
+            // object element (for example 0xAB) after many read requests.
+            if ((TransportFlags & 0x02) != 0)
+                ret += S7p.DecodeObject(buffer, ref ResponseObject);
             return ret;
         }
 
@@ -75,7 +79,7 @@ namespace S7CommPlusDriver
             {
                 s += "<ObjectId>" + id.ToString() + "</ObjectId>" + Environment.NewLine;
             }
-            s += "<ResponseObject>" + ResponseObject.ToString() + "</ResponseObject>" + Environment.NewLine;
+            s += "<ResponseObject>" + ResponseObject?.ToString() + "</ResponseObject>" + Environment.NewLine;
             s += "</ResponseSet>" + Environment.NewLine;
             s += "</CreateObjectResponse>" + Environment.NewLine;
             return s;
