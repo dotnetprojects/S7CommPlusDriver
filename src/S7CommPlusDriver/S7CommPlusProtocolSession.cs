@@ -212,7 +212,8 @@ namespace S7CommPlusDriver
 
             MemoryStream stream = new MemoryStream();
             funcObj.Serialize(stream);
-            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, funcObj.ProtocolVersion);
+            return SendS7plusPDUdata(stream.ToArray(), (int)stream.Length, funcObj.ProtocolVersion,
+                allowTransportFragmentation: funcObj is GetMultiVariablesRequest);
         }
 
         private int SendS7plusFunctionObjectSerialized(IS7pRequest funcObj)
@@ -530,7 +531,7 @@ namespace S7CommPlusDriver
             }
         }
 
-        private int SendS7plusPDUdata(byte[] sendPduData, int bytesToSend, byte protoVersion)
+        private int SendS7plusPDUdata(byte[] sendPduData, int bytesToSend, byte protoVersion, bool allowTransportFragmentation = false)
         {
             m_LastError = 0;
 
@@ -539,7 +540,9 @@ namespace S7CommPlusDriver
             int sendLen;
             bool useLegacyDigest = ShouldUseLegacyDigest(protoVersion);
             int legacyDigestLength = useLegacyDigest ? LegacyDigestFieldLength : 0;
-            int MaxSize = GetMaxS7CommPlusPayloadSize(legacyDigestLength);
+            int MaxSize = allowTransportFragmentation
+                ? Math.Min(bytesToSend, UInt16.MaxValue - legacyDigestLength)
+                : GetMaxS7CommPlusPayloadSize(legacyDigestLength);
             if (MaxSize <= 0)
             {
                 return S7Consts.errIsoInvalidPDU;
@@ -1029,6 +1032,13 @@ namespace S7CommPlusDriver
             int maxPayloadSize)
         {
             var request = CreateWriteRequestBatch(addresses, values, 0, maxItems, maxPayloadSize, out int itemCount);
+            return (itemCount, GetSerializedRequestLengthForBatching(request));
+        }
+
+        internal (int ItemCount, long SerializedLength) DebugCreateReadRequestBatchForTests(
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems)
+        {
+            var request = CreateReadRequestBatch(addresses, startIndex, maxItems, out var itemCount);
             return (itemCount, GetSerializedRequestLengthForBatching(request));
         }
 
@@ -1546,24 +1556,17 @@ namespace S7CommPlusDriver
                 return 0;
             }
 
-            // Split requests by both the PLC's item limit and the negotiated TPDU payload.
+            // A logical read request may span transport frames. Restricting it to one
+            // TPDU creates extra PLC round trips even though the send path fragments it.
+            // Keep the PLC item limit and the protocol's 16-bit data-length limit.
             int chunk_startIndex = 0;
             int count_perChunk = 0;
             int maxTagsPerRequest = Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax);
-            int maxPayloadSize = GetSingleFramePayloadLimit(ProtocolVersion.V2);
             do
             {
                 int res;
-                var getMultiVarReq = new GetMultiVariablesRequest(ProtocolVersion.V2);
-
-                getMultiVarReq.AddressList.Clear();
-                var maxCandidates = Math.Min(maxTagsPerRequest, addresslist.Count - chunk_startIndex);
-                count_perChunk = AppendItemsWithinPayloadLimit(
-                    maxCandidates,
-                    maxPayloadSize,
-                    getMultiVarReq,
-                    offset => getMultiVarReq.AddressList.Add(addresslist[chunk_startIndex + offset]),
-                    () => getMultiVarReq.AddressList.RemoveAt(getMultiVarReq.AddressList.Count - 1));
+                var getMultiVarReq = CreateReadRequestBatch(addresslist, chunk_startIndex,
+                    maxTagsPerRequest, out count_perChunk);
 
                 res = SendS7plusFunctionObjectAndWait(getMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1601,6 +1604,31 @@ namespace S7CommPlusDriver
             } while (chunk_startIndex < addresslist.Count);
 
             return m_LastError;
+        }
+
+        private static GetMultiVariablesRequest CreateReadRequestBatch(
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount)
+        {
+            var request = new GetMultiVariablesRequest(ProtocolVersion.V2);
+            var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
+            // Reserve the legacy digest and growth of the VLQ integrity id assigned on send.
+            var maxPayloadSize = UInt16.MaxValue - LegacyDigestFieldLength - sizeof(uint);
+            for (var offset = 0; offset < maxCandidates; offset++)
+            {
+                request.AddressList.Add(addresses[startIndex + offset]);
+            }
+            // Ordinary reads fit in one logical PDU: measure the complete batch once.
+            // Only unusually long addresses need the bounded payload search.
+            if (maxCandidates <= 1 || !ExceedsSingleFramePayload(request, maxPayloadSize))
+            {
+                itemCount = maxCandidates;
+                return request;
+            }
+            request.AddressList.Clear();
+            itemCount = AppendItemsWithinPayloadLimit(maxCandidates, maxPayloadSize, request,
+                offset => request.AddressList.Add(addresses[startIndex + offset]),
+                () => request.AddressList.RemoveAt(request.AddressList.Count - 1));
+            return request;
         }
 
         public int WriteValues(List<ItemAddress> addresslist, List<PValue> values, out List<UInt64> errors)

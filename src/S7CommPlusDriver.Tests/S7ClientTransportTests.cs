@@ -104,8 +104,10 @@ namespace S7CommPlusDriver.Tests
             Assert.False(transport.Connected);
         }
 
-        [Fact]
-        public void SendFragmentsPayloadAtNegotiatedCotpBoundary()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void SendFragmentsPayloadAtNegotiatedCotpBoundary(bool tlsRecord)
         {
             var transport = new FakeS7Transport { EmptyReceiveDelayMilliseconds = 500 };
             transport.EnqueueReceive(new byte[] { 0x03, 0x00, 0x00, 0x23 });
@@ -120,7 +122,10 @@ namespace S7CommPlusDriver.Tests
             transport.Sent.Clear();
             var payload = Enumerable.Range(0, 2000).Select(value => (byte)value).ToArray();
 
-            client.Send(payload);
+            if (tlsRecord)
+                client.WriteData(payload.Concat(new byte[13]).ToArray(), payload.Length);
+            else
+                client.Send(payload);
             client.Disconnect(50);
 
             Assert.Equal(2, transport.Sent.Count);

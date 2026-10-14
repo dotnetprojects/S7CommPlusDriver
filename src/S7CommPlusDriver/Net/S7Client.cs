@@ -91,20 +91,20 @@ namespace S7CommPlusDriver
 		{
 			// SSL fordert Daten zum Absenden an
 			// System.Diagnostics.Trace.WriteLine("S7Client - OpenSSL WriteData: dataLength=" + dataLength);
-			int offset = 0;
-			int maxPayloadSize = Math.Min(MaxPduSizeToRequest, PDU.Length - IsoHSize);
-			if (maxPayloadSize <= 0)
+			if (pData == null || dataLength < 0 || dataLength > pData.Length)
 			{
 				_LastError = S7Consts.errIsoInvalidPDU;
 				return;
 			}
-			while (offset < dataLength && _LastError == 0)
+			// Fragment the TLS record once at the negotiated COTP boundary. Splitting
+			// it into fixed 960-byte messages first adds packets and premature EOT flags.
+			if (dataLength == pData.Length)
+				SendIsoPacket(pData);
+			else
 			{
-				int chunkSize = Math.Min(maxPayloadSize, dataLength - offset);
-				byte[] sendData = new byte[chunkSize];
-				Array.Copy(pData, offset, sendData, 0, chunkSize);
-				SendIsoPacket(sendData);
-				offset += chunkSize;
+				var data = new byte[dataLength];
+				Array.Copy(pData, data, dataLength);
+				SendIsoPacket(data);
 			}
 		}
 
