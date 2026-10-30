@@ -971,6 +971,7 @@ namespace S7CommPlusDriver
             // If a complete (usable) PDU is received, add to the queue (threadsafe) for readout
             if (m_NewS7CommPlusReceived)
             {
+                ApplyLegacySessionKeyRenewal(m_ReceivedTempPDU);
                 m_ReceivedPDUs.TryWrite(new ReceivedS7PlusPdu(m_ReceivedTempPDU));
                 m_NewS7CommPlusReceived = false;
             }
@@ -1386,6 +1387,7 @@ namespace S7CommPlusDriver
 
         private int DisposeClient(int timeoutMs)
         {
+            Volatile.Write(ref m_PendingLegacySessionKeyRenewal, null);
             var client = Interlocked.Exchange(ref m_client, null);
             if (client == null)
                 return 0;

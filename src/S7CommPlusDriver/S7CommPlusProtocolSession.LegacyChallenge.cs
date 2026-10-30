@@ -24,6 +24,48 @@ namespace S7CommPlusDriver
     {
         private const int LegacyDigestLength = LegacyOmsConstants.PacketDigestLength;
         private const int LegacyDigestFieldLength = LegacyOmsConstants.PacketDigestFieldLength;
+        private PendingLegacySessionKeyRenewal m_PendingLegacySessionKeyRenewal;
+
+        private sealed class PendingLegacySessionKeyRenewal
+        {
+            public SetVariableRequest Request { get; }
+            public byte[] NewSessionKey { get; }
+
+            public PendingLegacySessionKeyRenewal(SetVariableRequest request, byte[] newSessionKey)
+            {
+                Request = request;
+                NewSessionKey = newSessionKey;
+            }
+        }
+
+        private void ApplyLegacySessionKeyRenewal(MemoryStream pdu)
+        {
+            var pending = Volatile.Read(ref m_PendingLegacySessionKeyRenewal);
+            if (pending == null || !ShouldUseLegacyDigest(pdu.GetBuffer()[0])
+                || !TryPeekS7PlusPdu(pdu, out var opcode, out var function, out var sequenceNumber)
+                || opcode != Opcode.Response
+                || function != pending.Request.FunctionCode
+                || sequenceNumber != pending.Request.SequenceNumber)
+            {
+                return;
+            }
+
+            try
+            {
+                var response = SetVariableResponse.DeserializeFromPdu(pdu);
+                if (response != null && response.ReturnValue == 0
+                    && Interlocked.CompareExchange(ref m_PendingLegacySessionKeyRenewal, null, pending) == pending)
+                {
+                    // The response was verified with the old key. Install the new key before
+                    // queueing it, so the next packet cannot race the renewal thread.
+                    m_LegacySessionKey = pending.NewSessionKey;
+                }
+            }
+            finally
+            {
+                pdu.Position = 0;
+            }
+        }
 
 #if HARPOS7_LEGACY_AUTH
         private Timer m_LegacySessionKeyRefreshTimer;
@@ -424,22 +466,27 @@ namespace S7CommPlusDriver
                 return S7Consts.errS7CommPlusLegacyAuthentication;
             }
 
-            result = SendS7plusFunctionObjectAndWait(renewalRequest, m_ReadTimeout);
-            if (result != 0)
+            Volatile.Write(ref m_PendingLegacySessionKeyRenewal, new PendingLegacySessionKeyRenewal(renewalRequest, newSessionKey));
+            try
             {
-                return result;
-            }
+                result = SendS7plusFunctionObjectAndWait(renewalRequest, m_ReadTimeout);
+                if (result != 0)
+                {
+                    return result;
+                }
 
-            var renewalResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
-            if (renewalResponse == null || renewalResponse.ReturnValue != 0)
+                var renewalResponse = SetVariableResponse.DeserializeFromPdu(m_ReceivedPDU);
+                if (renewalResponse == null || renewalResponse.ReturnValue != 0)
+                {
+                    return S7Consts.errS7CommPlusLegacyAuthentication;
+                }
+
+                return 0;
+            }
+            finally
             {
-                return S7Consts.errS7CommPlusLegacyAuthentication;
+                Volatile.Write(ref m_PendingLegacySessionKeyRenewal, null);
             }
-
-            // The PLC signs the response with the old key. Switch only after that
-            // response has been received and verified at the protocol boundary.
-            m_LegacySessionKey = newSessionKey;
-            return 0;
         }
 
         private void StopLegacySessionKeyRefresh()
