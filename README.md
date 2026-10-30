@@ -337,6 +337,20 @@ Each `S7CommPlusAlarm` exposes the decoded identity parts from `CpuAlarmId`:
 `SourceRelationId` is the PLC object relation id encoded into the alarm id; a
 higher-level project/catalog API can map it to a block name or call path.
 
+Use `await client.GetAlarmClassesAsync()` to read configured class names, class
+priorities, acknowledgement requirements, and available translations directly
+from downloaded block metadata. Match `S7CommPlusAlarmClass.Id` against
+`alarm.HmiInfo.AlarmClass`. Class priority is separate from the individual message's
+`alarm.HmiInfo.Priority`. Only classes present in that metadata are returned;
+system classes may be absent. See [Configured Alarm Classes](src/S7CommPlusDriver/README.md#configured-alarm-classes)
+for an example and catalog limitations.
+
+Alarm subscriptions populate `alarm.AlarmClassName` automatically from a fresh metadata read at
+subscription creation, including the initial snapshot returned by `SubscribeAlarmsWithSnapshotAsync`.
+After a successful read, absent standard classes 33/34 use `Acknowledgement`/`No Acknowledgement`;
+returned PLC definitions take precedence. Failed metadata reads and other unknown class IDs leave
+the name empty while subscription creation continues.
+
 ## PLC Text Lists and Alarm Text Formatting
 
 PLC alarm texts can contain TIA-style text-list placeholders such as

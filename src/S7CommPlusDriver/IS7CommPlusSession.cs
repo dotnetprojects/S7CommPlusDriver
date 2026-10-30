@@ -36,6 +36,7 @@ namespace S7CommPlusDriver
         int SetCpuOperatingState(int operatingStateRequest);
         int GetCpuCultureInfo(out S7CommPlusCpuCultureInfo cultureInfo);
         int GetTextLists(IEnumerable<int> languageIds, out S7CommPlusTextListCatalog textLists);
+        int GetAlarmClasses(out List<S7CommPlusAlarmClass> classes);
         int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources);
 
         /// <summary>

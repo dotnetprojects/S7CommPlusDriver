@@ -9,6 +9,41 @@ namespace S7CommPlusDriver.Tests
     public sealed class S7CommPlusProtocolRequestsTests
     {
         [Fact]
+        public void AlarmClassCatalogReadsBlockEngineeringMetadataWithoutCreatingASubscription()
+        {
+            var session = new RespondingProtocolSession
+            {
+                ResponseFactory = request =>
+                {
+                    var explore = Assert.IsType<ExploreRequest>(request);
+                    Assert.Equal((uint)Ids.NativeObjects_thePLCProgram_Rid, explore.ExploreId);
+                    Assert.Equal((byte)1, explore.ExploreChildsRecursive);
+                    Assert.Equal(new uint[] { Ids.Block_AlarmDescription }, explore.AddressList);
+                    var block = new PObject(123, Ids.FB_Class_Rid, 0);
+                    block.AddAttribute(Ids.Block_AlarmDescription, new ValueBlobSparseArray(
+                        new Dictionary<uint, ValueBlobSparseArray.BlobEntry>
+                        {
+                            [1] = new ValueBlobSparseArray.BlobEntry
+                            {
+                                value = System.Text.Encoding.UTF8.GetBytes(
+                                    "<AlarmClassList><AlarmClass Name='PlcError' Id='37' Ack='false' Prio='10'/></AlarmClassList>")
+                            }
+                        }));
+                    using var stream = CreateResponseHeader(request, Functioncode.Explore);
+                    S7p.EncodeUInt64Vlq(stream, 0);
+                    S7p.EncodeUInt32(stream, explore.ExploreId);
+                    S7p.EncodeUInt32Vlq(stream, request.IntegrityId);
+                    block.Serialize(stream);
+                    return stream.ToArray();
+                }
+            };
+            var result = new S7CommPlusAlarmBrowseService(session).GetAlarmClasses(out var classes);
+            Assert.Equal(0, result);
+            Assert.Equal("PlcError", Assert.Single(classes).Name);
+            Assert.Single(session.Requests);
+        }
+
+        [Fact]
         public void AcknowledgedSetVariableWaitsForAndValidatesTheResponse()
         {
             var session = new RespondingProtocolSession

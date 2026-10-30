@@ -134,6 +134,42 @@ remove or deactivate the job. Trace mutation and deletion require `WriteEnabled 
 not. Result buffers are opt-in through `S7CommPlusTraceQueryOptions.IncludeResultData`. Use notification
 `IsCompleted` to distinguish a finished recording from an allocated pretrigger buffer.
 
+## Configured Alarm Classes
+
+Read class names directly from the PLC's downloaded block engineering metadata:
+
+```csharp
+var classes = (await client.GetAlarmClassesAsync()).ToDictionary(c => c.Id);
+var alarms = await client.GetActiveAlarmsAsync();
+foreach (var alarm in alarms)
+{
+    classes.TryGetValue(alarm.HmiInfo.AlarmClass, out var alarmClass);
+    Console.WriteLine($"Class {alarm.HmiInfo.AlarmClass}: {alarmClass?.Name ?? "unknown"}, " +
+        $"message priority {alarm.HmiInfo.Priority}, class priority {alarmClass?.Priority}");
+}
+```
+
+`S7CommPlusAlarmClass` includes the configured name, optional class priority and acknowledgement
+requirement, and downloaded display/short names keyed by LCID. Message priority and class priority
+are separate values; neither overwrites the other.
+
+`SubscribeAlarmsAsync` reads this metadata once before creating each subscription and sets
+`alarm.AlarmClassName` on incoming alarms, including buffered notifications.
+`SubscribeAlarmsWithSnapshotAsync` applies the same names to its initial `ActiveAlarms` snapshot.
+After a successful metadata read, missing standard class IDs 33 and 34 resolve to the canonical
+names `Acknowledgement` and `No Acknowledgement`. Returned metadata takes precedence. Editable
+display names such as `A`/`NA` are not inferred. Other absent IDs remain empty.
+If the optional metadata read fails, all class names remain `string.Empty` and subscription
+creation continues. Caller cancellation is still honored. Standalone
+`GetActiveAlarmsAsync` does not fetch a class catalog; use the explicit lookup above for those results.
+
+This is a separate read of block attribute 7853 (alarm description), whose first sparse wire entry
+contains UTF-8 `AlarmClassList` XML. It does not require activating an alarm subscription or TIA
+Portal. Only definitions present in downloaded program blocks are returned. System classes and
+unused classes may be absent; an empty result does not establish that no classes exist. No default
+names are invented. Identical definitions are merged, including translations; conflicting definitions
+for one ID or malformed XML produce an invalid-PDU error. The catalog is read afresh on each call.
+
 ## PLC Text Lists for Alarms
 
 Alarm text payloads can contain TIA-style text-list placeholders such as `@2%t#519K@`. Load the PLC text-list catalog and pass it to the alarm APIs to resolve those placeholders, including nested system-diagnostic text-list references:

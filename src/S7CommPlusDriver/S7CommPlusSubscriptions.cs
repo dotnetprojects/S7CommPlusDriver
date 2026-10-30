@@ -340,6 +340,7 @@ namespace S7CommPlusDriver
         private readonly object _notificationLock = new object();
         private readonly Queue<S7CommPlusAlarmNotification> _notificationReplay = new Queue<S7CommPlusAlarmNotification>();
         private readonly Func<string, long, int, string> _textListResolver;
+        private readonly IReadOnlyDictionary<ushort, string> _alarmClassNames;
         private EventHandler<S7CommPlusAlarmNotificationEventArgs> _notificationReceived;
 
         /// <summary>
@@ -348,14 +349,17 @@ namespace S7CommPlusDriver
         /// <param name="languageIds">Explicit subscribed LCIDs, or an empty collection when the PLC wildcard was unavoidable.</param>
         /// <param name="alarmTextLanguageId">LCID exposed through the compatibility single-language alarm text property.</param>
         /// <param name="textListResolver">Optional resolver for TIA text-list placeholders embedded in alarm text.</param>
+        /// <param name="alarmClassNames">Optional configured class names captured before subscribing.</param>
         internal S7CommPlusAlarmSubscription(
             IEnumerable<int> languageIds,
             int alarmTextLanguageId,
-            Func<string, long, int, string> textListResolver)
+            Func<string, long, int, string> textListResolver,
+            IReadOnlyDictionary<ushort, string> alarmClassNames = null)
         {
             LanguageIds = (languageIds ?? Enumerable.Empty<int>()).Distinct().ToList().AsReadOnly();
             AlarmTextLanguageId = alarmTextLanguageId;
             _textListResolver = textListResolver;
+            _alarmClassNames = alarmClassNames ?? new Dictionary<ushort, string>();
         }
 
         public event EventHandler<S7CommPlusAlarmNotificationEventArgs> NotificationReceived
@@ -408,6 +412,13 @@ namespace S7CommPlusDriver
         /// </summary>
         public bool ReceivesAllAlarmTextLanguages => LanguageIds.Count == 0;
 
+        internal void ApplyAlarmClassName(S7CommPlusAlarm alarm)
+        {
+            alarm.AlarmClassName = alarm.HmiInfo != null && _alarmClassNames.TryGetValue(alarm.HmiInfo.AlarmClass, out var name)
+                ? name ?? string.Empty
+                : string.Empty;
+        }
+
         internal void Publish(Notification notification)
         {
             var alarms = new List<S7CommPlusAlarm>();
@@ -418,6 +429,7 @@ namespace S7CommPlusDriver
                     var alarm = S7CommPlusAlarm.FromNotificationObject(alarmObject, AlarmTextLanguageId, _textListResolver);
                     if (alarm != null)
                     {
+                        ApplyAlarmClassName(alarm);
                         alarms.Add(alarm);
                     }
                 }

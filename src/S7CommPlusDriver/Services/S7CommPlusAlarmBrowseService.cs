@@ -32,6 +32,16 @@ namespace S7CommPlusDriver
             _requests = new S7CommPlusProtocolRequests(session);
         }
 
+        public int GetAlarmClasses(out List<S7CommPlusAlarmClass> classes)
+        {
+            classes = new List<S7CommPlusAlarmClass>();
+            var result = _requests.Explore(Ids.NativeObjects_thePLCProgram_Rid,
+                new uint[] { Ids.Block_AlarmDescription }, out var response);
+            if (result != 0) return result;
+            if (response?.Objects == null) return S7Consts.errIsoInvalidPDU;
+            return S7CommPlusAlarmClassParser.Parse(response.Objects, out classes);
+        }
+
         /// <summary>
         /// Explores the AS and the User program alarms, gets the corresponding texts usind the language id (e.g.1031 = de-DE)
         ///

@@ -718,6 +718,22 @@ namespace S7CommPlusDriver
             }, cancellationToken);
         }
 
+        /// <summary>
+        /// Reads configured alarm classes from the downloaded blocks' alarm engineering metadata.
+        /// Only classes included in that metadata are returned; absent system classes are not inferred.
+        /// An empty result means no class definitions were returned, not that the PLC has no alarms.
+        /// Conflicting definitions for the same class ID are reported as invalid PLC data.
+        /// </summary>
+        public Task<IReadOnlyList<S7CommPlusAlarmClass>> GetAlarmClassesAsync(CancellationToken cancellationToken = default)
+        {
+            return ExecuteReadOperationAsync<IReadOnlyList<S7CommPlusAlarmClass>>("GetAlarmClasses", session =>
+            {
+                var error = session.GetAlarmClasses(out var classes);
+                ThrowIfError("GetAlarmClasses", error);
+                return classes == null ? Array.Empty<S7CommPlusAlarmClass>() : classes.AsReadOnly();
+            }, cancellationToken);
+        }
+
         public Task<S7CommPlusCommunicationResources> GetCommunicationResourcesAsync(CancellationToken cancellationToken = default)
         {
             return ExecuteReadOperationAsync("GetCommunicationResources", session =>
@@ -1165,6 +1181,7 @@ namespace S7CommPlusDriver
                     subscription.AlarmTextLanguageId,
                     CreateTextListResolver(textLists),
                     cancellationToken).ConfigureAwait(false);
+                foreach (var alarm in activeAlarms) subscription.ApplyAlarmClassName(alarm);
                 return new S7CommPlusAlarmSubscriptionWithSnapshot(activeAlarms, subscription);
             }
             catch
@@ -1230,10 +1247,12 @@ namespace S7CommPlusDriver
                 var effectiveAlarmTextLanguageId = alarmTextLanguageId != 0
                     ? alarmTextLanguageId
                     : languageIdList.FirstOrDefault();
+                var alarmClassNames = await TryReadAlarmClassNamesCoreAsync(operationTimeout, cancellationToken).ConfigureAwait(false);
                 subscription = new S7CommPlusAlarmSubscription(
                     languageIdList,
                     effectiveAlarmTextLanguageId,
-                    CreateTextListResolver(textLists));
+                    CreateTextListResolver(textLists),
+                    alarmClassNames);
                 var languageIdsUint = languageIdList.Select(languageId => checked((uint)languageId)).ToArray();
                 uint subscriptionObjectId = 0;
                 var error = await RunOperationAttemptAsync(
@@ -1260,6 +1279,45 @@ namespace S7CommPlusDriver
             {
                 _operationGate.Release();
             }
+        }
+
+        // Called with the operation gate held, before creating the PLC subscription.
+        private async Task<IReadOnlyDictionary<ushort, string>> TryReadAlarmClassNamesCoreAsync(TimeSpan timeout, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var session = _session;
+            var previousTimeout = session.RequestTimeoutMilliseconds;
+            try
+            {
+                session.SetRequestTimeout(ValidateOperationTimeout(timeout));
+                // Use the protocol's read deadline and await completion so a failed optional read cannot
+                // leave a worker using the same session concurrently with subscription creation.
+                var result = await Task.Run(() =>
+                {
+                    var error = session.GetAlarmClasses(out var classes);
+                    return (error, classes);
+                }).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (result.error == 0 && result.classes != null)
+                {
+                    var names = result.classes.ToDictionary(item => item.Id, item => item.Name);
+                    // TIA's predefined classes can be absent from block-local engineering catalogs.
+                    // Keep actual PLC definitions authoritative, and do not infer editable display names.
+                    if (!names.ContainsKey(33)) names.Add(33, "Acknowledgement");
+                    if (!names.ContainsKey(34)) names.Add(34, "No Acknowledgement");
+                    return names;
+                }
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _options.Logger?.LogDebug(ex, "Alarm class metadata could not be read; subscribing without class names.");
+            }
+            finally
+            {
+                session.SetRequestTimeout(previousTimeout);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return new Dictionary<ushort, string>();
         }
 
         public Task<PlcTag> GetTagBySymbolAsync(string symbol, CancellationToken cancellationToken = default)

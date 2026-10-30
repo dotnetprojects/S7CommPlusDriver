@@ -295,6 +295,7 @@ namespace S7CommPlusDriver
         public const int STAI_MessageType = 7770;
         public const int STAI_HmiInfo = 7771;
         public const int STAI_InitFbState = 7772;
+        public const int Block_AlarmDescription = 7853;
         public const int MultipleSTAI_Class_Rid = 7854;
         public const int MultipleSTAI_itsSDiagCont = 7855;
         public const int MultipleSTAI_itsDB = 7856;
