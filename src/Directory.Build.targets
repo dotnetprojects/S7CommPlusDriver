@@ -1,11 +1,10 @@
 <Project>
-  <!-- Keep the existing assembly identity unless the caller explicitly requests a signed build. -->
+  <!-- Sign every target with the repository key unless explicitly disabled. -->
   <PropertyGroup>
-    <S7CommPlusStrongName Condition="'$(S7CommPlusStrongName)' == ''">false</S7CommPlusStrongName>
-    <SignAssembly Condition="'$(TargetFramework)' != 'net48'">$(S7CommPlusStrongName)</SignAssembly>
-    <!-- HarpoS7 and zlib are unsigned; the .NET Framework loader rejects signed callers. -->
-    <SignAssembly Condition="'$(TargetFramework)' == 'net48'">false</SignAssembly>
+    <S7CommPlusStrongName Condition="'$(S7CommPlusStrongName)' == ''">true</S7CommPlusStrongName>
+    <SignAssembly>$(S7CommPlusStrongName)</SignAssembly>
     <AssemblyOriginatorKeyFile Condition="'$(SignAssembly)' == 'true'">$(MSBuildThisFileDirectory)S7CommPlusDriver.snk</AssemblyOriginatorKeyFile>
     <DefineConstants Condition="'$(SignAssembly)' == 'true'">$(DefineConstants);S7COMMPLUS_STRONG_NAME</DefineConstants>
+    <WarningsAsErrors Condition="'$(SignAssembly)' == 'true' And '$(MSBuildProjectName)' == 'S7CommPlusDriver'">$(WarningsAsErrors);CS8002</WarningsAsErrors>
   </PropertyGroup>
 </Project>

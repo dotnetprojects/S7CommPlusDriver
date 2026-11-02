@@ -43,12 +43,12 @@ jobs:
     - name: Test .NET Framework 4.8
       run: dotnet test src/S7CommPlusDriver.Tests/S7CommPlusDriver.Tests.csproj --configuration Release --framework net48
 
-  signed-tests:
+  unsigned-tests:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-dotnet@v4
       with:
         dotnet-version: 9.0.x
-    - name: Test optional signed .NET 8 build
-      run: dotnet test src/S7CommPlusDriver.Tests/S7CommPlusDriver.Tests.csproj --configuration Release --framework net8.0 -p:S7CommPlusStrongName=true
+    - name: Test optional unsigned build
+      run: dotnet test src/S7CommPlusDriver.Tests/S7CommPlusDriver.Tests.csproj --configuration Release -p:S7CommPlusStrongName=false
