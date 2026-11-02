@@ -253,6 +253,15 @@ namespace S7CommPlusDriver.Tests
             return result.Error;
         }
 
+        public Func<(int Error, List<S7CommPlusAlarmClass> Classes)>? AlarmClassesHandler { get; set; }
+
+        public int GetAlarmClasses(out List<S7CommPlusAlarmClass> classes)
+        {
+            var result = AlarmClassesHandler?.Invoke() ?? (0, new List<S7CommPlusAlarmClass>());
+            classes = result.Classes;
+            return result.Error;
+        }
+
         public int GetCommunicationResources(out S7CommPlusCommunicationResourceSnapshot resources)
         {
             var result = CommunicationResourcesHandler?.Invoke() ?? (0, CachedCommunicationResources);

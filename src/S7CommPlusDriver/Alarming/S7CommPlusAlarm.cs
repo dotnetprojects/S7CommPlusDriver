@@ -35,6 +35,12 @@ namespace S7CommPlusDriver.Alarming
         /// </summary>
         public IReadOnlyDictionary<int, S7CommPlusAlarmTexts> AlarmTextsByLanguage { get; internal set; } = new Dictionary<int, S7CommPlusAlarmTexts>();
         public S7CommPlusAlarmHmiInfo HmiInfo;
+        /// <summary>
+        /// Configured class name resolved from the subscription's metadata snapshot.
+        /// After a successful metadata read, absent standard IDs 33/34 use their canonical TIA names.
+        /// Empty when metadata could not be read or another class ID was not present.
+        /// </summary>
+        public string AlarmClassName { get; internal set; } = string.Empty;
         public S7CommPlusAlarmStateChange StateChange;
 
         public override string ToString()
@@ -48,6 +54,7 @@ namespace S7CommPlusDriver.Alarming
             s += "<AlarmDomain>" + AlarmDomain.ToString() + "</AlarmDomain>" + Environment.NewLine;
             s += "<MessageType>" + MessageType.ToString() + "</MessageType>" + Environment.NewLine;
             s += "<MessageTypeName>" + SiemensOmsEnumNames.AlarmMessageTypeName(MessageType) + "</MessageTypeName>" + Environment.NewLine;
+            s += "<AlarmClassName>" + System.Security.SecurityElement.Escape(AlarmClassName) + "</AlarmClassName>" + Environment.NewLine;
             s += "<HmiInfo>" + Environment.NewLine + HmiInfo.ToString() + "</HmiInfo>" + Environment.NewLine;
             s += "<StateChange>" + Environment.NewLine + StateChange.ToString() + "</StateChange>" + Environment.NewLine;
             s += "<SequenceCounter>" + SequenceCounter.ToString() + "</SequenceCounter>" + Environment.NewLine;

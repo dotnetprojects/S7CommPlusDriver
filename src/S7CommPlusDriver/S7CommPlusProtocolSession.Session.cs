@@ -29,6 +29,11 @@ namespace S7CommPlusDriver
         private S7CommPlusMetadataService Metadata => _metadata ??= new S7CommPlusMetadataService(ProtocolSession);
         private S7CommPlusTextListService TextLists => _textLists ??= new S7CommPlusTextListService(ProtocolSession, Metadata);
 
+        int IS7CommPlusSession.GetAlarmClasses(out List<S7CommPlusAlarmClass> classes)
+        {
+            return AlarmBrowser.GetAlarmClasses(out classes);
+        }
+
         int IS7CommPlusSession.Connect(S7CommPlusClientOptions options)
         {
             return Connect(options);
