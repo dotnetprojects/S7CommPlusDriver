@@ -64,8 +64,14 @@ namespace S7CommPlusDriver.Tests
             client.OnDataReceived = (_, _) => { };
             client.OnReceiveError = _ => { };
             SetField(session, "m_client", client);
+            var pendingField = typeof(S7CommPlusProtocolSession)
+                .GetField("m_PendingLegacySessionKeyRenewal", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            pendingField.SetValue(session, Activator.CreateInstance(pendingField.FieldType,
+                new SetVariableRequest(ProtocolVersion.V3), new byte[24]));
 
             Assert.Equal(0, abort ? session.CloseTransport() : session.TryDisconnect());
+
+            Assert.Null(GetField(session, "m_PendingLegacySessionKeyRenewal"));
 
             Assert.Null(GetField(session, "m_client"));
             Assert.Null(client.OnDataReceived);

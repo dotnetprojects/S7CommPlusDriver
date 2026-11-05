@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.IO;
+using System.Reflection;
 using System.Security.Cryptography;
 using S7CommPlusDriver.Internal;
 using Xunit;
@@ -112,6 +113,103 @@ namespace S7CommPlusDriver.Tests
 
             Assert.Equal(S7Consts.errS7CommPlusDigestMismatch, error);
             Assert.Null(received);
+        }
+
+        [Theory]
+        [InlineData(false, false)]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        [InlineData(true, true)]
+        public void LegacyRenewalSwitchesKeyBeforeQueuedResponseIsConsumed(bool fragmented, bool stopRefresh)
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var oldKey = new byte[24];
+            var newKey = Enumerable.Repeat((byte)0x42, 24).ToArray();
+            var request = new SetVariableRequest(ProtocolVersion.V3) { SequenceNumber = 7, IntegrityId = 2 };
+            connection.DebugEnableLegacyDigestForTests(oldKey);
+            PrepareLegacySessionKeyRenewal(connection, request, newKey);
+            if (stopRefresh)
+            {
+                typeof(S7CommPlusProtocolSession)
+                    .GetMethod("StopLegacySessionKeyRefresh", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .Invoke(connection, null);
+            }
+            var response = CreateRenewalResponse(request.SequenceNumber);
+            var notification = new byte[] { Opcode.Notification, 1, 2, 3 };
+
+            // Notifications already in flight still use the old key.
+            connection.DebugOnDataReceivedForTests(CreateLegacyFragment(notification, notification, oldKey, true));
+            if (fragmented)
+            {
+                connection.DebugOnDataReceivedForTests(CreateLegacyFragment(response.Take(10).ToArray(), response.Take(10).ToArray(), oldKey, false));
+                connection.DebugOnDataReceivedForTests(CreateLegacyFragment(response.Skip(10).ToArray(), response, oldKey, true));
+            }
+            else
+            {
+                connection.DebugOnDataReceivedForTests(CreateLegacyFragment(response, response, oldKey, true));
+            }
+            connection.DebugOnDataReceivedForTests(CreateLegacyFragment(notification, notification, newKey, true));
+
+            // Deliberately do not let the renewal waiter consume anything until all packets arrived.
+            foreach (var body in new[] { notification, response, notification })
+            {
+                Assert.Equal(0, connection.DebugReceiveNextS7plusPduForTests(100, out var received));
+                Assert.Equal(new[] { ProtocolVersion.V3 }.Concat(body), received.ToArray());
+            }
+
+            // The old key must no longer be accepted after the transition.
+            connection.DebugOnDataReceivedForTests(CreateLegacyFragment(notification, notification, oldKey, true));
+            Assert.Equal(S7Consts.errS7CommPlusDigestMismatch, connection.DebugReceiveNextS7plusPduForTests(100, out _));
+        }
+
+        [Theory]
+        [InlineData(8, 0, false)] // Unrelated response.
+        [InlineData(7, 1, false)] // Rejected renewal.
+        [InlineData(7, 0, true)]  // Unauthenticated response.
+        public void LegacyRenewalDoesNotSwitchKeyForInvalidResponse(ushort sequenceNumber, byte returnValue, bool corruptDigest)
+        {
+            var connection = new S7CommPlusProtocolSession();
+            var oldKey = new byte[24];
+            var newKey = Enumerable.Repeat((byte)0x42, 24).ToArray();
+            connection.DebugEnableLegacyDigestForTests(oldKey);
+            PrepareLegacySessionKeyRenewal(connection,
+                new SetVariableRequest(ProtocolVersion.V3) { SequenceNumber = 7, IntegrityId = 2 }, newKey);
+            var response = CreateRenewalResponse(sequenceNumber, returnValue);
+            var packet = CreateLegacyFragment(response, response, oldKey, true);
+            if (corruptDigest)
+                packet[5] ^= 1;
+
+            connection.DebugOnDataReceivedForTests(packet);
+            Assert.Equal(corruptDigest ? S7Consts.errS7CommPlusDigestMismatch : 0,
+                connection.DebugReceiveNextS7plusPduForTests(100, out _));
+
+            var notification = new byte[] { Opcode.Notification, 1, 2, 3 };
+            connection.DebugOnDataReceivedForTests(CreateLegacyFragment(notification, notification, oldKey, true));
+            Assert.Equal(0, connection.DebugReceiveNextS7plusPduForTests(100, out _));
+            connection.DebugOnDataReceivedForTests(CreateLegacyFragment(notification, notification, newKey, true));
+            Assert.Equal(S7Consts.errS7CommPlusDigestMismatch, connection.DebugReceiveNextS7plusPduForTests(100, out _));
+        }
+
+        private static void PrepareLegacySessionKeyRenewal(
+            S7CommPlusProtocolSession connection, SetVariableRequest request, byte[] newKey)
+        {
+            var pendingField = typeof(S7CommPlusProtocolSession)
+                .GetField("m_PendingLegacySessionKeyRenewal", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            pendingField.SetValue(connection, Activator.CreateInstance(pendingField.FieldType, request, newKey));
+        }
+
+        private static byte[] CreateRenewalResponse(ushort sequenceNumber, byte returnValue = 0)
+        {
+            using var stream = new MemoryStream();
+            S7p.EncodeByte(stream, Opcode.Response);
+            S7p.EncodeUInt16(stream, 0);
+            S7p.EncodeUInt16(stream, Functioncode.SetVariable);
+            S7p.EncodeUInt16(stream, 0);
+            S7p.EncodeUInt16(stream, sequenceNumber);
+            S7p.EncodeByte(stream, 0);
+            S7p.EncodeUInt64Vlq(stream, returnValue);
+            S7p.EncodeUInt32Vlq(stream, (uint)sequenceNumber + 2);
+            return stream.ToArray();
         }
 
         [Fact]
