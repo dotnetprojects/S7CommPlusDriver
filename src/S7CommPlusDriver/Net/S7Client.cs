@@ -931,6 +931,7 @@ namespace S7CommPlusDriver
 				case S7Consts.errCliNeedPassword: return "CPU : Function not authorized for current protection level";
 				case S7Consts.errCliInvalidPassword: return "CPU : Invalid password";
 				case S7Consts.errCliAccessDenied: return "CPU : Access denied";
+				case S7Consts.errS7CommPlusMetadataUnavailable: return "S7COMMP : Requested metadata was not returned by the CPU. Check CPU access protection, configured username/password and permissions, and availability of the metadata in the downloaded project";
 				case S7Consts.errCliNoPasswordToSetOrClear: return "CPU : No password to set or clear";
 				case S7Consts.errCliJobTimeout: return "CLI : Job Timeout";
 				case S7Consts.errCliFunctionRefused: return "CLI : function refused by CPU (Unknown error)";

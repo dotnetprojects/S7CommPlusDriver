@@ -115,6 +115,7 @@ client.CommunicationError += (_, e) =>
 await client.ConnectAsync();
 
 var cpuInfo = await client.GetCpuInfoAsync();
+Console.WriteLine($"MLFB: {cpuInfo.CpuMlfb}, firmware: {cpuInfo.CpuFirmware}");
 var cpuCulture = await client.GetCpuCultureInfoAsync();
 var variables = await client.BrowseAsync();
 
@@ -318,6 +319,31 @@ await client.LegitimateAsync("plc-password", username: "");
 Legitimation is a session-security operation, not a PLC signal write, so it
 does not require `WriteEnabled = true`. Failed legitimation attempts throw
 `S7CommPlusLegitimationException`.
+
+CPU credential errors also throw `S7CommPlusLegitimationException` when reported
+by `ConnectAsync` or another operation. Inspect `ErrorCode`, `Operation`,
+`Endpoint`, and `IsTransient` instead of parsing the message:
+
+| ErrorCode | Meaning |
+| --- | --- |
+| `S7Consts.errCliNeedPassword` (`0x01D00000`) | Current protection level requires authorization |
+| `S7Consts.errCliInvalidPassword` (`0x01E00000`) | CPU rejected the password |
+| `S7Consts.errCliAccessDenied` (`0x01E10000`) | Access denied; check credentials and permissions |
+| `S7Consts.errS7CommPlusMetadataUnavailable` (`0x03100005`) | CPU returned no requested structure metadata |
+
+The missing-metadata case throws `S7CommPlusMetadataUnavailableException`.
+It can occur with restricted access or unavailable project metadata; it does
+not establish that a password is wrong. These errors are non-transient and do
+not trigger automatic reconnect retries. A session can connect with limited
+access and then fail to read structure metadata. Configure `Password` (and
+`Username` for CPU user-based access) before connecting, including on separate
+clients used for alarm subscriptions or snapshots.
+
+`GetCpuInfoAsync()` already reads the CPU order number (`CpuMlfb`), serial
+number (`CpuSerial`), and firmware (`CpuFirmware`, a `System.Version`) from CPU
+identification data. It requires a connected session with permission to read
+that metadata; malformed or truncated identification replies produce a
+protocol error instead of a partially populated result.
 
 ## Active Alarms
 

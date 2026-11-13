@@ -155,7 +155,13 @@ namespace S7CommPlusDriver
 
             #endregion
 
-            var attr = exploreRes?.Objects?[0]?.Objects?.First().Value?.Objects?.First().Value?.Attributes?[Ids.ConstantsGlobal_Symbolics] as ValueBlob;
+            var attr = FindStructureSymbolics(exploreRes?.Objects);
+            if (attr == null)
+            {
+                // An empty Explore is possible with restricted CPU access. It is not
+                // proof of a bad password, and must not be reported as a socket failure.
+                return S7Consts.errS7CommPlusMetadataUnavailable;
+            }
             if (attr != null)
             {
                 BlobDecompressor bd3 = new BlobDecompressor();
@@ -183,6 +189,19 @@ namespace S7CommPlusDriver
             }
 
             return 0;
+        }
+
+        private static ValueBlob FindStructureSymbolics(IEnumerable<PObject> objects)
+        {
+            if (objects == null) return null;
+            foreach (var obj in objects)
+            {
+                if (obj.Attributes.TryGetValue(Ids.ConstantsGlobal_Symbolics, out var value)
+                    && value is ValueBlob blob) return blob;
+                var childValue = FindStructureSymbolics(obj.GetObjects());
+                if (childValue != null) return childValue;
+            }
+            return null;
         }
 
         internal static readonly uint[] BlockContentAttributes =
@@ -1137,22 +1156,29 @@ namespace S7CommPlusDriver
             var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theASRoot_Rid, 2459, out var pValueVersions);
             if (res != 0)
                 return res;
-            var arrVersions = ((ValueUSIntArray)pValueVersions).GetValue();
+            if (pValueVersions is not ValueUSIntArray versions
+                || versions.GetValue() == null || versions.GetValue().Length < 8)
+                return S7Consts.errIsoInvalidPDU8;
+            var arrVersions = versions.GetValue();
             var version1 = new Version(arrVersions[0], arrVersions[1], arrVersions[2], arrVersions[3]);
             var version2 = new Version(arrVersions[4], arrVersions[5], arrVersions[6], arrVersions[7]);
 
             res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, 233, out var pValuePlcName);
             if (res != 0)
                 return res;
-            var cpuName = ((ValueWString)pValuePlcName).GetValue();
+            if (pValuePlcName is not ValueWString plcName) return S7Consts.errIsoInvalidPDU8;
+            var cpuName = plcName.GetValue();
 
             res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUProxy_Rid, 3753, out var pValueMlfbSerial);
             if (res != 0)
                 return res;
-            var data = ((ValueBlob)pValueMlfbSerial).GetValue();
-            var mlfb = Encoding.ASCII.GetString(data, 8, 19);
+            if (pValueMlfbSerial is not ValueBlob identification
+                || identification.GetValue() == null || identification.GetValue().Length < 51)
+                return S7Consts.errIsoInvalidPDU8;
+            var data = identification.GetValue();
+            var mlfb = Encoding.ASCII.GetString(data, 8, 19).TrimEnd('\0', ' ');
             //space
-            var serial = Encoding.ASCII.GetString(data, 28, 16);
+            var serial = Encoding.ASCII.GetString(data, 28, 16).TrimEnd('\0', ' ');
             //nulbyte
             var hardware = data[46];
             var firmware = new Version(data[47], data[48], data[49], data[50]);

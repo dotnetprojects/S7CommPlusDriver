@@ -21,8 +21,17 @@ namespace S7CommPlusDriver.Internal
 
         private static S7CommPlusException CreateTypedException(string operation, string endpoint, int errorCode, string message)
         {
-            if (operation == "Legitimate")
+            if (errorCode == S7Consts.errS7CommPlusMetadataUnavailable)
             {
+                return new S7CommPlusMetadataUnavailableException(operation, endpoint, message);
+            }
+
+            if (operation == "Legitimate"
+                || errorCode == S7Consts.errCliNeedPassword
+                || errorCode == S7Consts.errCliInvalidPassword
+                || errorCode == S7Consts.errCliAccessDenied)
+            {
+                message += " Check the CPU access protection and the configured username/password and permissions. Reconnecting with unchanged credentials will not resolve an access rejection.";
                 return new S7CommPlusLegitimationException(operation, endpoint, errorCode, IsTransient(errorCode), message);
             }
 

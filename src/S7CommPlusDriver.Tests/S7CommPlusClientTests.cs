@@ -1396,6 +1396,31 @@ namespace S7CommPlusDriver.Tests
             Assert.Contains("libcrypto-3-arm64.dll", ex.Message);
         }
 
+        [Theory]
+        [InlineData(S7Consts.errCliNeedPassword)]
+        [InlineData(S7Consts.errCliInvalidPassword)]
+        [InlineData(S7Consts.errCliAccessDenied)]
+        public async Task ConnectCredentialRejectionIsTypedAndDoesNotReconnect(int error)
+        {
+            var fake = new FakeS7CommPlusSession { ConnectHandler = _ => error };
+            await using var client = CreateClient(fake);
+            var ex = await Assert.ThrowsAsync<S7CommPlusLegitimationException>(() => client.ConnectAsync());
+            Assert.Equal(error, ex.ErrorCode);
+            Assert.Equal("Connect", ex.Operation);
+            Assert.False(ex.IsTransient);
+            Assert.Contains("username/password", ex.Message);
+        }
+
+        [Fact]
+        public void MissingMetadataHasADistinctNonTransientException()
+        {
+            var ex = S7CommPlusErrorClassifier.CreateException("GetPlcStructureXml", "127.0.0.1:102",
+                S7Consts.errS7CommPlusMetadataUnavailable);
+            Assert.IsType<S7CommPlusMetadataUnavailableException>(ex);
+            Assert.False(ex.IsTransient);
+            Assert.Contains("access protection", ex.Message);
+        }
+
         [Fact]
         public void RemoteTsapMustBeAscii()
         {

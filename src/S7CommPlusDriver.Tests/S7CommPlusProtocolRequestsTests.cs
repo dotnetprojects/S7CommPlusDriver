@@ -8,6 +8,96 @@ namespace S7CommPlusDriver.Tests
 {
     public sealed class S7CommPlusProtocolRequestsTests
     {
+        [Theory]
+        [InlineData(0UL, S7Consts.errS7CommPlusMetadataUnavailable)]
+        [InlineData(0x8000B10700008011UL, S7Consts.errCliFunctionRefused)]
+        public void MissingStructureMetadataReturnsAnErrorInsteadOfIndexingAnEmptyResponse(ulong returnValue, int expected)
+        {
+            var session = new RespondingProtocolSession
+            {
+                ResponseFactory = request =>
+                {
+                    using var stream = CreateResponseHeader(request, Functioncode.Explore);
+                    S7p.EncodeUInt64Vlq(stream, returnValue);
+                    S7p.EncodeUInt32(stream, ((ExploreRequest)request).ExploreId);
+                    S7p.EncodeUInt32Vlq(stream, request.IntegrityId);
+                    S7p.EncodeByte(stream, 0);
+                    return stream.ToArray();
+                }
+            };
+            var result = new S7CommPlusMetadataService(session).GetPlcStructureXml(out _);
+            Assert.Equal(expected, result);
+        }
+
+        [Theory]
+        [InlineData(0UL, 0)]
+        [InlineData(0x8000B10700008011UL, S7Consts.errCliFunctionRefused)]
+        public void CpuIdentificationReadsMlfbAndFirmwareAndPreservesRefusals(ulong returnValue, int expected)
+        {
+            var session = new RespondingProtocolSession
+            {
+                ResponseFactory = request =>
+                {
+                    var get = Assert.IsType<GetVarSubstreamedRequest>(request);
+                    PValue value;
+                    switch (get.Address)
+                    {
+                        case 2459: value = new ValueUSIntArray(new byte[] { 20, 0, 0, 0, 1, 0, 0, 0 }); break;
+                        case 233: value = new ValueWString("CPU"); break;
+                        case 3753:
+                            var data = new byte[51];
+                            System.Text.Encoding.ASCII.GetBytes("6ES7 515-2AM02-0AB0 ").CopyTo(data, 8);
+                            System.Text.Encoding.ASCII.GetBytes("SERIAL").CopyTo(data, 28);
+                            data[47] = 3; data[48] = 1; data[49] = 2;
+                            value = new ValueBlob(0, data);
+                            break;
+                        case 8342: value = new ValueWStringArray(new[] { "V20", "", "Project" }); break;
+                        default: throw new InvalidOperationException();
+                    }
+                    return CreateSubstreamedResponse(request, value, returnValue);
+                }
+            };
+            var result = new S7CommPlusMetadataService(session).GetCpuInfo(out var info);
+            Assert.Equal(expected, result);
+            if (expected != 0) { Assert.Null(info); return; }
+            Assert.Equal("6ES7 515-2AM02-0AB0", info.CpuMlfb);
+            Assert.Equal(new Version(3, 1, 2, 0), info.CpuFirmware);
+            Assert.Equal("SERIAL", info.CpuSerial);
+            Assert.Equal("Project", info.ProjectName);
+            Assert.Equal(4, session.ResponseValidationCount);
+        }
+
+        [Theory]
+        [InlineData(2459)]
+        [InlineData(3753)]
+        public void TruncatedCpuIdentificationReturnsAProtocolError(ushort truncatedAddress)
+        {
+            var session = new RespondingProtocolSession
+            {
+                ResponseFactory = request =>
+                {
+                    var address = ((GetVarSubstreamedRequest)request).Address;
+                    PValue value = address == 2459
+                        ? new ValueUSIntArray(new byte[truncatedAddress == 2459 ? 7 : 8])
+                        : address == 233 ? new ValueWString("CPU") : new ValueBlob(0, new byte[50]);
+                    return CreateSubstreamedResponse(request, value, 0);
+                }
+            };
+            Assert.Equal(S7Consts.errIsoInvalidPDU8,
+                new S7CommPlusMetadataService(session).GetCpuInfo(out var info));
+            Assert.Null(info);
+        }
+
+        private static byte[] CreateSubstreamedResponse(IS7pRequest request, PValue value, ulong returnValue)
+        {
+            using var stream = CreateResponseHeader(request, Functioncode.GetVarSubStreamed);
+            S7p.EncodeUInt64Vlq(stream, returnValue);
+            S7p.EncodeByte(stream, 0);
+            value.Serialize(stream);
+            S7p.EncodeUInt32Vlq(stream, request.IntegrityId);
+            return stream.ToArray();
+        }
+
         [Fact]
         public void AlarmClassCatalogReadsBlockEngineeringMetadataWithoutCreatingASubscription()
         {

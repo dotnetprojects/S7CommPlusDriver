@@ -19,6 +19,14 @@ namespace S7CommPlusDriver
         public bool IsTransient { get; }
     }
 
+    public sealed class S7CommPlusMetadataUnavailableException : S7CommPlusException
+    {
+        public S7CommPlusMetadataUnavailableException(string operation, string endpoint, string message)
+            : base(operation, endpoint, S7Consts.errS7CommPlusMetadataUnavailable, false, message)
+        {
+        }
+    }
+
     public sealed class S7CommPlusConnectionException : S7CommPlusException
     {
         public S7CommPlusConnectionException(string operation, string endpoint, int errorCode, bool isTransient, string message, Exception innerException = null)

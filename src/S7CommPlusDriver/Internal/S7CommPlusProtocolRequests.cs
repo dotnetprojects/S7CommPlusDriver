@@ -46,7 +46,9 @@ namespace S7CommPlusDriver.Internal
             }
 
             response = ExploreResponse.DeserializeFromPdu(_session.ReceivedPdu, true);
-            return _session.CheckResponse(request, response);
+            result = _session.CheckResponse(request, response);
+            if (result != 0) return result;
+            return response.ReturnValue == 0 ? 0 : S7Consts.errCliFunctionRefused;
         }
 
         public int GetVarSubstreamed(uint objectId, ushort address, out PValue value)
@@ -71,6 +73,11 @@ namespace S7CommPlusDriver.Internal
             {
                 return S7Consts.errIsoInvalidPDU8;
             }
+
+            result = _session.CheckResponse(request, response);
+            if (result != 0) return result;
+            if (response.ReturnValue != 0) return S7Consts.errCliFunctionRefused;
+            if (response.Value == null) return S7Consts.errIsoInvalidPDU8;
 
             value = response.Value;
             return 0;

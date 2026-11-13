@@ -94,6 +94,7 @@ namespace S7CommPlusDriver
 		public const int errS7CommPlusLegacyAuthentication = 0x03100002;
 		public const int errS7CommPlusDigestMismatch = 0x03100003;
 		public const int errS7CommPlusLegacyRequestTooLarge = 0x03100004;
+		public const int errS7CommPlusMetadataUnavailable = 0x03100005;
 		//------------------------------------------------------------------------------
 		//        PARAMS LIST FOR COMPATIBILITY WITH Snap7.net.cs           
 		//------------------------------------------------------------------------------
