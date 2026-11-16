@@ -2084,7 +2084,10 @@ namespace S7CommPlusDriver
         /// <exception cref="Exception">Symbol syntax error</exception>
         private void calcAccessSeqForMDimArray(ref string symbol, PVartypeListElement varType, VarInfo varInfo)
         {
-            Regex re = new Regex(@"^\[( ?-?\d+ ?(, ?-?\d+ ?)+)\]");
+            // FbArray/StructMDim report IsMDim() even when only one dimension is declared, so a
+            // single index (for example "[1]" for Array[1..3] of FB) must be accepted here. The
+            // dimension count check below rejects a mismatching number of indices.
+            Regex re = new Regex(@"^\[( ?-?\d+ ?(, ?-?\d+ ?)*)\]");
             Match m = re.Match(symbol);
             if (!m.Success) throw new ArgumentException("Expected a multidimensional array index such as '[1,2]'.", nameof(symbol));
             parseSymbolLevel(ref symbol); // remove index from symbol string
