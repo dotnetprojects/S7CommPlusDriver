@@ -1,4 +1,5 @@
 using S7CommPlusDriver.Legitimation;
+using S7CommPlusDriver.Internal;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -47,11 +48,7 @@ namespace S7CommPlusDriver
             //      � WinCC Unified PCs and Comfort Panels.
             //  In addition, SINAMICS RT SW, as of version V6.1, and STARTDRIVE, as of version V17, support secure communication
             string sessionVersionPAOMString = ((ValueWString)serverSession.GetStructElement((uint)Ids.LID_SessionVersionSystemPAOMString)).GetValue();
-            var reVersions = new Regex(
-                @"^[^;]*;[^;]*[17]\s?(\d{3}).*;[VSR](\d{1,2}\.\d+)$",
-                RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase
-            );
-            Match m = reVersions.Match(sessionVersionPAOMString);
+            Match m = DriverRegex.SessionVersion().Match(sessionVersionPAOMString);
             if (!m.Success)
             {
                 System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Could not extract firmware version!");

@@ -4,15 +4,12 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 
 namespace S7CommPlusDriver.Internal
 {
     internal static class PlcStructureXmlParser
     {
-        private static readonly Regex EscapedCharRegex = new Regex("_x([0-9A-F]{4})_", RegexOptions.Compiled);
-
         public static S7CommPlusPlcStructureSnapshot CreateSnapshot(string xml)
         {
             xml ??= string.Empty;
@@ -185,7 +182,7 @@ namespace S7CommPlusDriver.Internal
 
         private static string ReplaceEscapedChars(string text)
         {
-            return EscapedCharRegex.Replace(text, match => ((char)int.Parse(match.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToString());
+            return DriverRegex.EscapedXmlCharacter().Replace(text, match => ((char)int.Parse(match.Groups[1].Value, NumberStyles.HexNumber, CultureInfo.InvariantCulture)).ToString());
         }
 
         private static string ReadAttribute(XElement element, string name)
