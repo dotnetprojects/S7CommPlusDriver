@@ -300,6 +300,28 @@ namespace S7CommPlusDriver.Tests
             Assert.False(variable.HmiAccessible);
         }
 
+        [Theory]
+        [InlineData(false, 77800u)]
+        [InlineData(true, 488u)]
+        public void NestedFbTraceAddressesIncludeTheSelectedStorageSections(bool retain, uint expected)
+        {
+            var root = CreateTypeObject(100, "Hoist", Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT,
+                new POffsetInfoType_FbSfb { RelationId = 200, VolatileSectionOffset = 70000, RetainSectionOffset = 300 });
+            var hoist = CreateTypeObject(200, "Drive", Softdatatype.S7COMMP_SOFTDATATYPE_STRUCT,
+                new POffsetInfoType_FbSfb { RelationId = 300, VolatileSectionOffset = 7712, RetainSectionOffset = 100 });
+            var drive = CreateTypeObject(300, "Position", Softdatatype.S7COMMP_SOFTDATATYPE_DINT,
+                new POffsetInfoType_Std { OptimizedAddress = 88, NonoptimizedAddress = 25708 });
+            drive.VartypeList.Elements[0].BitoffsetinfoFlags = retain ? (byte)0x80 : (byte)0;
+            var browser = new Browser();
+            browser.AddBlockNode(eNodeType.Root, "Axis", 0x8a0e000f, 100);
+            browser.SetTypeInfoContainerObjects(new List<PObject> { root, hoist, drive });
+            browser.BuildTree();
+            browser.BuildFlatList();
+            var variable = Assert.Single(browser.GetVarInfoList());
+            Assert.Equal(expected, variable.OptAddress);
+            Assert.Equal(25708u, variable.NonOptAddress);
+        }
+
         /// <summary>
         /// Builds and executes a browser over one synthetic primitive PLC member.
         /// </summary>

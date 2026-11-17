@@ -14,6 +14,7 @@ namespace S7CommPlusDriver
         public byte[] ClientData { get; set; }
         public string JobName { get; set; } = "S7pDriver_TisTraceJob";
         public string LastLifecycleStage { get; internal set; } = "";
+        internal bool ActivateOnCreate { get; set; } = true;
 
         internal S7CommPlusTisTraceRequest Clone()
         {
@@ -24,6 +25,7 @@ namespace S7CommPlusDriver
                 InterpretationBlob = (byte[])(InterpretationBlob ?? Array.Empty<byte>()).Clone(),
                 LargeBufferSizeUsed = LargeBufferSizeUsed,
                 UseContinuingJob = UseContinuingJob,
+                ActivateOnCreate = ActivateOnCreate,
                 ClientData = ClientData == null ? null : (byte[])ClientData.Clone(),
                 JobName = String.IsNullOrWhiteSpace(JobName) ? "S7pDriver_TisTraceJob" : JobName,
                 LastLifecycleStage = LastLifecycleStage ?? ""

@@ -641,6 +641,10 @@ await client.DeleteTraceAsync(selected.Reference);
 ```
 
 Creation, activation, deactivation, job deletion, and stored-measurement deletion require `WriteEnabled = true`.
+`OpenTisTraceAsync` activates the new job by default. To install it inactive for inspection before activation, pass
+`new S7CommPlusSubscriptionOptions { ActivateTisTraceOnCreate = false }`, then call
+`ActivateTraceAsync(subscription.TraceReference)` when ready. Disposing the subscription only detaches locally;
+it does not remove or deactivate the PLC-owned job.
 Discovery and attachment are read-only. With `AutoReconnect`, an active raw attachment rediscovers its PLC-owned job
 and recreates the notification subscription after a transient connection failure. A waiting trace may already expose a
 pretrigger ring buffer, so use `S7CommPlusTisTraceNotification.IsCompleted` rather than `HasResultData` to decide that

@@ -2612,6 +2612,43 @@ namespace S7CommPlusDriver.Tests
             Assert.Equal(new byte[] { 4 }, captured.ClientData);
         }
 
+        [Theory]
+        [InlineData(null, true)]
+        [InlineData(true, true)]
+        [InlineData(false, false)]
+        public async Task RawTisTraceCreationPreservesTheRequestedActivationMode(bool? activateOnCreate, bool expected)
+        {
+            S7CommPlusTisTraceRequest? captured = null;
+            var fake = new FakeS7CommPlusSession
+            {
+                CreateTisTraceSubscriptionHandler = request =>
+                {
+                    captured = request;
+                    return 0;
+                },
+                WaitForTisTraceSubscriptionHandler = _ =>
+                    (S7Consts.errCliJobTimeout, new List<S7CommPlusTisTraceNotification>())
+            };
+            var client = CreateClient(fake, writeEnabled: true);
+            var request = new S7CommPlusTisTraceRequest
+            {
+                RequestBlob = new byte[] { 1 },
+                TriggerBlob = new byte[] { 2 },
+                InterpretationBlob = new byte[] { 3 }
+            };
+            var options = activateOnCreate.HasValue ? FastSubscriptionOptions() : null;
+            if (options != null)
+                options.ActivateTisTraceOnCreate = activateOnCreate!.Value;
+
+            var openTask = client.OpenTisTraceAsync(request, options);
+            if (options != null)
+                options.ActivateTisTraceOnCreate = !activateOnCreate!.Value;
+            await using var subscription = await openTask;
+
+            Assert.NotNull(captured);
+            Assert.Equal(expected, captured!.ActivateOnCreate);
+        }
+
         [Fact]
         public async Task RawTisTraceCreationRequiresWriteEnabled()
         {

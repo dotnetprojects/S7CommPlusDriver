@@ -98,6 +98,8 @@ namespace S7CommPlusDriver
         /// <param name="containsIndexedArray">Whether the path contains an array element selected by an index.</param>
         /// <param name="parentHmiVisible">Whether every containing member is visible to HMI engineering.</param>
         /// <param name="parentHmiAccessible">Whether every containing member permits HMI access.</param>
+        /// <param name="fbRetainOffset">The accumulated retain-section offset of containing FB instances.</param>
+        /// <param name="fbVolatileOffset">The accumulated volatile-section offset of containing FB instances.</param>
         private void AddFlatSubnodes(
             Node node,
             string names,
@@ -107,12 +109,19 @@ namespace S7CommPlusDriver
             List<S7CommPlusSymbolCrc.PathSegment> crcPath,
             bool containsIndexedArray,
             bool parentHmiVisible,
-            bool parentHmiAccessible)
+            bool parentHmiAccessible,
+            uint fbRetainOffset = 0,
+            uint fbVolatileOffset = 0)
         {
             var hmiVisible = parentHmiVisible && (node.Vte?.GetAttributeFlagHmiVisible() ?? true);
             var hmiAccessible = parentHmiAccessible && (node.Vte?.GetAttributeFlagHmiAccessible() ?? true);
             containsIndexedArray = containsIndexedArray || node.NodeType == eNodeType.Array || node.NodeType == eNodeType.StructArray;
             var nextCrcPath = crcPath;
+            if (node.Vte?.OffsetInfoType is POffsetInfoType_FbSfb fb)
+            {
+                fbRetainOffset = checked(fbRetainOffset + fb.RetainSectionOffset);
+                fbVolatileOffset = checked(fbVolatileOffset + fb.VolatileSectionOffset);
+            }
             switch (node.NodeType)
             {
                 case eNodeType.Root:
@@ -190,6 +199,9 @@ namespace S7CommPlusDriver
                         info.OptAddress = OptOffset + node.Vte.OffsetInfoType.OptimizedAddress;
                         info.NonOptAddress = NonOptOffset + node.Vte.OffsetInfoType.NonoptimizedAddress;
                     }
+                    // Multi-instance FB storage is split into retain and volatile sections.
+                    info.OptAddress = checked(info.OptAddress +
+                        (node.Vte.GetBitoffsetinfoFlagRetain() ? fbRetainOffset : fbVolatileOffset));
                     // Special case #1:
                     // There is a strange behaviour when transmitting bitoffsets in not-optmized DBs.
                     // If a bool is inside a struct, the offsetinformation is in the attributes (last 3 bits.
@@ -259,7 +271,9 @@ namespace S7CommPlusDriver
                             nextCrcPath,
                             containsIndexedArray,
                             hmiVisible,
-                            hmiAccessible);
+                            hmiAccessible,
+                            fbRetainOffset,
+                            fbVolatileOffset);
                     }
                     else
                     {
@@ -272,7 +286,9 @@ namespace S7CommPlusDriver
                             nextCrcPath,
                             containsIndexedArray,
                             hmiVisible,
-                            hmiAccessible);
+                            hmiAccessible,
+                            fbRetainOffset,
+                            fbVolatileOffset);
                     }
                 }
             }

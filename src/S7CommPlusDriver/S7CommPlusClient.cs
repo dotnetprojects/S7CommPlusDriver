@@ -934,6 +934,7 @@ namespace S7CommPlusDriver
             var traceRequest = request.Clone();
             traceRequest.Validate();
             var subscriptionOptions = (options ?? new S7CommPlusSubscriptionOptions()).Clone();
+            traceRequest.ActivateOnCreate = subscriptionOptions.ActivateTisTraceOnCreate;
             subscriptionOptions.Validate(requireCycleTime: false);
             S7CommPlusTisTraceSubscription subscription = null;
             var operationTimeout = _operationTimeout.Value ?? _options.RequestTimeout;

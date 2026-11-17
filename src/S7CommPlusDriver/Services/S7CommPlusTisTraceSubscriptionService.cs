@@ -317,15 +317,18 @@ namespace S7CommPlusDriver
             if (result != 0)
                 return FailCreation(request, state, result);
 
-            request.LastLifecycleStage = "activate TIS trace job";
-            result = _requests.SetVariableAcknowledged(
-                state.JobObjectId,
-                Ids.AbstractTisJob_TisJobEnabledConf,
-                new ValueBool(true));
-            if (result != 0)
-                return FailCreation(request, state, result);
+            if (request.ActivateOnCreate)
+            {
+                request.LastLifecycleStage = "activate TIS trace job";
+                result = _requests.SetVariableAcknowledged(
+                    state.JobObjectId,
+                    Ids.AbstractTisJob_TisJobEnabledConf,
+                    new ValueBool(true));
+                if (result != 0)
+                    return FailCreation(request, state, result);
+            }
 
-            request.LastLifecycleStage = "started";
+            request.LastLifecycleStage = request.ActivateOnCreate ? "started" : "installed inactive";
             jobObjectId = state.JobObjectId;
             subscriptionObjectId = state.SubscriptionObjectId;
             _subscriptions[subscriptionObjectId] = state;

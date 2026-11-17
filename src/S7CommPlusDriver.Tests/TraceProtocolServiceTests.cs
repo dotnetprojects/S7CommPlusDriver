@@ -115,6 +115,32 @@ namespace S7CommPlusDriver.Tests
             Assert.Contains("partial trace job 0x00000064 was removed", traceRequest.LastLifecycleStage);
         }
 
+        [Fact]
+        public void InactiveInstallationNeverSendsEnableAndCanBeActivatedSeparately()
+        {
+            var session = new SuccessfulCreateSession();
+            var service = new S7CommPlusTisTraceSubscriptionService(session);
+            var request = CreateRequest(useContinuingJob: true);
+            request.ActivateOnCreate = false;
+            Assert.False(request.Clone().ActivateOnCreate);
+
+            Assert.Equal(0, service.Create(request, out var jobId, out _));
+            Assert.Equal("installed inactive", request.LastLifecycleStage);
+            Assert.Collection(session.Requests,
+                item => Assert.IsType<CreateObjectRequest>(item),
+                item => Assert.IsType<CreateObjectRequest>(item),
+                item => AssertSetVariable(item, 201, Ids.TisSubscriptionRef_IncrementNotificationCredit, 1));
+            Assert.Equal(0, service.SetEnabled(jobId, true));
+            AssertSetVariable(session.Requests.Last(), jobId, Ids.AbstractTisJob_TisJobEnabledConf, 1);
+        }
+
+        [Fact]
+        public void SubscriptionClonePreservesExplicitInactiveInstallation()
+        {
+            var options = new S7CommPlusSubscriptionOptions { ActivateTisTraceOnCreate = false };
+            Assert.False(options.Clone().ActivateTisTraceOnCreate);
+        }
+
         private static void AssertSetVariable(IS7pRequest request, uint objectId, uint address, byte expectedValue)
         {
             var set = Assert.IsType<SetVariableRequest>(request);

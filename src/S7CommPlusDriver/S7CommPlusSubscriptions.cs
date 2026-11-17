@@ -26,6 +26,8 @@ namespace S7CommPlusDriver
         public short CreditLimitStep { get; set; } = S7CommPlusProtocolConstants.DefaultSubscriptionCreditLimitStep;
         public int MaxConsecutiveTimeoutsBeforeFault { get; set; }
         public bool DeleteOnStop { get; set; } = true;
+        /// <summary>Activate newly created TIS trace jobs immediately. False installs them inactive for explicit activation.</summary>
+        public bool ActivateTisTraceOnCreate { get; set; } = true;
 
         internal int NotificationTimeoutMilliseconds => checked((int)NotificationTimeout.TotalMilliseconds);
 

@@ -129,7 +129,9 @@ var stored = await client.GetStoredTraceMeasurementsAsync(includeResultData: tru
 await client.DeleteTraceAsync(selected.Reference);
 ```
 
-`OpenTisTraceAsync` installs and activates the PLC job. Disposing either subscription detaches locally but does not
+`OpenTisTraceAsync` installs and activates the PLC job by default. Pass
+`new S7CommPlusSubscriptionOptions { ActivateTisTraceOnCreate = false }` to install it inactive, then call
+`ActivateTraceAsync(subscription.TraceReference)` explicitly when ready. Disposing either subscription detaches locally but does not
 remove or deactivate the job. Trace mutation and deletion require `WriteEnabled = true`; discovery and attachment do
 not. Result buffers are opt-in through `S7CommPlusTraceQueryOptions.IncludeResultData`. Use notification
 `IsCompleted` to distinguish a finished recording from an allocated pretrigger buffer.
