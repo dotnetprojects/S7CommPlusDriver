@@ -28,6 +28,8 @@
             this.groupBox1 = new System.Windows.Forms.GroupBox();
             this.tbUser = new System.Windows.Forms.TextBox();
             this.label7 = new System.Windows.Forms.Label();
+            this.label8 = new System.Windows.Forms.Label();
+            this.cbBrowseMode = new System.Windows.Forms.ComboBox();
             this.lbStatus = new System.Windows.Forms.Label();
             this.label6 = new System.Windows.Forms.Label();
             this.btnDisconnect = new System.Windows.Forms.Button();
@@ -54,6 +56,8 @@
             // 
             this.groupBox1.Controls.Add(this.tbUser);
             this.groupBox1.Controls.Add(this.label7);
+            this.groupBox1.Controls.Add(this.cbBrowseMode);
+            this.groupBox1.Controls.Add(this.label8);
             this.groupBox1.Controls.Add(this.btnDisconnect);
             this.groupBox1.Controls.Add(this.btnConnect);
             this.groupBox1.Controls.Add(this.label2);
@@ -62,7 +66,7 @@
             this.groupBox1.Controls.Add(this.tbIpAddress);
             this.groupBox1.Location = new System.Drawing.Point(12, 12);
             this.groupBox1.Name = "groupBox1";
-            this.groupBox1.Size = new System.Drawing.Size(171, 165);
+            this.groupBox1.Size = new System.Drawing.Size(171, 201);
             this.groupBox1.TabIndex = 0;
             this.groupBox1.TabStop = false;
             this.groupBox1.Text = "Connection";
@@ -73,6 +77,28 @@
             this.tbUser.Name = "tbUser";
             this.tbUser.Size = new System.Drawing.Size(151, 20);
             this.tbUser.TabIndex = 1;
+            // 
+            // label8
+            // 
+            this.label8.AutoSize = true;
+            this.label8.Location = new System.Drawing.Point(6, 160);
+            this.label8.Name = "label8";
+            this.label8.Size = new System.Drawing.Size(69, 13);
+            this.label8.TabIndex = 9;
+            this.label8.Text = "Browse mode:";
+            // 
+            // cbBrowseMode
+            // 
+            this.cbBrowseMode.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.cbBrowseMode.FormattingEnabled = true;
+            this.cbBrowseMode.Items.AddRange(new object[] {
+            "Flat (BrowseAsync)",
+            "Per level (S7CommPlusSymbolBrowser)"});
+            this.cbBrowseMode.Location = new System.Drawing.Point(9, 176);
+            this.cbBrowseMode.Name = "cbBrowseMode";
+            this.cbBrowseMode.Size = new System.Drawing.Size(151, 21);
+            this.cbBrowseMode.TabIndex = 5;
+            this.cbBrowseMode.SelectedIndexChanged += new System.EventHandler(this.cbBrowseMode_SelectedIndexChanged);
             // 
             // label7
             // 
@@ -161,10 +187,10 @@
             | System.Windows.Forms.AnchorStyles.Right)));
             this.treeView1.ImageIndex = 0;
             this.treeView1.ImageList = this.imageListTreeIcons;
-            this.treeView1.Location = new System.Drawing.Point(12, 183);
+            this.treeView1.Location = new System.Drawing.Point(12, 219);
             this.treeView1.Name = "treeView1";
             this.treeView1.SelectedImageIndex = 0;
-            this.treeView1.Size = new System.Drawing.Size(776, 255);
+            this.treeView1.Size = new System.Drawing.Size(776, 219);
             this.treeView1.TabIndex = 9;
             this.treeView1.AfterExpand += new System.Windows.Forms.TreeViewEventHandler(this.treeView1_AfterExpand);
             this.treeView1.AfterSelect += new System.Windows.Forms.TreeViewEventHandler(this.treeView1_AfterSelect);
@@ -340,6 +366,8 @@
         private System.Windows.Forms.ImageList imageListTreeIcons;
         private System.Windows.Forms.TextBox tbUser;
         private System.Windows.Forms.Label label7;
+        private System.Windows.Forms.Label label8;
+        private System.Windows.Forms.ComboBox cbBrowseMode;
     }
 }
 
