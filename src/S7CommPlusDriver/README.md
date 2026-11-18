@@ -69,6 +69,25 @@ var elements = await client.BrowseAsync(new S7CommPlusBrowseOptions
 });
 ```
 
+## Browsing the Data-Block Interface Tree
+
+`S7CommPlusSymbolBrowser` browses one level per call along the data-block interface instead of
+returning the complete flat symbol catalog. It reads the block list once, caches the interface XML
+of the currently browsed data block, and resolves symbolic array bounds through `GetTagBySymbolAsync`:
+
+```csharp
+var browser = new S7CommPlusSymbolBrowser(client);
+var blocks = await browser.BrowseNodeAsync(null);                  // all data blocks
+var members = await browser.BrowseNodeAsync(blocks[0].SymbolPath); // one level below
+```
+
+Each `S7CommPlusBrowseNode` reports the declared PLC type name, the S7 soft-datatype (or
+`IsStructure`), array/string metadata, child availability, and the accumulated access sequence of
+leaf nodes. System types such as `R_TRIG` or `TON_TIME` are not embedded in the interface XML; their
+members come from the flat symbol snapshot. Assign `VariableSnapshotProvider` to reuse an
+already loaded `BrowseAsync()` snapshot instead of browsing the PLC again. Call `ClearCache()` after a
+reconnect or a PLC program change.
+
 ## Bulk Symbol Resolution and Comments
 
 `GetTagsBySymbolsAsync(symbols)` resolves a configured tag set with one catalog browse and returns a case-sensitive dictionary of the symbols found. It also resolves fully indexed primitive-array elements from aggregate array metadata. The catalog is retained across reconnects; call `InvalidateSymbolCatalogAsync()` after detecting a PLC program-structure change.
