@@ -208,8 +208,18 @@ namespace S7CommPlusDriver
 
             if (!LegacyChallengeHandshake.TryParse(createObjectPdu, createObjRes, out var challenge))
             {
-                m_client.Disconnect();
-                return S7Consts.errS7CommPlusLegacyAuthentication;
+                // Older firmware (e.g. S7-1200 V2.2) accepts CreateObject but never presents a CSI challenge.
+                options.Logger.LogInformation(
+                    "Legacy S7CommPlus PLC {Address}:{Port} returned no CSI challenge; continuing with plaintext session setup.",
+                    options.Address,
+                    options.Port);
+                var plaintextResult = CompletePlaintextSession(options, createObjRes);
+                if (plaintextResult == 0)
+                {
+                    m_NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
+                    options.NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
+                }
+                return plaintextResult;
             }
             options.Logger.LogDebug(
                 "Legacy S7CommPlus CSI challenge received from PLC {Address}:{Port}: session {SessionId:X8}, Harpo family {KeyFamily}, OMS family {OmsKeyFamily}, fingerprint {Fingerprint}, auth frame {AuthenticationFrameKind}.",
@@ -505,18 +515,6 @@ namespace S7CommPlusDriver
             var request = new CreateObjectRequest(ProtocolVersion.V1, 0, false);
             request.SetTiaServerSessionData(serverSessionRole);
             return SendS7plusFunctionObjectAndWait(request, m_ReadTimeout);
-        }
-
-        private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
-        {
-            try
-            {
-                return createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct;
-            }
-            catch
-            {
-                return null;
-            }
         }
 
         private bool TryCreateLegacyAuthentication(
@@ -836,6 +834,18 @@ namespace S7CommPlusDriver
         {
         }
 #endif
+
+        private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
+        {
+            try
+            {
+                return createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct;
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
         private static void AppendJson(StringBuilder builder, string name, long value)
         {

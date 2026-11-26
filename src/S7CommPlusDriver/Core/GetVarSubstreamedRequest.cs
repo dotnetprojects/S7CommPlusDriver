@@ -33,6 +33,11 @@ namespace S7CommPlusDriver
         public ushort SequenceNumber { get; set; }
         public uint IntegrityId { get; set; }
         public bool WithIntegrityId { get; set; }
+        /// <summary>
+        /// Older plaintext V2 firmware (e.g. S7-1200 V2.2) encodes the integrity id as a fixed UInt32
+        /// and omits the V3-only unknown1 field. Modern/TLS V2 keeps the previous VLQ framing.
+        /// </summary>
+        public bool UseOldFirmwareV2IntegrityFraming { get; set; }
 
         public GetVarSubstreamedRequest(byte protocolVersion)
         {
@@ -63,9 +68,17 @@ namespace S7CommPlusDriver
             ret += S7p.EncodeByte(buffer, 1); // Array size
             ret += S7p.EncodeUInt32Vlq(buffer, Address);
 
+            // S7-1200 FW2.2 plaintext (TIA): ObjectQualifier uses a fixed UDInt KeyQualifier=1,
+            // omits the attribute-list terminator, then a fixed UInt32 integrity id (typically 0).
+            if (UseOldFirmwareV2IntegrityFraming && ProtocolVersion == S7CommPlusDriver.ProtocolVersion.V2)
+            {
+                ret += EncodeOldFirmwareObjectQualifierAndIntegrity(buffer);
+                return ret;
+            }
+
             ret += S7p.EncodeObjectQualifier(buffer);
             // 2 Bytes unknown, decoded by the Wireshark S7CommPlus dissector as
-            // getvarsubstr.req_unknown1. Captured legacy V3 traffic uses 0x0001.
+            // getvarsubstr.req_unknown1. Captured legacy V3 and modern TLS V2 traffic uses 0x0001.
             ret += S7p.EncodeUInt16(buffer, S7CommPlusProtocolConstants.GetVarSubstreamedRequestUnknown1);
 
             if (WithIntegrityId)
@@ -80,6 +93,27 @@ namespace S7CommPlusDriver
                 ret += S7p.EncodeByte(buffer, 0);
             }
 
+            return ret;
+        }
+
+        private int EncodeOldFirmwareObjectQualifierAndIntegrity(Stream buffer)
+        {
+            int ret = 0;
+            ret += S7p.EncodeUInt32(buffer, Ids.ObjectQualifier);
+
+            ret += S7p.EncodeUInt32Vlq(buffer, Ids.ParentRID);
+            ret += new ValueRID(0).Serialize(buffer);
+
+            ret += S7p.EncodeUInt32Vlq(buffer, Ids.CompositionAID);
+            ret += new ValueAID(0).Serialize(buffer);
+
+            ret += S7p.EncodeUInt32Vlq(buffer, Ids.KeyQualifier);
+            ret += S7p.EncodeByte(buffer, 0); // flags
+            ret += S7p.EncodeByte(buffer, Datatype.UDInt);
+            ret += S7p.EncodeUInt32(buffer, 1); // fixed (non-VLQ) KeyQualifier value used by FW2.2
+
+            // No 0x00 attribute-list terminator on this firmware path.
+            ret += S7p.EncodeUInt32(buffer, WithIntegrityId ? IntegrityId : 0u);
             return ret;
         }
 

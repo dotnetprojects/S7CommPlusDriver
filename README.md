@@ -6,7 +6,7 @@
 [![Release](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/dotnetprojects/S7CommPlusDriver.svg)](LICENSE)
 
-Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication available for pre-V17/pre-TLS CPUs on .NET Framework 4.8, `net8.0`, and `net9.0`. The package targets `net48`, `net6.0`, `net8.0`, and `net9.0`.
+Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication for pre-V17/pre-TLS CPUs and a plaintext fallback for older firmware such as S7-1200 V2.2. Legacy challenge authentication is available on .NET Framework 4.8, `net8.0`, and `net9.0`. The package targets `net48`, `net6.0`, `net8.0`, and `net9.0`.
 
 The supported high-level API for new applications is `S7CommPlusClient`. Lower-level protocol and transport types remain available for compatibility and diagnostics, but production code should use the client surface.
 
@@ -28,27 +28,30 @@ write protection.
 - Read/browse reconnect retry support
 - Explicit write enablement so accidental PLC writes are blocked by default
 - Bounded disconnect behavior and better socket disconnect detection
-- TLS and legacy S7CommPlus challenge authentication modes
+- TLS, legacy S7CommPlus challenge, and plaintext authentication modes
 - No library writes to `Console`
 
 ## Requirements
 
 ### PLC / CPU
 
-The `net48`/`net8.0`/`net9.0` default first tries secure PG/HMI communication over TLS and,
-if the PLC rejects it, reconnects with legacy challenge authentication:
+The `net48`/`net8.0`/`net9.0` default first tries secure PG/HMI communication over TLS,
+then legacy challenge authentication, and finally unencrypted plaintext when the PLC
+omits a CSI challenge:
 
 - S7-1200 firmware V4.3 or newer, TLS 1.3 from V4.5
 - S7-1500 firmware V2.9 or newer
+- Older S7-1200 firmware such as V2.2 via `S7CommPlusSecurityMode.Plaintext`
 - Software controllers supported by the upstream protocol implementation
 
-For TLS, the PLC project must be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer. Legacy challenge mode is intended for older projects and CPUs without that TLS configuration.
+For TLS, the PLC project must be configured with a TIA Portal version that supports secure communication, typically TIA Portal V17 or newer. Legacy challenge mode is intended for older projects and CPUs without that TLS configuration. Plaintext mode matches TIA against CPUs that reject `InitSsl` and never present a CSI challenge.
 
 For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
-`net48`/`net8.0`/`net9.0` falls back to legacy authentication. Set
-`S7CommPlusSecurityMode.LegacyChallenge` to skip the initial TLS attempt. Legacy
-mode uses HarpoS7-derived challenge authentication and packet digests. `net6.0`
-builds remain TLS-only and fail fast if legacy mode is requested.
+`net48`/`net8.0`/`net9.0` falls back to legacy authentication and then plaintext.
+Set `S7CommPlusSecurityMode.LegacyChallenge` or `S7CommPlusSecurityMode.Plaintext`
+to skip earlier attempts. Legacy mode uses HarpoS7-derived challenge authentication
+and packet digests. `net6.0` builds support TLS and plaintext; legacy challenge mode
+is unavailable there.
 
 Most legacy PLCs report a complete Siemens public-key fingerprint. If a PLC
 reports only its two-character key family, the driver automatically tries

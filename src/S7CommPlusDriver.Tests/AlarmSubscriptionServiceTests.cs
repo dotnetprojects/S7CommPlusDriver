@@ -63,6 +63,7 @@ namespace S7CommPlusDriver.Tests
             /// Gets an empty receive buffer because the simulated send fails before decoding.
             /// </summary>
             public MemoryStream ReceivedPdu { get; } = new MemoryStream();
+            public bool IsPlaintextSession => false;
 
             /// <summary>
             /// Rejects an unexpected fire-and-forget request.

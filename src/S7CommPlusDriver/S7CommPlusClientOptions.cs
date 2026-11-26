@@ -172,12 +172,12 @@ namespace S7CommPlusDriver
             }
 #endif
 #if !HARPOS7_LEGACY_AUTH
-            if (SecurityMode != S7CommPlusSecurityMode.Tls)
+            if (SecurityMode == S7CommPlusSecurityMode.LegacyChallenge)
             {
                 throw new S7CommPlusUnsupportedSecurityModeException(
                     SecurityMode,
                     $"{Address}:{Port}",
-                    "Legacy S7CommPlus challenge authentication is available only on net8.0 and later builds.");
+                    "Legacy S7CommPlus challenge authentication is available only on net48, net8.0, and net9.0 builds.");
             }
 #endif
             _ = ConnectTimeoutMilliseconds;

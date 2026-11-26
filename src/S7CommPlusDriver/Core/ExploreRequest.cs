@@ -63,7 +63,8 @@ namespace S7CommPlusDriver
             ret += S7p.EncodeUInt32(buffer, ExploreId);
             ret += S7p.EncodeUInt32Vlq(buffer, ExploreRequestId);
             ret += S7p.EncodeByte(buffer, ExploreChildsRecursive);
-            ret += S7p.EncodeByte(buffer, 1);                                   // unknown 0 or 1?
+            // Captured TIA traffic on S7-1200 FW2.2 uses 0 here when integrity is omitted.
+            ret += S7p.EncodeByte(buffer, WithIntegrityId ? (byte)1 : (byte)0);
             ret += S7p.EncodeByte(buffer, ExploreParents);
 
             if (FilterData != null)
@@ -93,8 +94,11 @@ namespace S7CommPlusDriver
             // Fill?
             ret += S7p.EncodeUInt32(buffer, 0);
             // Plcsim V13 with Integrity Id needs here 5 Bytes, with 4 doesn't work (not responding).
-            // But with my old 1200er FW2.2 it's still working with 4.
-            ret += S7p.EncodeByte(buffer, 0);
+            // Old S7-1200 FW2.2 (and TIA against it) uses only the 4-byte fill.
+            if (WithIntegrityId)
+            {
+                ret += S7p.EncodeByte(buffer, 0);
+            }
 
             return ret;
         }

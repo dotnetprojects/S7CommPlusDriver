@@ -45,7 +45,7 @@ namespace S7CommPlusDriver.Internal
                 return result;
             }
 
-            response = ExploreResponse.DeserializeFromPdu(_session.ReceivedPdu, true);
+            response = ExploreResponse.DeserializeFromPdu(_session.ReceivedPdu, request.WithIntegrityId);
             result = _session.CheckResponse(request, response);
             if (result != 0) return result;
             return response.ReturnValue == 0 ? 0 : S7Consts.errCliFunctionRefused;

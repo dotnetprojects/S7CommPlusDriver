@@ -173,6 +173,7 @@ namespace S7CommPlusDriver.Tests
             public uint SessionId => 1;
             public uint SessionId2 => 2;
             public MemoryStream ReceivedPdu { get; } = new MemoryStream();
+            public bool IsPlaintextSession => false;
             public int SendFunction(IS7pRequest request) => throw new NotSupportedException();
 
             public int SendFunctionAndWait(IS7pRequest request)
@@ -212,6 +213,7 @@ namespace S7CommPlusDriver.Tests
             public uint SessionId => 7;
             public uint SessionId2 => 8;
             public MemoryStream ReceivedPdu { get; } = new MemoryStream();
+            public bool IsPlaintextSession => false;
             public int SendFunction(IS7pRequest request) => throw new NotSupportedException();
 
             public int SendFunctionAndWait(IS7pRequest request)

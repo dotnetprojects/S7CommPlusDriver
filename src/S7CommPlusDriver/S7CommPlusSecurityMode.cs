@@ -4,6 +4,11 @@ namespace S7CommPlusDriver
     {
         Tls = 0,
         LegacyChallenge = 1,
-        Auto = 2
+        Auto = 2,
+        /// <summary>
+        /// Unencrypted S7CommPlus without CSI/Harpo challenge authentication.
+        /// Used by older S7-1200 firmware such as V2.2 that rejects InitSsl and does not present a CSI challenge.
+        /// </summary>
+        Plaintext = 3
     }
 }

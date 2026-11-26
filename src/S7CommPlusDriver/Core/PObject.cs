@@ -75,6 +75,31 @@ namespace S7CommPlusDriver
             VarnameList = namelist;
         }
 
+        /// <summary>
+        /// Appends one legacy TagDescription (0xA7) entry as a VartypeList/VarnameList pair.
+        /// </summary>
+        public void AddTagDescription(string name, PVartypeListElement element)
+        {
+            if (VartypeList == null)
+            {
+                VartypeList = new PVartypeList { Elements = new List<PVartypeListElement>(), FirstId = 0 };
+            }
+            if (VarnameList == null)
+            {
+                VarnameList = new PVarnameList { Names = new List<string>() };
+            }
+            if (VartypeList.Elements == null)
+            {
+                VartypeList.Elements = new List<PVartypeListElement>();
+            }
+            if (VarnameList.Names == null)
+            {
+                VarnameList.Names = new List<string>();
+            }
+            VartypeList.Elements.Add(element);
+            VarnameList.Names.Add(name ?? string.Empty);
+        }
+
         public void AddObject(PObject obj)
         {
             // ClassId is not unique by itself, so child objects are keyed by

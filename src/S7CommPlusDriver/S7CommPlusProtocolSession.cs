@@ -183,11 +183,38 @@ namespace S7CommPlusDriver
                 funcObj.SessionId = m_SessionId;
             }
 
+            // Older plaintext firmware (S7-1200 V2.2) rejects modern V2 integrity trailers on several PDUs.
+            if (m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext)
+            {
+                if (funcObj is ExploreRequest exploreRequest)
+                {
+                    exploreRequest.WithIntegrityId = false;
+                }
+                else if (funcObj is GetMultiVariablesRequest getMultiVariablesRequest)
+                {
+                    getMultiVariablesRequest.WithIntegrityId = false;
+                }
+                else if (funcObj is GetVarSubstreamedRequest getVarSubstreamedRequest)
+                {
+                    // FW2.2 TIA captures use a fixed UInt32 integrity trailer of 0 (no VLQ, no fill).
+                    getVarSubstreamedRequest.UseOldFirmwareV2IntegrityFraming = true;
+                }
+            }
+
             // Insert SequenceNumber and IntegrityId, if neccessary for object type and state of communication
             funcObj.SequenceNumber = GetNextSequenceNumber();
             if (funcObj.WithIntegrityId)
             {
-                funcObj.IntegrityId = GetNextIntegrityId(funcObj.FunctionCode);
+                if (funcObj is GetVarSubstreamedRequest oldGvs
+                    && oldGvs.UseOldFirmwareV2IntegrityFraming)
+                {
+                    // Match TIA plaintext GetVarSubstreamed trailers against S7-1200 FW2.2.
+                    funcObj.IntegrityId = 0;
+                }
+                else
+                {
+                    funcObj.IntegrityId = GetNextIntegrityId(funcObj.FunctionCode);
+                }
             }
             m_LastSentRequestForWait = funcObj;
 
@@ -1132,6 +1159,8 @@ namespace S7CommPlusDriver
                     return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
                 case S7CommPlusSecurityMode.LegacyChallenge:
                     return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                case S7CommPlusSecurityMode.Plaintext:
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Plaintext);
                 case S7CommPlusSecurityMode.Auto:
                     var tlsResult = ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
                     if (tlsResult == 0)
@@ -1140,7 +1169,14 @@ namespace S7CommPlusDriver
                     }
                     options.Logger.LogInformation("TLS connect to PLC {Address}:{Port} failed with {ErrorCode}; trying legacy challenge authentication.", options.Address, options.Port, tlsResult);
                     TryDisconnect(options.DisconnectTimeoutMilliseconds);
-                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                    var legacyResult = ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                    if (legacyResult == 0)
+                    {
+                        return 0;
+                    }
+                    options.Logger.LogInformation("Legacy challenge connect to PLC {Address}:{Port} failed with {ErrorCode}; trying plaintext S7CommPlus.", options.Address, options.Port, legacyResult);
+                    TryDisconnect(options.DisconnectTimeoutMilliseconds);
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Plaintext);
                 default:
                     return S7Consts.errCliInvalidParams;
             }
@@ -1148,14 +1184,36 @@ namespace S7CommPlusDriver
 
         private int ConnectAndSetNegotiatedMode(S7CommPlusClientOptions options, S7CommPlusSecurityMode securityMode)
         {
-            var result = securityMode == S7CommPlusSecurityMode.Tls
-                ? ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend)
-                : ConnectLegacyChallenge(options);
+            options.NegotiatedSecurityMode = null;
+            int result;
+            switch (securityMode)
+            {
+                case S7CommPlusSecurityMode.Tls:
+                    result = ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend);
+                    break;
+                case S7CommPlusSecurityMode.LegacyChallenge:
+                    result = ConnectLegacyChallenge(options);
+                    break;
+                case S7CommPlusSecurityMode.Plaintext:
+                    result = ConnectPlaintext(options);
+                    break;
+                default:
+                    return S7Consts.errCliInvalidParams;
+            }
+
             if (result == 0)
             {
                 ApplyRequestTimeout(options.RequestTimeoutMilliseconds);
-                m_NegotiatedSecurityMode = securityMode;
-                options.NegotiatedSecurityMode = securityMode;
+                // Legacy challenge may negotiate down to plaintext when the PLC omits a CSI challenge.
+                if (options.NegotiatedSecurityMode == null)
+                {
+                    m_NegotiatedSecurityMode = securityMode;
+                    options.NegotiatedSecurityMode = securityMode;
+                }
+                else
+                {
+                    m_NegotiatedSecurityMode = options.NegotiatedSecurityMode.Value;
+                }
             }
             return result;
         }
@@ -1614,6 +1672,7 @@ namespace S7CommPlusDriver
 
                 var getMultiVarRes = GetMultiVariablesReadResponse.ReadHeader(m_ReceivedPDU);
                 if (getMultiVarRes == null) return S7Consts.errIsoInvalidPDU4;
+                getMultiVarRes.WithIntegrityId = getMultiVarReq.WithIntegrityId;
                 res = getMultiVarRes.ReadItems(m_ReceivedPDU, values, errors, chunk_startIndex, count_perChunk);
                 if (res != 0) return res;
                 res = checkResponseWithIntegrity(getMultiVarReq, getMultiVarRes);
@@ -1840,7 +1899,11 @@ namespace S7CommPlusDriver
             // We want to know the following attributes
             exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
             exploreReq.AddressList.Add(Ids.Block_BlockNumber);
-            exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
+            // ASObjectES_Comment is absent from TIA explores against S7-1200 FW2.2 and can be refused there.
+            if (m_NegotiatedSecurityMode != S7CommPlusSecurityMode.Plaintext)
+            {
+                exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
+            }
 
             res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
@@ -1848,18 +1911,33 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
+            }
+            if (exploreRes.ReturnValue != 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLC program explore refused, ReturnValue=" + exploreRes.ReturnValue);
+                return S7Consts.errCliFunctionRefused;
+            }
+            if (exploreRes.Objects == null || exploreRes.Objects.Count == 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLC program explore returned no objects.");
+                return S7Consts.errCliFunctionRefused;
             }
 
             #endregion
 
             #region Evaluate all data blocks that then need to be browsed
 
-            var obj = exploreRes.Objects.First(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            var obj = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            if (obj == null)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLCProgram class object missing in explore response.");
+                return S7Consts.errCliFunctionRefused;
+            }
 
             foreach (var ob in obj.GetObjects())
             {
@@ -1869,7 +1947,9 @@ namespace S7CommPlusDriver
                         UInt32 relid = ob.RelationId;
                         UInt32 area = (relid >> 16);
                         UInt32 num = relid & 0xffff;
-                        if (area == 0x8a0e)
+                        // Classic S7-1200/1500 instance DBs use 0x8a0e. Older S7-1200 FW2.x
+                        // explores also report datablocks under 0x8a11.
+                        if (area == 0x8a0e || area == 0x8a11)
                         {
                             var name = (ValueWString)(ob.GetAttribute(Ids.ObjectVariableTypeName));
                             BrowseData data = new BrowseData();
@@ -1907,6 +1987,7 @@ namespace S7CommPlusDriver
             res = ReadValues(readlist, out values, out errors);
             if (res != 0)
             {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: ReadValues for DB type-info RIDs failed, res=" + res);
                 return res;
             }
             #endregion
@@ -1934,7 +2015,11 @@ namespace S7CommPlusDriver
             }
             // Remove elements with db_block_ti_relid == 0. This occurs e.g. on datablocks only present in load memory.
             // The informations can't be used any further (at least not for variable access).
+            var dbCountBeforeTiFilter = exploreData.Count;
             exploreData.RemoveAll(item => item.db_block_ti_relid == 0);
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - Browse: DB type-info RIDs kept {0}/{1}.",
+                exploreData.Count, dbCountBeforeTiFilter));
 
             foreach (var ed in exploreData)
             {
@@ -1961,23 +2046,40 @@ namespace S7CommPlusDriver
             res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: TypeInfo explore send/wait failed, res=" + res);
                 return res;
             }
             #endregion
 
             #region Process the response, and build the complete variables list
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
             }
-            var objs = exploreRes.Objects.First(o => o.ClassId == Ids.ClassOMSTypeInfoContainer);
+            if (exploreRes == null || exploreRes.Objects == null || exploreRes.Objects.Count == 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: TypeInfo explore returned no objects.");
+                return S7Consts.errCliFunctionRefused;
+            }
+            var objs = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.ClassOMSTypeInfoContainer);
+            if (objs == null)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: ClassOMSTypeInfoContainer missing. Classes=" +
+                    string.Join(",", exploreRes.Objects.Select(o => o.ClassId.ToString())));
+                return S7Consts.errCliFunctionRefused;
+            }
 
-            vars.SetTypeInfoContainerObjects(objs.GetObjects());
+            var typeInfoChildren = objs.GetObjects();
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - Browse: TypeInfo children={0}, DB nodes={1}.",
+                typeInfoChildren.Count, exploreData.Count));
+            vars.SetTypeInfoContainerObjects(typeInfoChildren);
             vars.BuildTree();
             vars.BuildFlatList();
             varInfoList = vars.GetVarInfoList();
+            Trace.WriteLine("S7CommPlusProtocolSession - Browse: Flat var count=" + varInfoList.Count);
             #endregion
 
             return 0;
@@ -2807,7 +2909,7 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
@@ -2911,7 +3013,7 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
@@ -2964,7 +3066,7 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
