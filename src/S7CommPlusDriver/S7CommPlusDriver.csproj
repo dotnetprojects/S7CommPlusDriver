@@ -18,7 +18,7 @@
       <Version Condition="'$(TargetFramework)' == 'net6.0'">8.0.3</Version>
       <Version Condition="'$(TargetFramework)' != 'net6.0'">10.0.12</Version>
     </PackageReference>
-    <PackageReference Include="ZlibCore" Version="2.0.2" />
+    <PackageReference Include="ZlibCore" Version="2.0.3" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
