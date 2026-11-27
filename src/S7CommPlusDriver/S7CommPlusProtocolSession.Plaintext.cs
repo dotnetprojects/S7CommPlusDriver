@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using Microsoft.Extensions.Logging;
 using S7CommPlusDriver.Internal;
 
@@ -39,14 +40,19 @@ namespace S7CommPlusDriver
                 options.Port);
 
             // TIA always probes InitSsl first. Old firmware answers with Error2; stay on plaintext.
-            res = ProbeInitSslForPlaintext();
+            res = ProbeInitSsl(out _);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
             }
 
-            res = SendPlaintextCreateObjectRequest(options.LegacySessionRole);
+            return ConnectAfterPlaintextProbe(options, elapsed, requireKnownFirmware: false);
+        }
+
+        private int ConnectAfterPlaintextProbe(S7CommPlusClientOptions options, int elapsed, bool requireKnownFirmware)
+        {
+            var res = SendPlaintextCreateObjectRequest(options.LegacySessionRole);
             if (res != 0)
             {
                 m_client.Disconnect();
@@ -61,7 +67,16 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
+            CreateObjectResponse createObjRes;
+            try
+            {
+                createObjRes = CreateObjectResponse.DeserializeFromPdu(m_ReceivedPDU);
+            }
+            catch (InvalidDataException)
+            {
+                m_client.Disconnect();
+                return S7Consts.errIsoInvalidPDU6;
+            }
             if (createObjRes == null || createObjRes.ObjectIds == null || createObjRes.ObjectIds.Count == 0)
             {
                 m_client.Disconnect();
@@ -77,6 +92,12 @@ namespace S7CommPlusDriver
                     createObjRes.ReturnValue);
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU6;
+            }
+
+            if (requireKnownFirmware && !MatchesOldFirmwarePlaintextSession(createObjRes))
+            {
+                m_client.Disconnect();
+                return S7Consts.errCliFirmwareNotSupported;
             }
 
             res = CompletePlaintextSession(options, createObjRes);
@@ -101,11 +122,11 @@ namespace S7CommPlusDriver
         }
 
         /// <summary>
-        /// Sends InitSsl and accepts either a normal InitSsl response or Error2 (TLS unsupported).
-        /// Does not activate TLS in either case.
+        /// Sends InitSsl and distinguishes the corresponding V1 Error2 from an InitSsl reply.
         /// </summary>
-        private int ProbeInitSslForPlaintext()
+        private int ProbeInitSsl(out bool rejected)
         {
+            rejected = false;
             var sslReq = new InitSslRequest(ProtocolVersion.V1, 0, 0);
             lock (m_RequestLock)
             lock (m_ReceiveDispatchLock)
@@ -141,6 +162,10 @@ namespace S7CommPlusDriver
 
                         if (function == Functioncode.InitSsl || function == Functioncode.Error2)
                         {
+                            pdu.Position = 0;
+                            rejected = function == Functioncode.Error2
+                                && pdu.Length >= 11 && pdu.ReadByte() == ProtocolVersion.V1;
+                            pdu.Position = 0;
                             m_ReceivedPDU = pdu;
                             return 0;
                         }
@@ -156,6 +181,45 @@ namespace S7CommPlusDriver
                     }
                 }
             }
+        }
+
+        private bool MatchesOldFirmwarePlaintextSession(CreateObjectResponse response)
+        {
+            // The captured V2.2 success response reports 0x11 and allocates two session IDs.
+            const ulong oldFirmwareCreateObjectSuccess = 0x11;
+            var serverObject = response.ResponseObject;
+            var serverVersion = TryGetServerSession(response);
+            if (response.ProtocolVersion != ProtocolVersion.V1 || response.ReturnValue != oldFirmwareCreateObjectSuccess
+                || response.ObjectIds.Count != 2 || response.ObjectIds[0] == 0 || response.ObjectIds[1] == 0
+                || serverObject.ClassId != Ids.ClassServerSession
+                || serverObject.Objects.Count != 0
+                || serverObject.Attributes.ContainsKey(Ids.ServerSessionChallenge)
+                || (serverObject.Attributes.TryGetValue(Ids.ObjectVariableTypeName, out var name)
+                    && (name is not ValueWString fingerprint || !string.IsNullOrEmpty(fingerprint.GetValue())))
+                || serverVersion == null
+                || !serverVersion.TryGetStructElement(Ids.LID_SessionVersionSystemPAOMString, out var paom)
+                || paom is not ValueWString identity)
+            {
+                return false;
+            }
+
+            // The V1 object reader consumes one byte of the four-byte fill after the terminator.
+            // Require the full terminator and fill so a partially decoded response cannot qualify.
+            if (m_ReceivedPDU.Length - m_ReceivedPDU.Position != 3)
+            {
+                return false;
+            }
+            m_ReceivedPDU.Position -= 2;
+            if (m_ReceivedPDU.ReadByte() != ElementID.TerminatingObject
+                || S7p.DecodeUInt32(m_ReceivedPDU, out var fill) != sizeof(uint) || fill != 0)
+            {
+                return false;
+            }
+
+            // Only the order number and firmware represented by the V2.2 capture qualify.
+            var fields = identity.GetValue()?.Split(';');
+            return fields?.Length == 3 && fields[0] == "1"
+                && fields[1].Trim() == "6ES7 212-1BD30-0XB0" && fields[2].Trim() == "V2.2";
         }
 
         private static bool IsCreateObjectError(CreateObjectResponse response)
@@ -213,6 +277,11 @@ namespace S7CommPlusDriver
             {
                 m_client.Disconnect();
                 return S7Consts.errIsoInvalidPDU7;
+            }
+            if (setMultiVarRes.ReturnValue != 0 || setMultiVarRes.ErrorValues.Count != 0)
+            {
+                m_client.Disconnect();
+                return S7Consts.errCliFunctionRefused;
             }
 
             // Older firmware often lacks the modern SystemLimits layout. Keep the same conservative

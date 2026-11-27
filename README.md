@@ -6,7 +6,7 @@
 [![Release](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml/badge.svg)](https://github.com/dotnetprojects/S7CommPlusDriver/actions/workflows/release.yml)
 [![License](https://img.shields.io/github/license/dotnetprojects/S7CommPlusDriver.svg)](LICENSE)
 
-Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication for pre-V17/pre-TLS CPUs and opt-in plaintext support for older firmware such as S7-1200 V2.2. Legacy challenge authentication is available on .NET Framework 4.8, `net8.0`, and `net9.0`. The package targets `net48`, `net6.0`, `net8.0`, and `net9.0`.
+Production-oriented .NET communication library for Siemens S7-1200/1500 PLCs using S7CommPlus over TLS, with legacy challenge authentication for pre-V17/pre-TLS CPUs and plaintext support for older firmware such as S7-1200 V2.2. Legacy challenge authentication is available on .NET Framework 4.8, `net8.0`, and `net9.0`. The package targets `net48`, `net6.0`, `net8.0`, and `net9.0`.
 
 The supported high-level API for new applications is `S7CommPlusClient`. Lower-level protocol and transport types remain available for compatibility and diagnostics, but production code should use the client surface.
 
@@ -28,16 +28,16 @@ write protection.
 - Read/browse reconnect retry support
 - Explicit write enablement so accidental PLC writes are blocked by default
 - Bounded disconnect behavior and better socket disconnect detection
-- TLS, legacy S7CommPlus challenge authentication, and opt-in plaintext
+- TLS, legacy S7CommPlus challenge authentication, and plaintext for older firmware
 - No library writes to `Console`
 
 ## Requirements
 
 ### PLC / CPU
 
-The `net48`/`net8.0`/`net9.0` default first tries secure PG/HMI communication over TLS,
-then legacy challenge authentication. Older firmware such as S7-1200 V2.2
-requires explicit plaintext mode.
+The `net48`/`net8.0`/`net9.0` default `Auto` mode tries TLS first. If TLS
+fails, it uses plaintext for the recognized S7-1212C (`6ES7 212-1BD30-0XB0`,
+firmware V2.2) handshake described below, or tries legacy challenge authentication.
 
 - S7-1200 firmware V4.3 or newer, TLS 1.3 from V4.5
 - S7-1500 firmware V2.9 or newer
@@ -50,8 +50,11 @@ For older S7-1200/1500 CPUs that do not support TLS, the default `Auto` mode on
 `net48`/`net8.0`/`net9.0` falls back to legacy authentication.
 Set `S7CommPlusSecurityMode.LegacyChallenge` to skip the TLS attempt. Legacy
 mode uses HarpoS7-derived challenge authentication and packet digests.
-Plaintext sessions require `S7CommPlusSecurityMode.Plaintext` on every target.
-`net6.0` defaults to TLS and also supports explicit plaintext mode.
+Automatic plaintext requires a matching `InitSsl` rejection and a successful
+`CreateObject` response that reports the listed model and firmware and omits
+the CSI challenge. The PLC reports that identity before authentication.
+Use `S7CommPlusSecurityMode.Plaintext` to select plaintext directly.
+`net6.0` supports TLS (the default) and explicit plaintext.
 
 Most legacy PLCs report a complete Siemens public-key fingerprint. If a PLC
 reports only its two-character key family, the driver automatically tries
@@ -673,8 +676,8 @@ Console.WriteLine(client.Options.NegotiatedSecurityMode);
 ```
 
 `S7CommPlusSecurityMode.Auto` tries TLS first and then falls back to legacy
-challenge authentication on supported targets. Select `S7CommPlusSecurityMode.Plaintext`
-explicitly for unencrypted connections. Reconnect and write safety
+challenge authentication on supported targets. It also supports plaintext
+for the V2.2 CPU and handshake listed under Requirements. Reconnect and write safety
 behave the same in all modes: read/browse may reconnect once, writes are never
 retried automatically, and writes still require `WriteEnabled = true`.
 

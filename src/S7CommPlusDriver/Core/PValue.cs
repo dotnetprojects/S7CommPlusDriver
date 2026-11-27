@@ -3610,6 +3610,11 @@ namespace S7CommPlusDriver
             return Elements[id];
         }
 
+        internal bool TryGetStructElement(uint id, out PValue value)
+        {
+            return Elements.TryGetValue(id, out value);
+        }
+
         public override int Serialize(Stream buffer)
         {
             int ret = 0;

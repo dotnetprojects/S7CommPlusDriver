@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using System.Threading.Tasks;
 using Xunit;
 
@@ -22,6 +23,7 @@ namespace S7CommPlusDriver.Tests
             var resp = CreateObjectResponse.DeserializeFromPdu(stream);
 
             Assert.NotNull(resp);
+            Assert.Equal(0x11UL, resp.ReturnValue);
             Assert.Equal(2, resp.ObjectIds.Count);
             var session = Assert.IsType<ValueStruct>(resp.ResponseObject.GetAttribute(Ids.ServerSessionVersion));
             var paom = Assert.IsType<ValueWString>(session.GetStructElement((uint)Ids.LID_SessionVersionSystemPAOMString));
@@ -53,31 +55,8 @@ namespace S7CommPlusDriver.Tests
                 }
 
                 using var legacyConnection = AcceptCotpConnection(listener);
-                var request = ReadTpkt(legacyConnection);
-                var response = HexToBytes(CreateObjectResponseHex);
-                // Copy the request sequence into the response. The request has ten framing bytes
-                // beyond the leading version byte included in the captured response.
-                response[8] = request[18];
-                response[9] = request[19];
-                using var packet = new MemoryStream();
-                packet.WriteByte(3);
-                packet.WriteByte(0);
-                S7p.EncodeUInt16(packet, (ushort)(14 + response.Length));
-                packet.Write(new byte[] { 2, 0xf0, 0x80, 0x72, response[0] }, 0, 5);
-                S7p.EncodeUInt16(packet, (ushort)(response.Length - 1));
-                packet.Write(response, 1, response.Length - 1);
-                packet.Write(new byte[] { 0x72, response[0], 0, 0 }, 0, 4);
-                packet.WriteTo(legacyConnection);
-
-                Assert.Equal(7, ReadTpkt(legacyConnection).Length); // Empty DT acknowledgement.
-                try
-                {
-                    Assert.Equal(-1, legacyConnection.ReadByte());
-                }
-                catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset })
-                {
-                    // An abortive close also confirms that no session setup followed.
-                }
+                SendCreateObjectResponse(legacyConnection, HexToBytes(CreateObjectResponseHex));
+                AssertConnectionClosed(legacyConnection);
             });
 
             try
@@ -92,6 +71,122 @@ namespace S7CommPlusDriver.Tests
             {
                 listener.Stop();
                 session.Disconnect();
+            }
+        }
+
+        [Theory]
+        [InlineData(S7CommPlusSecurityMode.Auto, "V2.2", false, false, true)]
+        [InlineData(S7CommPlusSecurityMode.Auto, "V4.5", false, false, false)]
+        [InlineData(S7CommPlusSecurityMode.Auto, "V2.2", true, false, false)]
+        [InlineData(S7CommPlusSecurityMode.Auto, "V2.2", false, true, false)]
+        [InlineData(S7CommPlusSecurityMode.Tls, "V2.2", false, false, false)]
+        public async Task InitSslRejectionAllowsPlaintextOnlyForKnownFirmwareInAuto(
+            S7CommPlusSecurityMode securityMode, string firmware, bool hasChallenge, bool invalidFill, bool connects)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var options = new S7CommPlusClientOptions
+            {
+                Address = "127.0.0.1",
+                Port = ((IPEndPoint)listener.LocalEndpoint).Port,
+                SecurityMode = securityMode,
+                ConnectTimeout = TimeSpan.FromSeconds(2)
+            };
+            var session = new S7CommPlusProtocolSession();
+            var server = Task.Run(() =>
+            {
+                using (var firstConnection = AcceptCotpConnection(listener))
+                {
+                    var probe = ReadTpkt(firstConnection);
+                    Assert.Equal(Functioncode.InitSsl, (probe[14] << 8) | probe[15]);
+                    SendResponse(firstConnection, probe, HexToBytes("0132000005a9000000003401"));
+                    if (securityMode == S7CommPlusSecurityMode.Tls)
+                    {
+                        AssertConnectionClosed(firstConnection);
+                        return;
+                    }
+
+                    var response = HexToBytes(CreateObjectResponseHex);
+                    var versionOffset = Encoding.ASCII.GetString(response).IndexOf("V2.2", StringComparison.Ordinal);
+                    Encoding.ASCII.GetBytes(firmware).CopyTo(response, versionOffset);
+                    if (invalidFill)
+                        response[response.Length - 1] = 1;
+                    if (hasChallenge)
+                    {
+                        using var withChallenge = new MemoryStream();
+                        withChallenge.Write(response, 0, response.Length - 5);
+                        withChallenge.WriteByte(ElementID.Attribute);
+                        S7p.EncodeUInt32Vlq(withChallenge, Ids.ServerSessionChallenge);
+                        new ValueUSIntArray(new byte[20]).Serialize(withChallenge);
+                        withChallenge.Write(response, response.Length - 5, 5);
+                        response = withChallenge.ToArray();
+                    }
+                    SendCreateObjectResponse(firstConnection, response);
+                    if (connects)
+                    {
+                        var setup = ReadTpkt(firstConnection);
+                        Assert.Equal(Functioncode.SetMultiVariables, (setup[14] << 8) | setup[15]);
+                        SendResponse(firstConnection, setup, HexToBytes("0232000005420000000034000000"));
+                        return;
+                    }
+                    AssertConnectionClosed(firstConnection);
+                }
+
+                using var legacyConnection = AcceptCotpConnection(listener);
+                SendCreateObjectResponse(legacyConnection, HexToBytes(CreateObjectResponseHex));
+                AssertConnectionClosed(legacyConnection);
+            });
+
+            try
+            {
+                var result = await Task.Run(() => session.Connect(options));
+                Assert.Equal(connects ? 0 : securityMode == S7CommPlusSecurityMode.Tls
+                    ? S7Consts.errInitSslResponse : S7Consts.errS7CommPlusLegacyAuthentication, result);
+                Assert.Equal(connects ? S7CommPlusSecurityMode.Plaintext : (S7CommPlusSecurityMode?)null,
+                    options.NegotiatedSecurityMode);
+                await server;
+                Assert.False(listener.Pending());
+            }
+            finally
+            {
+                listener.Stop();
+                session.Disconnect();
+            }
+        }
+
+        private static void SendCreateObjectResponse(NetworkStream connection, byte[] response)
+        {
+            var request = ReadTpkt(connection);
+            Assert.Equal(Functioncode.CreateObject, (request[14] << 8) | request[15]);
+            SendResponse(connection, request, response);
+            Assert.Equal(7, ReadTpkt(connection).Length); // Empty DT acknowledgement.
+        }
+
+        private static void SendResponse(NetworkStream connection, byte[] request, byte[] response)
+        {
+            // The request has ten framing bytes beyond the leading version byte in the response.
+            response[8] = request[18];
+            response[9] = request[19];
+            using var packet = new MemoryStream();
+            packet.WriteByte(3);
+            packet.WriteByte(0);
+            S7p.EncodeUInt16(packet, (ushort)(14 + response.Length));
+            packet.Write(new byte[] { 2, 0xf0, 0x80, 0x72, response[0] }, 0, 5);
+            S7p.EncodeUInt16(packet, (ushort)(response.Length - 1));
+            packet.Write(response, 1, response.Length - 1);
+            packet.Write(new byte[] { 0x72, response[0], 0, 0 }, 0, 4);
+            packet.WriteTo(connection);
+        }
+
+        private static void AssertConnectionClosed(NetworkStream connection)
+        {
+            try
+            {
+                Assert.Equal(-1, connection.ReadByte());
+            }
+            catch (IOException ex) when (ex.InnerException is SocketException { SocketErrorCode: SocketError.ConnectionReset })
+            {
+                // An abortive close also confirms there was no further request.
             }
         }
 

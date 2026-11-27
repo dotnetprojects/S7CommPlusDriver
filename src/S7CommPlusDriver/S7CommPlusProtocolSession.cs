@@ -1183,7 +1183,9 @@ namespace S7CommPlusDriver
             switch (securityMode)
             {
                 case S7CommPlusSecurityMode.Tls:
-                    result = ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend);
+                    result = ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds,
+                        options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend,
+                        options.SecurityMode == S7CommPlusSecurityMode.Auto ? options : null);
                     break;
                 case S7CommPlusSecurityMode.LegacyChallenge:
                     result = ConnectLegacyChallenge(options);
@@ -1198,8 +1200,8 @@ namespace S7CommPlusDriver
             if (result == 0)
             {
                 ApplyRequestTimeout(options.RequestTimeoutMilliseconds);
-                m_NegotiatedSecurityMode = securityMode;
-                options.NegotiatedSecurityMode = securityMode;
+                m_NegotiatedSecurityMode = options.NegotiatedSecurityMode ?? securityMode;
+                options.NegotiatedSecurityMode = m_NegotiatedSecurityMode;
             }
             return result;
         }
@@ -1264,7 +1266,9 @@ namespace S7CommPlusDriver
             m_client.SetConnectionParams(address, localTsap, remoteTsap ?? Encoding.ASCII.GetBytes("SIMATIC-ROOT-HMI"));
         }
 
-        private int ConnectTls(string address, string password = "", string username = "", int timeoutMs = 5000, int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null, S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl)
+        private int ConnectTls(string address, string password = "", string username = "", int timeoutMs = 5000,
+            int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null,
+            S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl, S7CommPlusClientOptions autoOptions = null)
         {
             if (timeoutMs > 0) {
                 m_ReadTimeout = timeoutMs;
@@ -1279,15 +1283,24 @@ namespace S7CommPlusDriver
 
             #region Step 1: Unencrypted InitSSL Request / Response
 
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
-            res = SendS7plusFunctionObjectAndWait(sslReq, m_ReadTimeout);
+            res = ProbeInitSsl(out var rejected);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
             }
-            InitSslResponse sslRes;
-            sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
+
+            if (rejected && autoOptions != null)
+            {
+                res = ConnectAfterPlaintextProbe(autoOptions, Elapsed, requireKnownFirmware: true);
+                if (res == 0)
+                {
+                    autoOptions.NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
+                }
+                return res;
+            }
+
+            var sslRes = rejected ? null : InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (sslRes == null)
             {
                 m_client.Disconnect();
