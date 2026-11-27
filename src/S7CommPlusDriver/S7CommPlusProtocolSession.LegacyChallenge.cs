@@ -507,18 +507,6 @@ namespace S7CommPlusDriver
             return SendS7plusFunctionObjectAndWait(request, m_ReadTimeout);
         }
 
-        private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
-        {
-            try
-            {
-                return createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct;
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
         private bool TryCreateLegacyAuthentication(
             LegacyChallengeHandshake challenge,
             S7CommPlusClientOptions options,
@@ -836,6 +824,18 @@ namespace S7CommPlusDriver
         {
         }
 #endif
+
+        private static ValueStruct TryGetServerSession(CreateObjectResponse createObjRes)
+        {
+            try
+            {
+                return createObjRes.ResponseObject.GetAttribute(Ids.ServerSessionVersion) as ValueStruct;
+            }
+            catch
+            {
+                return null;
+            }
+        }
 
         private static void AppendJson(StringBuilder builder, string name, long value)
         {

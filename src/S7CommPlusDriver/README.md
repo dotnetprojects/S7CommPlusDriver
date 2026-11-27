@@ -10,7 +10,7 @@ dotnet add package DotNetProjects.S7CommPlusDriver
 
 Use `S7CommPlusClient` for new applications. It provides async connect, browse, bulk symbol resolution, read, write, alarm, subscription, CPU metadata/control, block and symbol-comment metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
 
-The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net48`, `net8.0`, and `net9.0`, the default security mode is `Auto`: it tries TLS first and reconnects with HarpoS7-derived legacy challenge authentication if the PLC rejects TLS. Set the mode to `Tls` to prohibit fallback, or `LegacyChallenge` to skip the TLS attempt. `net6.0` remains TLS-only. .NET Framework 4.8 uses the managed BouncyCastle backend because the native OpenSSL resolver requires modern .NET.
+The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net48`, `net8.0`, and `net9.0`, the default `Auto` mode tries TLS first. It uses plaintext for the V2.2 handshake described below and tries HarpoS7-derived legacy challenge authentication after other TLS failures. Select `Tls` to require TLS, `LegacyChallenge` to require challenge authentication, or `Plaintext` to connect directly without encryption. On `net6.0`, the supported modes are `Tls` (the default) and `Plaintext`. .NET Framework 4.8 uses the managed BouncyCastle backend because the native OpenSSL resolver requires modern .NET.
 
 Default connection parameters are exposed through `S7CommPlusDefaults`: ISO-on-TCP port `102`, local TSAP `0x0600`, HMI remote TSAP `SIMATIC-ROOT-HMI`, and engineering remote TSAP `SIMATIC-ROOT-ES`. `S7CommPlusClientOptions.SessionRole` defaults to `S7CommPlusSessionRole.Hmi` for both TLS and legacy challenge connections. Set it to `S7CommPlusSessionRole.EngineeringSystem` only when an engineering-class session is required; such a session can prevent TIA Portal from downloading hardware configuration while the driver remains connected. An explicitly assigned `RemoteTsap` overrides the standard TSAP selected by the role.
 
@@ -22,7 +22,7 @@ Legacy session setup falls back to an anonymous user label on platforms where `E
 
 ## Older PLCs / Legacy Challenge Auth
 
-Siemens OMS names the old non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Because `Auto` is the `net48`/`net8.0`/`net9.0` default, applications that must prohibit fallback should explicitly use `S7CommPlusSecurityMode.Tls`.
+Siemens OMS names the CSI non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. `Auto` uses plaintext for the S7-1212C (`6ES7 212-1BD30-0XB0`) reporting firmware V2.2 when the PLC explicitly rejects InitSsl and returns a successful CreateObject response without a CSI challenge. This identity is reported before authentication. Select `S7CommPlusSecurityMode.Plaintext` to request plaintext directly, including on `net6.0`.
 
 ```csharp
 await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
@@ -35,6 +35,17 @@ await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
 await client.ConnectAsync();
 var cpuInfo = await client.GetCpuInfoAsync();
 await client.DisconnectAsync();
+```
+
+```csharp
+// S7-1200 firmware V2.2 and similar plaintext-only CPUs
+await using var client = new S7CommPlusClient(new S7CommPlusClientOptions
+{
+    Address = "192.168.6.31",
+    SecurityMode = S7CommPlusSecurityMode.Plaintext,
+    SessionRole = S7CommPlusSessionRole.EngineeringSystem,
+    WriteEnabled = false
+});
 ```
 
 Legacy support uses the PLC fingerprint to resolve a Siemens public-key family. Known mappings are S7-1500 (`00`), S7-1200 (`01`), and PLCSIM/VPLC (`03`). The implementation references the `HarpoS7` and `HarpoS7.PublicKeys` NuGet packages for challenge/key/digest primitives on `net48`, `net8.0`, and `net9.0`, while this driver still owns transport, request ordering, timeouts, reconnect behavior, and write protection.

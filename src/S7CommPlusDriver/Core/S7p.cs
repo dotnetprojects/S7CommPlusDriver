@@ -845,8 +845,19 @@ namespace S7CommPlusDriver
                         ret += DecodeUInt32Vlq(buffer, out id);
                         obj.SetDecodedAttribute(id, PValue.Deserialize(buffer));
                         break;
+                    case ElementID.Relation:
+                        // A4: relation id (VLQ) + 4-byte value (same layout as Serialize/AddRelation).
+                        ret += DecodeUInt32Vlq(buffer, out id);
+                        ret += DecodeUInt32(buffer, out UInt32 relValue);
+                        obj.AddRelation(id, relValue);
+                        break;
                     case ElementID.StartOfTagDescription:
-                        // Skip, only 1200 FW2 and maybe older, which definitively don't support TLS
+                        // Legacy S7-1200 FW2.x TypeInfo uses A7/A8 instead of packed AB/AC lists.
+                        ret += PTagDescription.Deserialize(buffer, out string tagName, out PVartypeListElement tagElement);
+                        obj.AddTagDescription(tagName, tagElement);
+                        break;
+                    case ElementID.TerminatingTagDescription:
+                        // Consumed inside PTagDescription.Deserialize; tolerate a stray trailer.
                         break;
                     case ElementID.VartypeList:
                         PVartypeList typelist = new PVartypeList();

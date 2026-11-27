@@ -9,6 +9,10 @@ namespace S7CommPlusDriver.Internal
         uint SessionId { get; }
         uint SessionId2 { get; }
         MemoryStream ReceivedPdu { get; }
+        /// <summary>
+        /// True when the session negotiated plaintext (no TLS/CSI), typically S7-1200 FW2.x.
+        /// </summary>
+        bool IsPlaintextSession { get; }
 
         int SendFunction(IS7pRequest request);
         int SendFunctionAndWait(IS7pRequest request);

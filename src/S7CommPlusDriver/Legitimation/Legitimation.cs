@@ -23,11 +23,12 @@ namespace S7CommPlusDriver
         /// <param name="password">PLC password</param>
         /// <param name="username">PLC username (leave empty for legacy login)</param>
         /// <returns>error code (0 = ok)</returns>
-        private int legitimate(ValueStruct serverSession, string password, string username = "")
+        private int legitimate(ValueStruct serverSession, string password, string username = "", bool allowOldFirmware = false)
         {
             // S7-1214C                         (6ES7 214-1AG40-0XB0)           1;6ES7 214-1AG40-0XB0 ;V4.5
             // S7-1510SP                        (6ES7 510-1DJ01-0AB0)           1;6ES7 510-1DJ01-0AB0;V2.9
             // S7-1507SF                        (6ES7 672-7FC01-0YA0)           1;6ES7 672-7FC01-0YA0;V21.9
+            // S7-1212C FW2.2                   (6ES7 212-1BD30-0XB0)           1;6ES7 212-1BD30-0XB0 ;V2.2 (plaintext only)
 
             // S7-PLCSIM Advanced V8.0 Upd1     (6ES7 SIM-01500-APLC)           1;6ES7 SIM-01500-APLC;R4.1
 
@@ -73,7 +74,7 @@ namespace S7CommPlusDriver
             bool legacyLegitimation = false;
             if (deviceVersion.StartsWith("5"))  // S7-1500 (5xx)
             {
-                if (fwVerNo < 209)
+                if (fwVerNo < 209 && !allowOldFirmware)
                 {
                     System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
@@ -89,7 +90,7 @@ namespace S7CommPlusDriver
             }
             else if (deviceVersion.StartsWith("2")) // S7-1200 (2xx)
             {
-                if (fwVerNo < 403)
+                if (fwVerNo < 403 && !allowOldFirmware)
                 {
                     System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;
@@ -101,7 +102,7 @@ namespace S7CommPlusDriver
             }
             else if (deviceVersion.StartsWith("6")) // S7-1507S (6xx)
             {
-                if (fwVerNo < 2109)
+                if (fwVerNo < 2109 && !allowOldFirmware)
                 {
                     System.Diagnostics.Trace.WriteLine("S7CommPlusProtocolSession - Legitimate: Firmware version is not supported!");
                     return S7Consts.errCliFirmwareNotSupported;

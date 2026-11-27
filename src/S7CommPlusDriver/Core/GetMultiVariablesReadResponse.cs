@@ -61,8 +61,11 @@ namespace S7CommPlusDriver
                 errors[start + (int)item - 1] = error;
                 S7p.DecodeUInt32Vlq(pdu, out item);
             }
-            S7p.DecodeUInt32Vlq(pdu, out var integrity);
-            IntegrityId = integrity;
+            if (WithIntegrityId)
+            {
+                S7p.DecodeUInt32Vlq(pdu, out var integrity);
+                IntegrityId = integrity;
+            }
             return 0;
         }
     }

@@ -251,6 +251,7 @@ namespace S7CommPlusDriver.Tests
             public uint SessionId => 7;
             public uint SessionId2 => 8;
             public MemoryStream ReceivedPdu { get; } = new MemoryStream();
+            public bool IsPlaintextSession => false;
 
             public int SendFunction(IS7pRequest request)
             {

@@ -183,11 +183,39 @@ namespace S7CommPlusDriver
                 funcObj.SessionId = m_SessionId;
             }
 
+            // Older plaintext firmware (S7-1200 V2.2) rejects modern V2 integrity trailers on several PDUs.
+            if (m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext)
+            {
+                if (funcObj is ExploreRequest exploreRequest)
+                {
+                    exploreRequest.WithIntegrityId = false;
+                }
+                else if (funcObj is SetMultiVariablesRequest setMultiVariablesRequest)
+                {
+                    // Variable writes on FW2.2 plaintext reject modern integrity trailers (TCP reset).
+                    setMultiVariablesRequest.WithIntegrityId = false;
+                }
+                else if (funcObj is GetVarSubstreamedRequest getVarSubstreamedRequest)
+                {
+                    // FW2.2 TIA captures use a fixed UInt32 integrity trailer of 0 (no VLQ, no fill).
+                    getVarSubstreamedRequest.UseOldFirmwareV2IntegrityFraming = true;
+                }
+            }
+
             // Insert SequenceNumber and IntegrityId, if neccessary for object type and state of communication
             funcObj.SequenceNumber = GetNextSequenceNumber();
             if (funcObj.WithIntegrityId)
             {
-                funcObj.IntegrityId = GetNextIntegrityId(funcObj.FunctionCode);
+                if (funcObj is GetVarSubstreamedRequest oldGvs
+                    && oldGvs.UseOldFirmwareV2IntegrityFraming)
+                {
+                    // Match TIA plaintext GetVarSubstreamed trailers against S7-1200 FW2.2.
+                    funcObj.IntegrityId = 0;
+                }
+                else
+                {
+                    funcObj.IntegrityId = GetNextIntegrityId(funcObj.FunctionCode);
+                }
             }
             m_LastSentRequestForWait = funcObj;
 
@@ -1091,7 +1119,7 @@ namespace S7CommPlusDriver
             }
             // Overflow is possible and allowed
             UInt32 reqIntegCheck = (UInt32)request.SequenceNumber + request.IntegrityId;
-            if (response.IntegrityId != reqIntegCheck)
+            if (request.WithIntegrityId && response.IntegrityId != reqIntegCheck)
             {
                 Trace.WriteLine(String.Format("checkResponseWithIntegrity: ERROR! IntegrityId of the Response ({0}) doesn't match Request ({1})", response.IntegrityId, reqIntegCheck));
                 // Don't return this as error so far
@@ -1132,6 +1160,8 @@ namespace S7CommPlusDriver
                     return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
                 case S7CommPlusSecurityMode.LegacyChallenge:
                     return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
+                case S7CommPlusSecurityMode.Plaintext:
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Plaintext);
                 case S7CommPlusSecurityMode.Auto:
                     var tlsResult = ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Tls);
                     if (tlsResult == 0)
@@ -1148,14 +1178,30 @@ namespace S7CommPlusDriver
 
         private int ConnectAndSetNegotiatedMode(S7CommPlusClientOptions options, S7CommPlusSecurityMode securityMode)
         {
-            var result = securityMode == S7CommPlusSecurityMode.Tls
-                ? ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds, options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend)
-                : ConnectLegacyChallenge(options);
+            options.NegotiatedSecurityMode = null;
+            int result;
+            switch (securityMode)
+            {
+                case S7CommPlusSecurityMode.Tls:
+                    result = ConnectTls(options.Address, options.Password, options.Username, options.ConnectTimeoutMilliseconds,
+                        options.Port, options.LocalTsap, options.RemoteTsapBytes, options.TlsBackend,
+                        options.SecurityMode == S7CommPlusSecurityMode.Auto ? options : null);
+                    break;
+                case S7CommPlusSecurityMode.LegacyChallenge:
+                    result = ConnectLegacyChallenge(options);
+                    break;
+                case S7CommPlusSecurityMode.Plaintext:
+                    result = ConnectPlaintext(options);
+                    break;
+                default:
+                    return S7Consts.errCliInvalidParams;
+            }
+
             if (result == 0)
             {
                 ApplyRequestTimeout(options.RequestTimeoutMilliseconds);
-                m_NegotiatedSecurityMode = securityMode;
-                options.NegotiatedSecurityMode = securityMode;
+                m_NegotiatedSecurityMode = options.NegotiatedSecurityMode ?? securityMode;
+                options.NegotiatedSecurityMode = m_NegotiatedSecurityMode;
             }
             return result;
         }
@@ -1193,6 +1239,7 @@ namespace S7CommPlusDriver
             m_LastErrorDetail = string.Empty;
             m_LegacyDigestActive = false;
             m_LegacySessionKey = null;
+            m_NegotiatedSecurityMode = S7CommPlusSecurityMode.Tls;
             m_ServerSessionVersion = null;
             m_ReceivedPDU = null;
             m_ReceivedTempPDU = null;
@@ -1219,7 +1266,9 @@ namespace S7CommPlusDriver
             m_client.SetConnectionParams(address, localTsap, remoteTsap ?? Encoding.ASCII.GetBytes("SIMATIC-ROOT-HMI"));
         }
 
-        private int ConnectTls(string address, string password = "", string username = "", int timeoutMs = 5000, int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null, S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl)
+        private int ConnectTls(string address, string password = "", string username = "", int timeoutMs = 5000,
+            int port = 102, ushort localTsap = 0x0600, byte[] remoteTsap = null,
+            S7CommPlusTlsBackend tlsBackend = S7CommPlusTlsBackend.OpenSsl, S7CommPlusClientOptions autoOptions = null)
         {
             if (timeoutMs > 0) {
                 m_ReadTimeout = timeoutMs;
@@ -1234,15 +1283,24 @@ namespace S7CommPlusDriver
 
             #region Step 1: Unencrypted InitSSL Request / Response
 
-            InitSslRequest sslReq = new InitSslRequest(ProtocolVersion.V1, 0 , 0);
-            res = SendS7plusFunctionObjectAndWait(sslReq, m_ReadTimeout);
+            res = ProbeInitSsl(out var rejected);
             if (res != 0)
             {
                 m_client.Disconnect();
                 return res;
             }
-            InitSslResponse sslRes;
-            sslRes = InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
+
+            if (rejected && autoOptions != null)
+            {
+                res = ConnectAfterPlaintextProbe(autoOptions, Elapsed, requireKnownFirmware: true);
+                if (res == 0)
+                {
+                    autoOptions.NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
+                }
+                return res;
+            }
+
+            var sslRes = rejected ? null : InitSslResponse.DeserializeFromPdu(m_ReceivedPDU);
             if (sslRes == null)
             {
                 m_client.Disconnect();
@@ -1552,6 +1610,7 @@ namespace S7CommPlusDriver
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<UInt64> errors)
         {
+            bool usePlaintextFraming = m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext;
             if (m_ReadPipelineDepth > 1 && addresslist.Count > Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax))
             {
                 lock (m_RequestLock)
@@ -1564,7 +1623,7 @@ namespace S7CommPlusDriver
                         var result = S7CommPlusReadPipeline.Execute(addresslist,
                             Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax), m_ReadPipelineDepth,
                             request => SendS7plusFunctionObject(request), ReceivePipelinedReadResponse,
-                            checkResponseWithIntegrity, out values, out errors);
+                            checkResponseWithIntegrity, out values, out errors, usePlaintextFraming);
                         if (result != 0) CloseTransport(2000);
                         return result;
                     }
@@ -1604,7 +1663,7 @@ namespace S7CommPlusDriver
             {
                 int res;
                 var getMultiVarReq = CreateReadRequestBatch(addresslist, chunk_startIndex,
-                    maxTagsPerRequest, out count_perChunk);
+                    maxTagsPerRequest, out count_perChunk, usePlaintextFraming);
 
                 res = SendS7plusFunctionObjectAndWait(getMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1614,6 +1673,7 @@ namespace S7CommPlusDriver
 
                 var getMultiVarRes = GetMultiVariablesReadResponse.ReadHeader(m_ReceivedPDU);
                 if (getMultiVarRes == null) return S7Consts.errIsoInvalidPDU4;
+                getMultiVarRes.WithIntegrityId = getMultiVarReq.WithIntegrityId;
                 res = getMultiVarRes.ReadItems(m_ReceivedPDU, values, errors, chunk_startIndex, count_perChunk);
                 if (res != 0) return res;
                 res = checkResponseWithIntegrity(getMultiVarReq, getMultiVarRes);
@@ -1635,9 +1695,14 @@ namespace S7CommPlusDriver
         }
 
         internal static GetMultiVariablesRequest CreateReadRequestBatch(
-            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount)
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount,
+            bool usePlaintextFraming = false)
         {
-            var request = new GetMultiVariablesRequest(ProtocolVersion.V2);
+            var request = new GetMultiVariablesRequest(ProtocolVersion.V2)
+            {
+                WithIntegrityId = !usePlaintextFraming,
+                OmitSymbolCrc = usePlaintextFraming
+            };
             var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
             // Reserve the legacy digest and growth of the VLQ integrity id assigned on send.
             var maxPayloadSize = UInt16.MaxValue - LegacyDigestFieldLength - sizeof(uint);
@@ -1705,7 +1770,8 @@ namespace S7CommPlusDriver
                     chunk_startIndex,
                     maxTagsPerRequest,
                     maxPayloadSize,
-                    out count_perChunk);
+                    out count_perChunk,
+                    usePlaintextFraming: m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext);
 
                 res = SendS7plusFunctionObjectAndWait(setMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1742,9 +1808,14 @@ namespace S7CommPlusDriver
             int startIndex,
             int maxItems,
             int maxPayloadSize,
-            out int itemCount)
+            out int itemCount,
+            bool usePlaintextFraming = false)
         {
-            var request = new SetMultiVariablesRequest(ProtocolVersion.V2);
+            var request = new SetMultiVariablesRequest(ProtocolVersion.V2)
+            {
+                WithIntegrityId = !usePlaintextFraming,
+                OmitSymbolCrc = usePlaintextFraming
+            };
             var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
             itemCount = AppendItemsWithinPayloadLimit(
                 maxCandidates,
@@ -1840,7 +1911,11 @@ namespace S7CommPlusDriver
             // We want to know the following attributes
             exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
             exploreReq.AddressList.Add(Ids.Block_BlockNumber);
-            exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
+            // ASObjectES_Comment is absent from TIA explores against S7-1200 FW2.2 and can be refused there.
+            if (m_NegotiatedSecurityMode != S7CommPlusSecurityMode.Plaintext)
+            {
+                exploreReq.AddressList.Add(Ids.ASObjectES_Comment);
+            }
 
             res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
@@ -1848,18 +1923,33 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
+            }
+            if (exploreRes.ReturnValue != 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLC program explore refused, ReturnValue=" + exploreRes.ReturnValue);
+                return S7Consts.errCliFunctionRefused;
+            }
+            if (exploreRes.Objects == null || exploreRes.Objects.Count == 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLC program explore returned no objects.");
+                return S7Consts.errCliFunctionRefused;
             }
 
             #endregion
 
             #region Evaluate all data blocks that then need to be browsed
 
-            var obj = exploreRes.Objects.First(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            var obj = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.PLCProgram_Class_Rid);
+            if (obj == null)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: PLCProgram class object missing in explore response.");
+                return S7Consts.errCliFunctionRefused;
+            }
 
             foreach (var ob in obj.GetObjects())
             {
@@ -1869,7 +1959,9 @@ namespace S7CommPlusDriver
                         UInt32 relid = ob.RelationId;
                         UInt32 area = (relid >> 16);
                         UInt32 num = relid & 0xffff;
-                        if (area == 0x8a0e)
+                        // Classic S7-1200/1500 instance DBs use 0x8a0e. Older S7-1200 FW2.x
+                        // explores also report datablocks under 0x8a11.
+                        if (area == 0x8a0e || area == 0x8a11)
                         {
                             var name = (ValueWString)(ob.GetAttribute(Ids.ObjectVariableTypeName));
                             BrowseData data = new BrowseData();
@@ -1907,6 +1999,7 @@ namespace S7CommPlusDriver
             res = ReadValues(readlist, out values, out errors);
             if (res != 0)
             {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: ReadValues for DB type-info RIDs failed, res=" + res);
                 return res;
             }
             #endregion
@@ -1934,7 +2027,11 @@ namespace S7CommPlusDriver
             }
             // Remove elements with db_block_ti_relid == 0. This occurs e.g. on datablocks only present in load memory.
             // The informations can't be used any further (at least not for variable access).
+            var dbCountBeforeTiFilter = exploreData.Count;
             exploreData.RemoveAll(item => item.db_block_ti_relid == 0);
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - Browse: DB type-info RIDs kept {0}/{1}.",
+                exploreData.Count, dbCountBeforeTiFilter));
 
             foreach (var ed in exploreData)
             {
@@ -1961,23 +2058,57 @@ namespace S7CommPlusDriver
             res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
             if (res != 0)
             {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: TypeInfo explore send/wait failed, res=" + res);
                 return res;
             }
             #endregion
 
             #region Process the response, and build the complete variables list
-            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
             }
-            var objs = exploreRes.Objects.First(o => o.ClassId == Ids.ClassOMSTypeInfoContainer);
+            if (exploreRes == null || exploreRes.Objects == null || exploreRes.Objects.Count == 0)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: TypeInfo explore returned no objects.");
+                return S7Consts.errCliFunctionRefused;
+            }
+            var objs = exploreRes.Objects.FirstOrDefault(o => o.ClassId == Ids.ClassOMSTypeInfoContainer);
+            if (objs == null)
+            {
+                Trace.WriteLine("S7CommPlusProtocolSession - Browse: ClassOMSTypeInfoContainer missing. Classes=" +
+                    string.Join(",", exploreRes.Objects.Select(o => o.ClassId.ToString())));
+                return S7Consts.errCliFunctionRefused;
+            }
 
-            vars.SetTypeInfoContainerObjects(objs.GetObjects());
+            var typeInfoChildren = objs.GetObjects();
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - Browse: TypeInfo children={0}, DB nodes={1}.",
+                typeInfoChildren.Count, exploreData.Count));
+            // Keep session caches warm so GetTagBySymbol / GetTypeInformation reuse Browse results.
+            typeInfoList.Clear();
+            typeInfoList.AddRange(typeInfoChildren);
+            dbInfoList = exploreData.Select(ed => new DatablockInfo
+            {
+                db_name = ed.db_name,
+                db_number = ed.db_number,
+                db_block_relid = ed.db_block_relid,
+                db_block_ti_relid = ed.db_block_ti_relid
+            }).ToList();
+            vars.SetTypeInfoContainerObjects(typeInfoChildren);
             vars.BuildTree();
             vars.BuildFlatList();
             varInfoList = vars.GetVarInfoList();
+            if (m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext)
+            {
+                foreach (var info in varInfoList)
+                {
+                    info.SymbolCrc = 0;
+                }
+            }
+            Trace.WriteLine("S7CommPlusProtocolSession - Browse: Flat var count=" + varInfoList.Count);
             #endregion
 
             return 0;
@@ -2807,37 +2938,45 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
             }
 
-            // Get the datablock information we want further informations from.
-            var objList = exploreRes.Objects;
-
-            foreach (var ob in objList)
+            // Filtered Explore may return DBs flat (modern CPUs) or nested under PLCProgram (FW2.2).
+            CollectDatablockInfos(exploreRes.Objects, dbInfoList);
+            if (dbInfoList.Count == 0)
             {
-                // May be this check can be removed, if setting the filter to the DB_Class_Rid is working 100%.
-                switch (ob.ClassId)
+                // S7-1200 FW2.2 rejects/ignores InstanceOf DB filters; fall back to unfiltered PLCProgram explore
+                // (same shape Browse uses successfully).
+                Trace.WriteLine("S7CommPlusProtocolSession - GetListOfDatablocks: filtered explore empty, retrying without filter.");
+                exploreReq = new ExploreRequest(ProtocolVersion.V2)
                 {
-                    case Ids.DB_Class_Rid:
-                        UInt32 relid = ob.RelationId;
-                        UInt32 area = (relid >> 16);
-                        UInt32 num = relid & 0xffff;
-                        if (area == 0x8a0e)
-                        {
-                            var name = (ValueWString)(ob.GetAttribute(Ids.ObjectVariableTypeName));
-                            DatablockInfo data = new DatablockInfo();
-                            data.db_block_relid = relid;
-                            data.db_name = name.GetValue();
-                            data.db_number = num;
-                            dbInfoList.Add(data);
-                        }
-                        break;
+                    ExploreId = Ids.NativeObjects_thePLCProgram_Rid,
+                    ExploreRequestId = Ids.None,
+                    ExploreChildsRecursive = 1,
+                    ExploreParents = 0
+                };
+                exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
+                exploreReq.AddressList.Add(Ids.Block_BlockNumber);
+                res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
+                if (res != 0)
+                {
+                    return res;
                 }
+                exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
+                res = checkResponseWithIntegrity(exploreReq, exploreRes);
+                if (res != 0)
+                {
+                    return res;
+                }
+                CollectDatablockInfos(exploreRes.Objects, dbInfoList);
             }
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - GetListOfDatablocks: found {0} DB candidates.",
+                dbInfoList.Count));
 
             // Get the TypeInfo RID to RelId from the first response
 
@@ -2911,15 +3050,118 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {
                 return res;
             }
-            objList = exploreRes.Objects;
+            objList = FlattenTypeInfoExploreObjects(exploreId, exploreRes.Objects);
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - GetTypeInformation: exploreId=0x{0:X8} raw={1} flat={2} match={3}",
+                exploreId,
+                exploreRes.Objects?.Count ?? 0,
+                objList.Count,
+                objList.Exists(o => o.RelationId == exploreId)));
 
             return 0;
+        }
+
+        /// <summary>
+        /// Collects DB_Class_Rid entries from a possibly nested Explore response.
+        /// Classic instance DBs use area 0x8a0e; older S7-1200 FW2.x also reports 0x8a11.
+        /// </summary>
+        private static void CollectDatablockInfos(IEnumerable<PObject> objects, List<DatablockInfo> target)
+        {
+            if (objects == null)
+            {
+                return;
+            }
+
+            foreach (var ob in objects)
+            {
+                if (ob == null)
+                {
+                    continue;
+                }
+
+                if (ob.ClassId == Ids.DB_Class_Rid)
+                {
+                    UInt32 relid = ob.RelationId;
+                    UInt32 area = (relid >> 16);
+                    UInt32 num = relid & 0xffff;
+                    if (area == 0x8a0e || area == 0x8a11)
+                    {
+                        var nameAttr = ob.GetAttribute(Ids.ObjectVariableTypeName) as ValueWString;
+                        if (nameAttr != null)
+                        {
+                            DatablockInfo data = new DatablockInfo();
+                            data.db_block_relid = relid;
+                            data.db_name = nameAttr.GetValue();
+                            data.db_number = num;
+                            target.Add(data);
+                        }
+                    }
+                }
+
+                // Nested under PLCProgram (or similar) on older firmware Explore responses.
+                CollectDatablockInfos(ob.GetObjects(), target);
+            }
+        }
+
+        /// <summary>
+        /// Explore(TypeInfoRID) may return the type object itself, a ClassOMSTypeInfoContainer
+        /// wrapper, or nested children — flatten so callers can find RelationId == exploreId.
+        /// </summary>
+        private static List<PObject> FlattenTypeInfoExploreObjects(uint exploreId, List<PObject> objects)
+        {
+            var flat = new List<PObject>();
+            if (objects == null || objects.Count == 0)
+            {
+                return flat;
+            }
+
+            void AddObjectTree(PObject obj)
+            {
+                if (obj == null)
+                {
+                    return;
+                }
+                flat.Add(obj);
+                var children = obj.GetObjects();
+                if (children == null)
+                {
+                    return;
+                }
+                foreach (var child in children)
+                {
+                    AddObjectTree(child);
+                }
+            }
+
+            foreach (var obj in objects)
+            {
+                if (obj.ClassId == Ids.ClassOMSTypeInfoContainer)
+                {
+                    foreach (var child in obj.GetObjects())
+                    {
+                        AddObjectTree(child);
+                    }
+                }
+                else
+                {
+                    AddObjectTree(obj);
+                }
+            }
+
+            // Prefer keeping the requested RID first when present.
+            flat.Sort((a, b) =>
+            {
+                if (a.RelationId == exploreId && b.RelationId != exploreId) return -1;
+                if (b.RelationId == exploreId && a.RelationId != exploreId) return 1;
+                return 0;
+            });
+            return flat;
         }
 
         /// <summary>
@@ -2964,7 +3206,7 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, true);
+            var exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
             res = checkResponseWithIntegrity(exploreReq, exploreRes);
             if (res != 0)
             {

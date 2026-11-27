@@ -146,9 +146,9 @@ namespace S7CommPlusDriver
             AccessArea = (UInt16)number + 0x8a0e0000;
         }
 
-        internal long GetSerializedLength()
+        internal long GetSerializedLength(bool omitSymbolCrc = false)
         {
-            long length = S7p.GetUInt32VlqLength(SymbolCrc)
+            long length = S7p.GetUInt32VlqLength(omitSymbolCrc ? 0u : SymbolCrc)
                 + S7p.GetUInt32VlqLength(AccessArea)
                 + S7p.GetUInt32VlqLength((uint)LocalIdCount + 1)
                 + S7p.GetUInt32VlqLength(AccessSubArea);
@@ -159,8 +159,13 @@ namespace S7CommPlusDriver
 
         public int Serialize(Stream buffer)
         {
+            return Serialize(buffer, omitSymbolCrc: false);
+        }
+
+        internal int Serialize(Stream buffer, bool omitSymbolCrc)
+        {
             int ret = 0;
-            ret += S7p.EncodeUInt32Vlq(buffer, SymbolCrc);
+            ret += S7p.EncodeUInt32Vlq(buffer, omitSymbolCrc ? 0u : SymbolCrc);
             ret += S7p.EncodeUInt32Vlq(buffer, AccessArea);
             ret += S7p.EncodeUInt32Vlq(buffer, (UInt32)LocalIdCount + 1);
             ret += S7p.EncodeUInt32Vlq(buffer, AccessSubArea);

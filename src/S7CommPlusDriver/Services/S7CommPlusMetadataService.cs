@@ -1153,23 +1153,9 @@ namespace S7CommPlusDriver
         {
             cpuInfo = null;
 
-            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theASRoot_Rid, 2459, out var pValueVersions);
-            if (res != 0)
-                return res;
-            if (pValueVersions is not ValueUSIntArray versions
-                || versions.GetValue() == null || versions.GetValue().Length < 8)
-                return S7Consts.errIsoInvalidPDU8;
-            var arrVersions = versions.GetValue();
-            var version1 = new Version(arrVersions[0], arrVersions[1], arrVersions[2], arrVersions[3]);
-            var version2 = new Version(arrVersions[4], arrVersions[5], arrVersions[6], arrVersions[7]);
-
-            res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, 233, out var pValuePlcName);
-            if (res != 0)
-                return res;
-            if (pValuePlcName is not ValueWString plcName) return S7Consts.errIsoInvalidPDU8;
-            var cpuName = plcName.GetValue();
-
-            res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUProxy_Rid, 3753, out var pValueMlfbSerial);
+            // FW2.x plaintext: ASRoot AID 2459 and ReleaseMngmtRoot 8342 can RST the TCP
+            // session. Read identity from CPUProxy/CPUCommon first; treat the rest as optional.
+            var res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUProxy_Rid, 3753, out var pValueMlfbSerial);
             if (res != 0)
                 return res;
             if (pValueMlfbSerial is not ValueBlob identification
@@ -1177,18 +1163,40 @@ namespace S7CommPlusDriver
                 return S7Consts.errIsoInvalidPDU8;
             var data = identification.GetValue();
             var mlfb = Encoding.ASCII.GetString(data, 8, 19).TrimEnd('\0', ' ');
-            //space
             var serial = Encoding.ASCII.GetString(data, 28, 16).TrimEnd('\0', ' ');
-            //nulbyte
-            var hardware = data[46];
             var firmware = new Version(data[47], data[48], data[49], data[50]);
-            //data maybe conatins more:
-            //rack (1byte), slot (1byte),
 
-            res = RunGetVarSubstreamedRequest(Ids.ReleaseMngmtRoot_Rid, 8342, out var pValueVersionsAndName);
-            if (res != 0)
-                return res;
-            var projectName = GetOptionalCpuProjectName(pValueVersionsAndName);
+            string cpuName = null;
+            res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theCPUCommon_Rid, 233, out var pValuePlcName);
+            if (res == 0 && pValuePlcName is ValueWString plcName)
+            {
+                cpuName = plcName.GetValue();
+            }
+            else if (!_session.IsPlaintextSession)
+            {
+                return res != 0 ? res : S7Consts.errIsoInvalidPDU8;
+            }
+
+            Version version1 = null;
+            Version version2 = null;
+            string projectName = null;
+            if (!_session.IsPlaintextSession)
+            {
+                res = RunGetVarSubstreamedRequest(Ids.NativeObjects_theASRoot_Rid, 2459, out var pValueVersions);
+                if (res != 0)
+                    return res;
+                if (pValueVersions is not ValueUSIntArray versions
+                    || versions.GetValue() == null || versions.GetValue().Length < 8)
+                    return S7Consts.errIsoInvalidPDU8;
+                var arrVersions = versions.GetValue();
+                version1 = new Version(arrVersions[0], arrVersions[1], arrVersions[2], arrVersions[3]);
+                version2 = new Version(arrVersions[4], arrVersions[5], arrVersions[6], arrVersions[7]);
+
+                res = RunGetVarSubstreamedRequest(Ids.ReleaseMngmtRoot_Rid, 8342, out var pValueVersionsAndName);
+                if (res != 0)
+                    return res;
+                projectName = GetOptionalCpuProjectName(pValueVersionsAndName);
+            }
 
             cpuInfo = new S7CommPlusCpuInfo()
             {

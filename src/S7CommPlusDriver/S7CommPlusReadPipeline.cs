@@ -19,7 +19,7 @@ namespace S7CommPlusDriver
             Func<GetMultiVariablesRequest, int> send,
             Func<GetMultiVariablesRequest, ISet<ushort>, (int Error, MemoryStream Pdu)> receive,
             Func<IS7pRequest, IS7pResponse, int> validate,
-            out List<object> values, out List<ulong> errors)
+            out List<object> values, out List<ulong> errors, bool usePlaintextFraming = false)
         {
             values = Enumerable.Repeat<object>(null, addresses.Count).ToList();
             errors = Enumerable.Repeat(ulong.MaxValue, addresses.Count).ToList();
@@ -31,7 +31,8 @@ namespace S7CommPlusDriver
             {
                 while (pending.Count < depth && next < addresses.Count)
                 {
-                    var request = S7CommPlusProtocolSession.CreateReadRequestBatch(addresses, next, maxItems, out var count);
+                    var request = S7CommPlusProtocolSession.CreateReadRequestBatch(
+                        addresses, next, maxItems, out var count, usePlaintextFraming);
                     var error = send(request);
                     if (error != 0) return error;
                     if (!sequences.Add(request.SequenceNumber)) return S7Consts.errIsoInvalidPDU5;
@@ -50,11 +51,13 @@ namespace S7CommPlusDriver
                 var response = GetMultiVariablesReadResponse.ReadHeader(received.Pdu);
                 if (response == null || !pending.TryGetValue(response.SequenceNumber, out var completed))
                     return S7Consts.errIsoInvalidPDU5;
+                response.WithIntegrityId = completed.Request.WithIntegrityId;
                 result = response.ReadItems(received.Pdu, values, errors, completed.Start, completed.Count);
                 if (result != 0) return result;
                 result = validate(completed.Request, response);
                 if (result != 0) return result;
-                if (response.IntegrityId != unchecked(completed.Request.IntegrityId + completed.Request.SequenceNumber))
+                if (completed.Request.WithIntegrityId &&
+                    response.IntegrityId != unchecked(completed.Request.IntegrityId + completed.Request.SequenceNumber))
                     return S7Consts.errIsoInvalidPDU;
                 pending.Remove(response.SequenceNumber);
                 sequences.Remove(response.SequenceNumber);

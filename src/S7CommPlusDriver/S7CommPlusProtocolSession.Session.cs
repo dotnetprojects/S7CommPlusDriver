@@ -330,6 +330,8 @@ namespace S7CommPlusDriver
             public uint SessionId => _connection.m_SessionId;
             public uint SessionId2 => _connection.m_SessionId2;
             public MemoryStream ReceivedPdu => _connection.m_ReceivedPDU;
+            public bool IsPlaintextSession =>
+                _connection.m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext;
 
             public int SendFunction(IS7pRequest request)
             {

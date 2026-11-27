@@ -59,9 +59,16 @@ namespace S7CommPlusDriver.Tests
         [InlineData(2, false)]
         [InlineData(2, true)]
         [InlineData(4, true)]
-        public void WindowIsBoundedAndOutOfOrderValuesReturnInCallerOrder(int depth, bool reverse)
+        [InlineData(2, true, true)]
+        public void WindowIsBoundedAndOutOfOrderValuesReturnInCallerOrder(
+            int depth, bool reverse, bool usePlaintextFraming = false)
         {
-            var harness = new PipelineHarness { Reverse = reverse, NextSequence = ushort.MaxValue - 1 };
+            var harness = new PipelineHarness
+            {
+                Reverse = reverse,
+                NextSequence = ushort.MaxValue - 1,
+                UsePlaintextFraming = usePlaintextFraming
+            };
             var result = harness.Execute(107, 10, depth, out var values, out var errors);
 
             Assert.Equal(0, result);
@@ -126,6 +133,7 @@ namespace S7CommPlusDriver.Tests
             internal readonly List<int> RequestSizes = new List<int>();
             internal int MaximumPending;
             internal bool Reverse, InvalidIndex, MissingItem;
+            internal bool UsePlaintextFraming;
             internal int FailedItem = -1, Failure;
             internal ushort NextSequence;
 
@@ -133,13 +141,16 @@ namespace S7CommPlusDriver.Tests
             {
                 var addresses = Enumerable.Range(0, count).Select(i => new ItemAddress($"8A0E0001.{i:X}")).ToArray();
                 return S7CommPlusReadPipeline.Execute(addresses, limit, depth, Send, Receive,
-                    (_, _) => Failure == 2 ? S7Consts.errIsoInvalidPDU5 : 0, out values, out errors);
+                    (_, _) => Failure == 2 ? S7Consts.errIsoInvalidPDU5 : 0, out values, out errors, UsePlaintextFraming);
             }
 
             private int Send(GetMultiVariablesRequest request)
             {
+                Assert.Equal(!UsePlaintextFraming, request.WithIntegrityId);
+                Assert.Equal(UsePlaintextFraming, request.OmitSymbolCrc);
                 request.SequenceNumber = unchecked(++NextSequence);
-                request.IntegrityId = request.SequenceNumber;
+                if (request.WithIntegrityId)
+                    request.IntegrityId = request.SequenceNumber;
                 Pending.Add(request);
                 RequestSizes.Add(request.AddressList.Count);
                 MaximumPending = Math.Max(MaximumPending, Pending.Count);
@@ -178,7 +189,8 @@ namespace S7CommPlusDriver.Tests
                         S7p.EncodeUInt64Vlq(stream, 0x8000);
                     }
                 S7p.EncodeUInt32Vlq(stream, 0);
-                S7p.EncodeUInt32Vlq(stream, Failure == 3 ? 0u : unchecked(request.IntegrityId + request.SequenceNumber));
+                if (request.WithIntegrityId)
+                    S7p.EncodeUInt32Vlq(stream, Failure == 3 ? 0u : unchecked(request.IntegrityId + request.SequenceNumber));
                 stream.Position = 0;
                 return (0, stream);
             }
