@@ -1800,6 +1800,25 @@ namespace S7CommPlusDriver.Tests
         }
 
         [Fact]
+        public void NotificationPreservesTisTraceExtensionWithoutPopulatingAlarmFields()
+        {
+            using var stream = CreateNotificationBody();
+            var extension = new byte[] { 0x70, 0x00, 0x10, 0x40, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00 };
+            stream.WriteByte((byte)S7CommPlusNotificationReturnCode.EndOfList);
+            stream.Write(extension, 0, extension.Length);
+            stream.Position = 0;
+
+            var notification = new Notification(2);
+            notification.Deserialize(stream);
+
+            Assert.Equal(extension, notification.TrailingBytes);
+            Assert.Equal(0u, notification.P2SubscriptionObjectId);
+            Assert.Equal((ushort)0, notification.P2Unknown1);
+            Assert.Equal((byte)0, notification.P2ReturnValue);
+            Assert.Null(notification.P2Objects);
+        }
+
+        [Fact]
         public void NotificationParsesCapturedTisResultAsBlobValue()
         {
             var result = new byte[116];

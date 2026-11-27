@@ -157,6 +157,9 @@ namespace S7CommPlusDriver
                 }
                 else
                 {
+                    P2SubscriptionObjectId = 0;
+                    P2Unknown1 = 0;
+                    P2ReturnValue = 0;
                     buffer.Position = part2Start;
                     var remaining = (int)(buffer.Length - buffer.Position);
                     TrailingBytes = new byte[remaining];
