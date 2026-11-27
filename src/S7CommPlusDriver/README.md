@@ -10,7 +10,7 @@ dotnet add package DotNetProjects.S7CommPlusDriver
 
 Use `S7CommPlusClient` for new applications. It provides async connect, browse, bulk symbol resolution, read, write, alarm, subscription, CPU metadata/control, block and symbol-comment metadata, online block-view, and legitimation operations with request serialization, typed exceptions, connection-state events, reconnect support for read operations, and an explicit write-enable safety gate.
 
-The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net48`, `net8.0`, and `net9.0`, the default security mode is `Auto`: it tries TLS first, then HarpoS7-derived legacy challenge authentication, and finally unencrypted plaintext when the PLC omits a CSI challenge (for example S7-1200 firmware V2.2). Set the mode to `Tls` to prohibit fallback, `LegacyChallenge` to skip TLS, or `Plaintext` for old firmware that rejects InitSsl. On `net6.0`, `Auto` tries TLS and then plaintext (`LegacyChallenge` is unavailable). .NET Framework 4.8 uses the managed BouncyCastle backend because the native OpenSSL resolver requires modern .NET.
+The managed BouncyCastle backend is the default TLS implementation unless `S7CommPlusClientOptions.TlsBackend` is set explicitly. On `net48`, `net8.0`, and `net9.0`, the default `Auto` mode tries TLS first and falls back to HarpoS7-derived legacy challenge authentication. Select `Tls` to require TLS, `LegacyChallenge` to require challenge authentication, or `Plaintext` for unencrypted communication with old firmware such as S7-1200 V2.2. On `net6.0`, the supported modes are `Tls` (the default) and `Plaintext`. .NET Framework 4.8 uses the managed BouncyCastle backend because the native OpenSSL resolver requires modern .NET.
 
 Default connection parameters are exposed through `S7CommPlusDefaults`: ISO-on-TCP port `102`, local TSAP `0x0600`, HMI remote TSAP `SIMATIC-ROOT-HMI`, and engineering remote TSAP `SIMATIC-ROOT-ES`. `S7CommPlusClientOptions.SessionRole` defaults to `S7CommPlusSessionRole.Hmi` for both TLS and legacy challenge connections. Set it to `S7CommPlusSessionRole.EngineeringSystem` only when an engineering-class session is required; such a session can prevent TIA Portal from downloading hardware configuration while the driver remains connected. An explicitly assigned `RemoteTsap` overrides the standard TSAP selected by the role.
 
@@ -22,7 +22,7 @@ Legacy session setup falls back to an anonymous user label on platforms where `E
 
 ## Older PLCs / Legacy Challenge Auth
 
-Siemens OMS names the CSI non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Very old S7-1200 firmware such as V2.2 rejects InitSsl and never presents a CSI challenge; use `S7CommPlusSecurityMode.Plaintext` for those CPUs, or keep `Auto` so the driver falls through after the challenge parse fails. Because `Auto` is the `net48`/`net8.0`/`net9.0` default, applications that must prohibit fallback should explicitly use `S7CommPlusSecurityMode.Tls`.
+Siemens OMS names the CSI non-TLS mode `SecurityTypeCSI`. This library exposes it as `S7CommPlusSecurityMode.LegacyChallenge`. Very old S7-1200 firmware such as V2.2 rejects InitSsl and omits the CSI challenge. Select `S7CommPlusSecurityMode.Plaintext` explicitly for those CPUs.
 
 ```csharp
 await using var client = new S7CommPlusClient(new S7CommPlusClientOptions

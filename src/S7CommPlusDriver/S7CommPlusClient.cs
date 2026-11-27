@@ -1828,9 +1828,8 @@ namespace S7CommPlusDriver
             _session = _sessionFactory();
             _options.Logger.LogInformation("Connecting to PLC {Endpoint}.", Endpoint);
 
-            // Auto may attempt TLS, then legacy challenge, then plaintext on separate connections.
             var connectOperationTimeout = _options.SecurityMode == S7CommPlusSecurityMode.Auto
-                ? TimeSpan.FromTicks(_options.ConnectTimeout.Ticks * 3)
+                ? TimeSpan.FromTicks(_options.ConnectTimeout.Ticks * 2)
                 : _options.ConnectTimeout;
             var error = await RunWithTimeoutAsync("Connect", () => _session.Connect(_options), connectOperationTimeout, cancellationToken).ConfigureAwait(false);
             if (error != 0)

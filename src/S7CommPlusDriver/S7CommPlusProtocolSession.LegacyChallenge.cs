@@ -208,18 +208,8 @@ namespace S7CommPlusDriver
 
             if (!LegacyChallengeHandshake.TryParse(createObjectPdu, createObjRes, out var challenge))
             {
-                // Older firmware (e.g. S7-1200 V2.2) accepts CreateObject but never presents a CSI challenge.
-                options.Logger.LogInformation(
-                    "Legacy S7CommPlus PLC {Address}:{Port} returned no CSI challenge; continuing with plaintext session setup.",
-                    options.Address,
-                    options.Port);
-                var plaintextResult = CompletePlaintextSession(options, createObjRes);
-                if (plaintextResult == 0)
-                {
-                    m_NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
-                    options.NegotiatedSecurityMode = S7CommPlusSecurityMode.Plaintext;
-                }
-                return plaintextResult;
+                m_client.Disconnect();
+                return S7Consts.errS7CommPlusLegacyAuthentication;
             }
             options.Logger.LogDebug(
                 "Legacy S7CommPlus CSI challenge received from PLC {Address}:{Port}: session {SessionId:X8}, Harpo family {KeyFamily}, OMS family {OmsKeyFamily}, fingerprint {Fingerprint}, auth frame {AuthenticationFrameKind}.",

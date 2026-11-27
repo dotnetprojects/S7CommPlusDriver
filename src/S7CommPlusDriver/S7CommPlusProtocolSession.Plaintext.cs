@@ -183,7 +183,6 @@ namespace S7CommPlusDriver
 
         /// <summary>
         /// Finishes an already-created unencrypted server session (SetMultiVariables setup and optional password).
-        /// Shared by explicit plaintext connects and legacy-challenge fallback when the PLC omits a CSI challenge.
         /// </summary>
         private int CompletePlaintextSession(S7CommPlusClientOptions options, CreateObjectResponse createObjRes)
         {

@@ -190,10 +190,6 @@ namespace S7CommPlusDriver
                 {
                     exploreRequest.WithIntegrityId = false;
                 }
-                else if (funcObj is GetMultiVariablesRequest getMultiVariablesRequest)
-                {
-                    getMultiVariablesRequest.WithIntegrityId = false;
-                }
                 else if (funcObj is SetMultiVariablesRequest setMultiVariablesRequest)
                 {
                     // Variable writes on FW2.2 plaintext reject modern integrity trailers (TCP reset).
@@ -1123,7 +1119,7 @@ namespace S7CommPlusDriver
             }
             // Overflow is possible and allowed
             UInt32 reqIntegCheck = (UInt32)request.SequenceNumber + request.IntegrityId;
-            if (response.IntegrityId != reqIntegCheck)
+            if (request.WithIntegrityId && response.IntegrityId != reqIntegCheck)
             {
                 Trace.WriteLine(String.Format("checkResponseWithIntegrity: ERROR! IntegrityId of the Response ({0}) doesn't match Request ({1})", response.IntegrityId, reqIntegCheck));
                 // Don't return this as error so far
@@ -1174,14 +1170,7 @@ namespace S7CommPlusDriver
                     }
                     options.Logger.LogInformation("TLS connect to PLC {Address}:{Port} failed with {ErrorCode}; trying legacy challenge authentication.", options.Address, options.Port, tlsResult);
                     TryDisconnect(options.DisconnectTimeoutMilliseconds);
-                    var legacyResult = ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
-                    if (legacyResult == 0)
-                    {
-                        return 0;
-                    }
-                    options.Logger.LogInformation("Legacy challenge connect to PLC {Address}:{Port} failed with {ErrorCode}; trying plaintext S7CommPlus.", options.Address, options.Port, legacyResult);
-                    TryDisconnect(options.DisconnectTimeoutMilliseconds);
-                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.Plaintext);
+                    return ConnectAndSetNegotiatedMode(options, S7CommPlusSecurityMode.LegacyChallenge);
                 default:
                     return S7Consts.errCliInvalidParams;
             }
@@ -1209,16 +1198,8 @@ namespace S7CommPlusDriver
             if (result == 0)
             {
                 ApplyRequestTimeout(options.RequestTimeoutMilliseconds);
-                // Legacy challenge may negotiate down to plaintext when the PLC omits a CSI challenge.
-                if (options.NegotiatedSecurityMode == null)
-                {
-                    m_NegotiatedSecurityMode = securityMode;
-                    options.NegotiatedSecurityMode = securityMode;
-                }
-                else
-                {
-                    m_NegotiatedSecurityMode = options.NegotiatedSecurityMode.Value;
-                }
+                m_NegotiatedSecurityMode = securityMode;
+                options.NegotiatedSecurityMode = securityMode;
             }
             return result;
         }
@@ -1256,6 +1237,7 @@ namespace S7CommPlusDriver
             m_LastErrorDetail = string.Empty;
             m_LegacyDigestActive = false;
             m_LegacySessionKey = null;
+            m_NegotiatedSecurityMode = S7CommPlusSecurityMode.Tls;
             m_ServerSessionVersion = null;
             m_ReceivedPDU = null;
             m_ReceivedTempPDU = null;
@@ -1615,7 +1597,7 @@ namespace S7CommPlusDriver
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<UInt64> errors)
         {
-            NormalizePlaintextAddresses(addresslist);
+            bool usePlaintextFraming = m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext;
             if (m_ReadPipelineDepth > 1 && addresslist.Count > Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax))
             {
                 lock (m_RequestLock)
@@ -1628,7 +1610,7 @@ namespace S7CommPlusDriver
                         var result = S7CommPlusReadPipeline.Execute(addresslist,
                             Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax), m_ReadPipelineDepth,
                             request => SendS7plusFunctionObject(request), ReceivePipelinedReadResponse,
-                            checkResponseWithIntegrity, out values, out errors);
+                            checkResponseWithIntegrity, out values, out errors, usePlaintextFraming);
                         if (result != 0) CloseTransport(2000);
                         return result;
                     }
@@ -1668,7 +1650,7 @@ namespace S7CommPlusDriver
             {
                 int res;
                 var getMultiVarReq = CreateReadRequestBatch(addresslist, chunk_startIndex,
-                    maxTagsPerRequest, out count_perChunk);
+                    maxTagsPerRequest, out count_perChunk, usePlaintextFraming);
 
                 res = SendS7plusFunctionObjectAndWait(getMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1700,9 +1682,14 @@ namespace S7CommPlusDriver
         }
 
         internal static GetMultiVariablesRequest CreateReadRequestBatch(
-            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount)
+            IReadOnlyList<ItemAddress> addresses, int startIndex, int maxItems, out int itemCount,
+            bool usePlaintextFraming = false)
         {
-            var request = new GetMultiVariablesRequest(ProtocolVersion.V2);
+            var request = new GetMultiVariablesRequest(ProtocolVersion.V2)
+            {
+                WithIntegrityId = !usePlaintextFraming,
+                OmitSymbolCrc = usePlaintextFraming
+            };
             var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
             // Reserve the legacy digest and growth of the VLQ integrity id assigned on send.
             var maxPayloadSize = UInt16.MaxValue - LegacyDigestFieldLength - sizeof(uint);
@@ -1742,7 +1729,6 @@ namespace S7CommPlusDriver
         public int WriteValues(List<ItemAddress> addresslist, List<PValue> values, out List<UInt64> errors)
         {
             int res;
-            NormalizePlaintextAddresses(addresslist);
             errors = new List<UInt64>();
             if (addresslist.Count != values.Count)
             {
@@ -1771,7 +1757,8 @@ namespace S7CommPlusDriver
                     chunk_startIndex,
                     maxTagsPerRequest,
                     maxPayloadSize,
-                    out count_perChunk);
+                    out count_perChunk,
+                    usePlaintextFraming: m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext);
 
                 res = SendS7plusFunctionObjectAndWait(setMultiVarReq, m_ReadTimeout);
                 if (res != 0)
@@ -1808,9 +1795,14 @@ namespace S7CommPlusDriver
             int startIndex,
             int maxItems,
             int maxPayloadSize,
-            out int itemCount)
+            out int itemCount,
+            bool usePlaintextFraming = false)
         {
-            var request = new SetMultiVariablesRequest(ProtocolVersion.V2);
+            var request = new SetMultiVariablesRequest(ProtocolVersion.V2)
+            {
+                WithIntegrityId = !usePlaintextFraming,
+                OmitSymbolCrc = usePlaintextFraming
+            };
             var maxCandidates = Math.Min(maxItems, addresses.Count - startIndex);
             itemCount = AppendItemsWithinPayloadLimit(
                 maxCandidates,
@@ -2380,7 +2372,7 @@ namespace S7CommPlusDriver
         /// <param name="varType">The resolved member datatype and dimension metadata.</param>
         /// <param name="isAggregateArray">Whether the symbol requested the complete primitive array.</param>
         /// <returns>The concrete tag used by the public client API.</returns>
-        private PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
+        private static PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
         {
             var address = CreateItemAddress(varInfo);
             var maxStringLength = varType.OffsetInfoType?.MaxStringLength() ?? 0;
@@ -2511,9 +2503,7 @@ namespace S7CommPlusDriver
             if (string.IsNullOrWhiteSpace(varInfo.Name)) throw new ArgumentException("Browse metadata must contain a symbol name.", nameof(varInfo));
             if (string.IsNullOrWhiteSpace(varInfo.AccessSequence)) throw new ArgumentException("Browse metadata must contain an access sequence.", nameof(varInfo));
 
-            // Static browse→tag helper has no session context; callers that need plaintext CRC=0
-            // go through ReadValues/WriteValues NormalizePlaintextAddresses.
-            var address = CreateItemAddress(varInfo, omitSymbolCrc: false);
+            var address = CreateItemAddress(varInfo);
             var isAggregateArray = varInfo.ArrayElementCount > 0;
             var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray, varInfo.MaxStringLength);
             tag?.SetTraceAddressMetadata(varInfo);
@@ -2806,44 +2796,16 @@ namespace S7CommPlusDriver
             }
         }
 
-        private ItemAddress CreateItemAddress(VarInfo varInfo)
-        {
-            return CreateItemAddress(
-                varInfo,
-                omitSymbolCrc: m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext);
-        }
-
-        private static ItemAddress CreateItemAddress(VarInfo varInfo, bool omitSymbolCrc)
+        private static ItemAddress CreateItemAddress(VarInfo varInfo)
         {
             var address = new ItemAddress(varInfo.AccessSequence);
-            // S7-1200 FW2.2 plaintext rejects non-zero SymbolCrc (item error 0x802089003055FFEF).
-            if (omitSymbolCrc || varInfo.ContainsIndexedArray)
-            {
-                address.SymbolCrc = 0;
-            }
-            else
-            {
-                address.SymbolCrc = varInfo.SymbolCrcPath == null
+            address.SymbolCrc = varInfo.ContainsIndexedArray
+                ? 0
+                : varInfo.SymbolCrcPath == null
                     ? varInfo.SymbolCrc
                     : S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
-            }
             varInfo.SymbolCrc = address.SymbolCrc;
             return address;
-        }
-
-        private void NormalizePlaintextAddresses(IList<ItemAddress> addresses)
-        {
-            if (m_NegotiatedSecurityMode != S7CommPlusSecurityMode.Plaintext || addresses == null)
-            {
-                return;
-            }
-            for (var i = 0; i < addresses.Count; i++)
-            {
-                if (addresses[i] != null)
-                {
-                    addresses[i].SymbolCrc = 0;
-                }
-            }
         }
 
         /// <summary>

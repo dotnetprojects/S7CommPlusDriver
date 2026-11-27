@@ -33,6 +33,7 @@ namespace S7CommPlusDriver
         public ushort SequenceNumber { get; set; }
         public uint IntegrityId { get; set; }
         public bool WithIntegrityId { get; set; }
+        internal bool OmitSymbolCrc { get; set; }
 
         public GetMultiVariablesRequest(byte protocolVersion)
         {
@@ -54,7 +55,7 @@ namespace S7CommPlusDriver
             foreach (var address in AddressList)
             {
                 fieldCount += address.GetNumberOfFields();
-                addressLength += address.GetSerializedLength();
+                addressLength += address.GetSerializedLength(OmitSymbolCrc);
             }
             return 18L + S7p.GetUInt32VlqLength((uint)AddressList.Count)
                 + S7p.GetUInt32VlqLength(fieldCount) + addressLength + ObjectQualifierLength
@@ -84,7 +85,7 @@ namespace S7CommPlusDriver
 
             foreach (ItemAddress adr in AddressList)
             {
-                ret += adr.Serialize(buffer);
+                ret += adr.Serialize(buffer, OmitSymbolCrc);
             }
             ret += S7p.EncodeObjectQualifier(buffer);
 
