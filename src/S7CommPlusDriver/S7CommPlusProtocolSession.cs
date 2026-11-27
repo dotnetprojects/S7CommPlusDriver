@@ -194,6 +194,11 @@ namespace S7CommPlusDriver
                 {
                     getMultiVariablesRequest.WithIntegrityId = false;
                 }
+                else if (funcObj is SetMultiVariablesRequest setMultiVariablesRequest)
+                {
+                    // Variable writes on FW2.2 plaintext reject modern integrity trailers (TCP reset).
+                    setMultiVariablesRequest.WithIntegrityId = false;
+                }
                 else if (funcObj is GetVarSubstreamedRequest getVarSubstreamedRequest)
                 {
                     // FW2.2 TIA captures use a fixed UInt32 integrity trailer of 0 (no VLQ, no fill).
@@ -1610,6 +1615,7 @@ namespace S7CommPlusDriver
 
         public int ReadValues(List<ItemAddress> addresslist, out List<object> values, out List<UInt64> errors)
         {
+            NormalizePlaintextAddresses(addresslist);
             if (m_ReadPipelineDepth > 1 && addresslist.Count > Math.Max(1, m_CommunicationResources.TagsPerReadRequestMax))
             {
                 lock (m_RequestLock)
@@ -1736,6 +1742,7 @@ namespace S7CommPlusDriver
         public int WriteValues(List<ItemAddress> addresslist, List<PValue> values, out List<UInt64> errors)
         {
             int res;
+            NormalizePlaintextAddresses(addresslist);
             errors = new List<UInt64>();
             if (addresslist.Count != values.Count)
             {
@@ -2075,10 +2082,27 @@ namespace S7CommPlusDriver
             Trace.WriteLine(String.Format(
                 "S7CommPlusProtocolSession - Browse: TypeInfo children={0}, DB nodes={1}.",
                 typeInfoChildren.Count, exploreData.Count));
+            // Keep session caches warm so GetTagBySymbol / GetTypeInformation reuse Browse results.
+            typeInfoList.Clear();
+            typeInfoList.AddRange(typeInfoChildren);
+            dbInfoList = exploreData.Select(ed => new DatablockInfo
+            {
+                db_name = ed.db_name,
+                db_number = ed.db_number,
+                db_block_relid = ed.db_block_relid,
+                db_block_ti_relid = ed.db_block_ti_relid
+            }).ToList();
             vars.SetTypeInfoContainerObjects(typeInfoChildren);
             vars.BuildTree();
             vars.BuildFlatList();
             varInfoList = vars.GetVarInfoList();
+            if (m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext)
+            {
+                foreach (var info in varInfoList)
+                {
+                    info.SymbolCrc = 0;
+                }
+            }
             Trace.WriteLine("S7CommPlusProtocolSession - Browse: Flat var count=" + varInfoList.Count);
             #endregion
 
@@ -2356,7 +2380,7 @@ namespace S7CommPlusDriver
         /// <param name="varType">The resolved member datatype and dimension metadata.</param>
         /// <param name="isAggregateArray">Whether the symbol requested the complete primitive array.</param>
         /// <returns>The concrete tag used by the public client API.</returns>
-        private static PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
+        private PlcTag CreateResolvedPlcTag(VarInfo varInfo, PVartypeListElement varType, bool isAggregateArray)
         {
             var address = CreateItemAddress(varInfo);
             var maxStringLength = varType.OffsetInfoType?.MaxStringLength() ?? 0;
@@ -2487,7 +2511,9 @@ namespace S7CommPlusDriver
             if (string.IsNullOrWhiteSpace(varInfo.Name)) throw new ArgumentException("Browse metadata must contain a symbol name.", nameof(varInfo));
             if (string.IsNullOrWhiteSpace(varInfo.AccessSequence)) throw new ArgumentException("Browse metadata must contain an access sequence.", nameof(varInfo));
 
-            var address = CreateItemAddress(varInfo);
+            // Static browse→tag helper has no session context; callers that need plaintext CRC=0
+            // go through ReadValues/WriteValues NormalizePlaintextAddresses.
+            var address = CreateItemAddress(varInfo, omitSymbolCrc: false);
             var isAggregateArray = varInfo.ArrayElementCount > 0;
             var tag = PlcTags.TagFactory(varInfo.Name, address, varInfo.Softdatatype, isAggregateArray, varInfo.MaxStringLength);
             tag?.SetTraceAddressMetadata(varInfo);
@@ -2780,16 +2806,44 @@ namespace S7CommPlusDriver
             }
         }
 
-        private static ItemAddress CreateItemAddress(VarInfo varInfo)
+        private ItemAddress CreateItemAddress(VarInfo varInfo)
+        {
+            return CreateItemAddress(
+                varInfo,
+                omitSymbolCrc: m_NegotiatedSecurityMode == S7CommPlusSecurityMode.Plaintext);
+        }
+
+        private static ItemAddress CreateItemAddress(VarInfo varInfo, bool omitSymbolCrc)
         {
             var address = new ItemAddress(varInfo.AccessSequence);
-            address.SymbolCrc = varInfo.ContainsIndexedArray
-                ? 0
-                : varInfo.SymbolCrcPath == null
+            // S7-1200 FW2.2 plaintext rejects non-zero SymbolCrc (item error 0x802089003055FFEF).
+            if (omitSymbolCrc || varInfo.ContainsIndexedArray)
+            {
+                address.SymbolCrc = 0;
+            }
+            else
+            {
+                address.SymbolCrc = varInfo.SymbolCrcPath == null
                     ? varInfo.SymbolCrc
                     : S7CommPlusSymbolCrc.ComputeFromSegments(varInfo.SymbolCrcPath);
+            }
             varInfo.SymbolCrc = address.SymbolCrc;
             return address;
+        }
+
+        private void NormalizePlaintextAddresses(IList<ItemAddress> addresses)
+        {
+            if (m_NegotiatedSecurityMode != S7CommPlusSecurityMode.Plaintext || addresses == null)
+            {
+                return;
+            }
+            for (var i = 0; i < addresses.Count; i++)
+            {
+                if (addresses[i] != null)
+                {
+                    addresses[i].SymbolCrc = 0;
+                }
+            }
         }
 
         /// <summary>
@@ -2916,30 +2970,38 @@ namespace S7CommPlusDriver
                 return res;
             }
 
-            // Get the datablock information we want further informations from.
-            var objList = exploreRes.Objects;
-
-            foreach (var ob in objList)
+            // Filtered Explore may return DBs flat (modern CPUs) or nested under PLCProgram (FW2.2).
+            CollectDatablockInfos(exploreRes.Objects, dbInfoList);
+            if (dbInfoList.Count == 0)
             {
-                // May be this check can be removed, if setting the filter to the DB_Class_Rid is working 100%.
-                switch (ob.ClassId)
+                // S7-1200 FW2.2 rejects/ignores InstanceOf DB filters; fall back to unfiltered PLCProgram explore
+                // (same shape Browse uses successfully).
+                Trace.WriteLine("S7CommPlusProtocolSession - GetListOfDatablocks: filtered explore empty, retrying without filter.");
+                exploreReq = new ExploreRequest(ProtocolVersion.V2)
                 {
-                    case Ids.DB_Class_Rid:
-                        UInt32 relid = ob.RelationId;
-                        UInt32 area = (relid >> 16);
-                        UInt32 num = relid & 0xffff;
-                        if (area == 0x8a0e)
-                        {
-                            var name = (ValueWString)(ob.GetAttribute(Ids.ObjectVariableTypeName));
-                            DatablockInfo data = new DatablockInfo();
-                            data.db_block_relid = relid;
-                            data.db_name = name.GetValue();
-                            data.db_number = num;
-                            dbInfoList.Add(data);
-                        }
-                        break;
+                    ExploreId = Ids.NativeObjects_thePLCProgram_Rid,
+                    ExploreRequestId = Ids.None,
+                    ExploreChildsRecursive = 1,
+                    ExploreParents = 0
+                };
+                exploreReq.AddressList.Add(Ids.ObjectVariableTypeName);
+                exploreReq.AddressList.Add(Ids.Block_BlockNumber);
+                res = SendS7plusFunctionObjectAndWait(exploreReq, m_ReadTimeout);
+                if (res != 0)
+                {
+                    return res;
                 }
+                exploreRes = ExploreResponse.DeserializeFromPdu(m_ReceivedPDU, exploreReq.WithIntegrityId);
+                res = checkResponseWithIntegrity(exploreReq, exploreRes);
+                if (res != 0)
+                {
+                    return res;
+                }
+                CollectDatablockInfos(exploreRes.Objects, dbInfoList);
             }
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - GetListOfDatablocks: found {0} DB candidates.",
+                dbInfoList.Count));
 
             // Get the TypeInfo RID to RelId from the first response
 
@@ -3019,9 +3081,112 @@ namespace S7CommPlusDriver
             {
                 return res;
             }
-            objList = exploreRes.Objects;
+            objList = FlattenTypeInfoExploreObjects(exploreId, exploreRes.Objects);
+            Trace.WriteLine(String.Format(
+                "S7CommPlusProtocolSession - GetTypeInformation: exploreId=0x{0:X8} raw={1} flat={2} match={3}",
+                exploreId,
+                exploreRes.Objects?.Count ?? 0,
+                objList.Count,
+                objList.Exists(o => o.RelationId == exploreId)));
 
             return 0;
+        }
+
+        /// <summary>
+        /// Collects DB_Class_Rid entries from a possibly nested Explore response.
+        /// Classic instance DBs use area 0x8a0e; older S7-1200 FW2.x also reports 0x8a11.
+        /// </summary>
+        private static void CollectDatablockInfos(IEnumerable<PObject> objects, List<DatablockInfo> target)
+        {
+            if (objects == null)
+            {
+                return;
+            }
+
+            foreach (var ob in objects)
+            {
+                if (ob == null)
+                {
+                    continue;
+                }
+
+                if (ob.ClassId == Ids.DB_Class_Rid)
+                {
+                    UInt32 relid = ob.RelationId;
+                    UInt32 area = (relid >> 16);
+                    UInt32 num = relid & 0xffff;
+                    if (area == 0x8a0e || area == 0x8a11)
+                    {
+                        var nameAttr = ob.GetAttribute(Ids.ObjectVariableTypeName) as ValueWString;
+                        if (nameAttr != null)
+                        {
+                            DatablockInfo data = new DatablockInfo();
+                            data.db_block_relid = relid;
+                            data.db_name = nameAttr.GetValue();
+                            data.db_number = num;
+                            target.Add(data);
+                        }
+                    }
+                }
+
+                // Nested under PLCProgram (or similar) on older firmware Explore responses.
+                CollectDatablockInfos(ob.GetObjects(), target);
+            }
+        }
+
+        /// <summary>
+        /// Explore(TypeInfoRID) may return the type object itself, a ClassOMSTypeInfoContainer
+        /// wrapper, or nested children — flatten so callers can find RelationId == exploreId.
+        /// </summary>
+        private static List<PObject> FlattenTypeInfoExploreObjects(uint exploreId, List<PObject> objects)
+        {
+            var flat = new List<PObject>();
+            if (objects == null || objects.Count == 0)
+            {
+                return flat;
+            }
+
+            void AddObjectTree(PObject obj)
+            {
+                if (obj == null)
+                {
+                    return;
+                }
+                flat.Add(obj);
+                var children = obj.GetObjects();
+                if (children == null)
+                {
+                    return;
+                }
+                foreach (var child in children)
+                {
+                    AddObjectTree(child);
+                }
+            }
+
+            foreach (var obj in objects)
+            {
+                if (obj.ClassId == Ids.ClassOMSTypeInfoContainer)
+                {
+                    foreach (var child in obj.GetObjects())
+                    {
+                        AddObjectTree(child);
+                    }
+                }
+                else
+                {
+                    AddObjectTree(obj);
+                }
+            }
+
+            // Prefer keeping the requested RID first when present.
+            flat.Sort((a, b) =>
+            {
+                if (a.RelationId == exploreId && b.RelationId != exploreId) return -1;
+                if (b.RelationId == exploreId && a.RelationId != exploreId) return 1;
+                return 0;
+            });
+            return flat;
         }
 
         /// <summary>
